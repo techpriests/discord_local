@@ -4,23 +4,30 @@ from src.commands.information import InformationCommands
 from src.commands.system import SystemCommands
 from src.services.api import APIService
 from config import TOKEN, WEATHER_API_KEY, STEAM_KEY
+import asyncio
 
-def main():
+async def main():
     # Initialize services
     api_service = APIService(WEATHER_API_KEY, STEAM_KEY)
     
     # Initialize bot
     bot = DiscordBot()
     
-    # Load cogs
-    bot.load_cogs([
-        EntertainmentCommands(),
-        InformationCommands(api_service),
-        SystemCommands(bot.bot)
-    ])
-    
-    # Run bot
-    bot.run(TOKEN)
+    try:
+        # Load cogs
+        await bot.load_cogs([
+            EntertainmentCommands(),
+            InformationCommands(api_service),
+            SystemCommands(bot.bot)
+        ], api_service)
+        
+        # Run bot
+        await bot.start(TOKEN)
+    except KeyboardInterrupt:
+        await api_service.close()
+    except Exception as e:
+        print(f"Error: {e}")
+        await api_service.close()
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

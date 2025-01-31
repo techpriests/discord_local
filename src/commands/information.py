@@ -39,6 +39,7 @@ class InformationCommands(commands.Cog):
                 await ctx.send("게임 이름을 2글자 이상 입력해주세요. (예: !!스팀 로스트아크)")
                 return
             
+            print(f"\nProcessing steam command for: '{game_name}'")
             game, similarity, similar_matches = await self.api.find_game(game_name)
             
             # If we got a list of similar matches
@@ -101,11 +102,25 @@ class InformationCommands(commands.Cog):
                 )
             
             embed.set_thumbnail(url=f"https://cdn.cloudflare.steamstatic.com/steam/apps/{game['appid']}/header.jpg")
+            
+            # Update embed to show all available translations
+            if 'localized_names' in game:
+                names_list = []
+                for lang_data in game['localized_names'].values():
+                    names_list.append(f"{lang_data['language']}: {lang_data['name']}")
+                
+                if names_list:
+                    embed.add_field(
+                        name="다른 언어",
+                        value="\n".join(names_list),
+                        inline=False
+                    )
+            
             await ctx.send(embed=embed)
             
         except Exception as e:
             await ctx.send("오류가 발생했습니다. 나중에 다시 시도해주세요.")
-            print(f"Steam Command Error: {e}")
+            print(f"Steam Command Error for query '{game_name}': {e}")
     
     @steam.error
     async def steam_error(self, ctx, error):

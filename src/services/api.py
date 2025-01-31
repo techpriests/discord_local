@@ -91,9 +91,12 @@ class APIService:
         'steam_details': {'requests': 150, 'period': 300, 'backoff_factor': 1.5},
         'weather': {'requests': 60, 'period': 60, 'backoff_factor': 1.2},
         'population': {'requests': 30, 'period': 60, 'backoff_factor': 1.2},
+        'exchange_rate': {'requests': 60, 'period': 60, 'backoff_factor': 1.2},
     }
     
     STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
+    
+    EXCHANGE_RATE_URL = "https://open.er-api.com/v6/latest/KRW"  # Free API, no key needed
     
     def __init__(self, weather_key: str, steam_key: str):
         self.weather_key = weather_key
@@ -422,4 +425,40 @@ class APIService:
         return [
             lang for lang, info in self.LANGUAGES.items()
             if any(info['range'][0] <= c <= info['range'][1] for c in text)
-        ] 
+        ]
+
+    async def get_exchange_rates(self) -> Dict[str, float]:
+        """Get exchange rates for KRW to various currencies
+        
+        Returns:
+            Dict with currency codes as keys and exchange rates as values
+            Example: {'USD': 0.00075, 'EUR': 0.00070, 'JPY': 0.11}
+        """
+        try:
+            data = await self._get_with_retry(
+                self.EXCHANGE_RATE_URL,
+                endpoint='exchange_rate'
+            )
+            
+            if not data or 'rates' not in data:
+                raise APIError("Failed to get exchange rates")
+                
+            # Get rates for common currencies
+            rates = {
+                'USD': 1 / data['rates']['USD'],  # Convert to KRW->USD rate
+                'EUR': 1 / data['rates']['EUR'],
+                'JPY': 1 / data['rates']['JPY'],
+                'CNY': 1 / data['rates']['CNY'],
+                'GBP': 1 / data['rates']['GBP'],
+                'AUD': 1 / data['rates']['AUD'],
+                'CAD': 1 / data['rates']['CAD'],
+                'HKD': 1 / data['rates']['HKD'],
+                'SGD': 1 / data['rates']['SGD'],
+                'TWD': 1 / data['rates']['TWD']
+            }
+            
+            return rates
+            
+        except Exception as e:
+            logger.error(f"Error getting exchange rates: {e}")
+            raise APIError(f"Failed to get exchange rates: {str(e)}") 
