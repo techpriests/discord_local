@@ -1,78 +1,217 @@
 import aiohttp
-from typing import Dict, Optional, Tuple, List
+from typing import Dict, Optional, Tuple, List, TypedDict, Literal, Union, Any
 from fuzzywuzzy import fuzz
 import time
 from collections import defaultdict
 import asyncio
 import json
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timezone
+import re
+import logging
+
+# Add proper logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+class LocalizedName(TypedDict):
+    name: str
+    language: str
+
+class GameInfo(TypedDict):
+    appid: int
+    name: str  # English name
+    names: Dict[Literal['koreana', 'japanese', 'schinese', 'tchinese'], LocalizedName]
+    player_count: Optional[int]
+    is_dlc: bool
+    type: str
+    categories: List[str]
+
+class APIError(Exception):
+    """Base exception for all API errors"""
+    def __init__(self, message: str, original_error: Optional[Exception] = None):
+        super().__init__(message)
+        self.original_error = original_error
+
+class RateLimitError(APIError):
+    def __init__(self, endpoint: str, wait_time: float, original_error: Optional[Exception] = None):
+        super().__init__(
+            f"Rate limit exceeded for {endpoint}. Try again in {wait_time:.1f} seconds.",
+            original_error
+        )
+        self.endpoint = endpoint
+        self.wait_time = wait_time
+
+class NetworkError(APIError):
+    """Network-related errors"""
+    pass
+
+class ValidationError(APIError):
+    """Data validation errors"""
+    pass
 
 class APIService:
+    """Service for handling API requests to Steam, Weather, and other services"""
+    
+    LANGUAGES = {
+        'koreana': {
+            'range': ('\uac00', '\ud7a3'),
+            'name': '한국어',
+            'cc': 'KR',
+            'weight': 1.0
+        },
+        'japanese': {
+            'range': ('\u3040', '\u30ff'),
+            'name': '日本語',
+            'cc': 'JP',
+            'weight': 0.9
+        },
+        'schinese': {
+            'range': ('\u4e00', '\u9fff'),
+            'name': '简体中文',
+            'cc': 'CN',
+            'extra_check': lambda c: '\u4e00' <= c <= '\u9fff' and ord(c) < 0x8000,
+            'weight': 0.9
+        },
+        'tchinese': {
+            'range': ('\u4e00', '\u9fff'),
+            'name': '繁體中文',
+            'cc': 'TW',
+            'extra_check': lambda c: '\u4e00' <= c <= '\u9fff' and ord(c) >= 0x8000,
+            'weight': 0.9
+        }
+    }
+    
+    # Rate limiting configurations
+    RATE_LIMITS = {
+        'steam_search': {'requests': 30, 'period': 60, 'backoff_factor': 1.5},
+        'steam_charts': {'requests': 10, 'period': 60, 'backoff_factor': 2.0},
+        'steam_player_count': {'requests': 60, 'period': 60, 'backoff_factor': 1.5},
+        'steam_app_list': {'requests': 10, 'period': 60, 'backoff_factor': 2.0},
+        'steam_details': {'requests': 150, 'period': 300, 'backoff_factor': 1.5},
+        'weather': {'requests': 60, 'period': 60, 'backoff_factor': 1.2},
+        'population': {'requests': 30, 'period': 60, 'backoff_factor': 1.2},
+    }
+    
+    STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
+    
     def __init__(self, weather_key: str, steam_key: str):
         self.weather_key = weather_key
         self.steam_key = steam_key
-        self.session = None
-        # Rate limiting: {endpoint: [(timestamp, request_count)]}
+        self.session: Optional[aiohttp.ClientSession] = None
+        
+        # Rate limiting state
         self.rate_limits = defaultdict(list)
-        # Configure rate limits for different endpoints
-        self.rate_configs = {
-            'steam_player_count': {'requests': 60, 'period': 60},
-            'steam_app_list': {'requests': 10, 'period': 60},
-            'steam_details': {'requests': 200, 'period': 300},  # 200 requests per 5 minutes
-            'weather': {'requests': 60, 'period': 60},
-            'population': {'requests': 30, 'period': 60},
-        }
-        self.cache_file = 'data/steam_games.json'
-        self.cache_duration = timedelta(days=1)  # Update cache every day
-        self.korean_names_cache = {}
-        self.korean_names_file = 'data/korean_names.json'
-        
-        # Create data directory if it doesn't exist
-        os.makedirs('data', exist_ok=True)
-        
-        self._load_korean_names_cache()
+        self.backoff_times: Dict[str, float] = {}
     
-    async def _check_rate_limit(self, endpoint: str) -> bool:
-        """Check if we're within rate limits for the endpoint"""
-        config = self.rate_configs.get(endpoint)
-        if not config:
-            return True  # No rate limit configured
-            
+    async def _cleanup_rate_limits(self) -> None:
+        """Clean up expired rate limit data"""
         current_time = time.time()
-        # Clean up old timestamps
-        self.rate_limits[endpoint] = [
-            (ts, count) for ts, count in self.rate_limits[endpoint]
-            if current_time - ts < config['period']
-        ]
-        
-        # Count recent requests
-        total_requests = sum(count for _, count in self.rate_limits[endpoint])
-        
-        if total_requests >= config['requests']:
-            return False  # Rate limit exceeded
+        for endpoint, config in self.RATE_LIMITS.items():
+            # Clean up old timestamps
+            self.rate_limits[endpoint] = [
+                (ts, count) for ts, count in self.rate_limits[endpoint]
+                if current_time - ts <= config['period']
+            ]
+            # Clean up expired backoff times
+            if endpoint in self.backoff_times and current_time > self.backoff_times[endpoint]:
+                del self.backoff_times[endpoint]
+
+    async def _check_rate_limit(self, endpoint: str) -> bool:
+        """Enhanced rate limit checking"""
+        try:
+            await self._cleanup_rate_limits()
             
-        # Add new request
-        self.rate_limits[endpoint].append((current_time, 1))
-        return True
+            config = self.RATE_LIMITS.get(endpoint)
+            if not config:
+                return True
+                
+            current_time = time.time()
+            
+            # Check backoff
+            if endpoint in self.backoff_times:
+                wait_time = self.backoff_times[endpoint] - current_time
+                if wait_time > 0:
+                    raise RateLimitError(endpoint, wait_time, None)
+            
+            # Calculate current usage
+            window_start = current_time - config['period']
+            total_requests = sum(
+                count for ts, count in self.rate_limits[endpoint]
+                if ts > window_start
+            )
+            
+            if total_requests >= config['requests']:
+                backoff_time = config['period'] / config['requests'] * config['backoff_factor']
+                self.backoff_times[endpoint] = current_time + backoff_time
+                raise RateLimitError(endpoint, backoff_time, None)
+            
+            self.rate_limits[endpoint].append((current_time, 1))
+            return True
+            
+        except RateLimitError:
+            raise
+        except Exception as e:
+            raise APIError(f"Rate limit check failed: {str(e)}", e)
     
     async def _get_session(self) -> aiohttp.ClientSession:
         if self.session is None:
             self.session = aiohttp.ClientSession()
         return self.session
     
-    async def _get(self, url: str, params: Optional[Dict] = None, endpoint: str = None) -> Dict:
-        if endpoint and not await self._check_rate_limit(endpoint):
-            raise Exception(f"Rate limit exceeded for {endpoint}. Please try again later.")
-            
-        try:
-            session = await self._get_session()
-            async with session.get(url, params=params, timeout=10.0) as response:  # Add timeout
-                if response.status == 200:
-                    return await response.json()
-                raise Exception(f"API call failed: {response.status} for URL: {url}")
-        except asyncio.TimeoutError:
-            raise Exception("Request timed out. Please try again later.")
+    async def _get_with_retry(
+        self, 
+        url: str, 
+        params: Optional[Dict] = None, 
+        endpoint: str = None,
+        max_retries: int = 3,
+        initial_delay: float = 1.0,
+        timeout: float = 10.0
+    ) -> Dict:
+        """Make API request with retry mechanism"""
+        delay = initial_delay
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                if endpoint:
+                    await self._check_rate_limit(endpoint)
+                    
+                session = await self._get_session()
+                async with session.get(
+                    url, 
+                    params=params, 
+                    timeout=timeout
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    elif response.status == 429:  # Too Many Requests
+                        retry_after = float(response.headers.get('Retry-After', 60))
+                        raise RateLimitError(endpoint or 'unknown', retry_after, None)
+                    elif response.status >= 500:
+                        raise NetworkError(f"Server error: {response.status}")
+                    else:
+                        raise APIError(f"API call failed: {response.status} for URL: {url}")
+                        
+            except RateLimitError as e:
+                logger.warning(f"Rate limit hit on attempt {attempt + 1}, waiting {e.wait_time}s...")
+                await asyncio.sleep(e.wait_time)
+                delay = e.wait_time * 1.5
+                last_error = e
+            except asyncio.TimeoutError:
+                logger.warning(f"Timeout on attempt {attempt + 1}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                last_error = NetworkError("Request timed out")
+            except Exception as e:
+                logger.error(f"Request failed on attempt {attempt + 1}: {e}")
+                if attempt < max_retries - 1:
+                    await asyncio.sleep(delay)
+                    delay *= 2
+                last_error = e
+        
+        raise last_error or APIError("Max retries exceeded")
     
     # Weather API
     async def get_weather(self, city: str) -> Dict:
@@ -83,249 +222,204 @@ class APIService:
             "units": "metric",
             "lang": "kr"
         }
-        return await self._get(url, params)
+        return await self._get_with_retry(url, params)
     
     # Steam API
-    async def get_game_details(self, app_id: int) -> Optional[Dict]:
-        """Get detailed game info including localized names"""
-        # Check cache first
-        if str(app_id) in self.korean_names_cache:
-            return {'name': self.korean_names_cache[str(app_id)]}
-        
+    async def _get_app_details(self, app_id: int, language: str = 'english') -> Optional[Dict]:
+        """Get detailed app information from Steam store API"""
         try:
-            url = f"https://store.steampowered.com/api/appdetails"
+            url = "https://store.steampowered.com/api/appdetails"
             params = {
-                "appids": app_id,
-                "l": "koreana"
+                'appids': app_id,
+                'l': language,
+                'cc': self.LANGUAGES.get(language, {}).get('cc', 'US')
             }
-            data = await self._get(url, params=params, endpoint='steam_details')
             
+            data = await self._get_with_retry(url, params=params, endpoint='steam_details')
             if str(app_id) in data and data[str(app_id)]['success']:
-                game_data = data[str(app_id)]['data']
-                # Cache the Korean name
-                self.korean_names_cache[str(app_id)] = game_data['name']
-                self._save_korean_names_cache()
-                return game_data
+                return data[str(app_id)]['data']
             return None
         except Exception as e:
-            print(f"Error getting game details: {e}")
+            logger.error(f"Error getting app details for {app_id}: {e}")
             return None
 
-    async def _load_steam_games(self) -> List[Dict]:
-        """Load Steam games from cache or API"""
-        try:
-            # Check if cache exists and is recent
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                    last_updated = datetime.fromisoformat(cache_data['last_updated'])
-                    
-                    # If cache is still valid, use it
-                    if datetime.now() - last_updated < self.cache_duration:
-                        return cache_data['games']
+    def _find_base_game(self, games: List[GameInfo]) -> List[GameInfo]:
+        """Filter out DLCs and find base games using multiple checks"""
+        if not games:
+            return []
             
-            # If cache doesn't exist or is old, fetch from API
-            print("Fetching full Steam games list...")
+        def is_dlc(game: GameInfo) -> bool:
+            name = game['name'].lower()
+            type_info = game.get('type', '').lower()
+            categories = game.get('categories', [])
             
-            # First try the v2 endpoint which should give all games at once
-            url = "https://api.steampowered.com/ISteamApps/GetAppList/v2/"
-            try:
-                data = await self._get(url, endpoint='steam_app_list')
-                games = data['applist']['apps']
-                print(f"Retrieved {len(games)} games from v2 API")
-            except Exception as e:
-                print(f"V2 API failed, falling back to v1: {e}")
-                # Fall back to v1 with pagination if v2 fails
-                games = []
-                last_appid = 0
+            # Check if it's explicitly marked as DLC
+            if type_info == 'dlc' or game.get('is_dlc', False):
+                return True
                 
-                while True:
-                    url = "https://api.steampowered.com/IStoreService/GetAppList/v1/"
-                    params = {
-                        "max_results": 50000,  # Maximum allowed
-                        "last_appid": last_appid,
-                        "include_games": True,
-                        "include_dlc": False,
-                        "include_software": False,
-                        "include_videos": False,
-                        "include_hardware": False
-                    }
-                    
-                    try:
-                        data = await self._get(url, params=params, endpoint='steam_app_list')
-                        batch = data.get('response', {}).get('apps', [])
-                        
-                        if not batch:  # No more games
-                            break
-                            
-                        games.extend(batch)
-                        print(f"Retrieved {len(games)} games so far...")
-                        
-                        # Update last_appid for next page
-                        last_appid = batch[-1]['appid']
-                        
-                        # Add delay to avoid rate limits
-                        await asyncio.sleep(1)
-                        
-                    except Exception as e:
-                        print(f"Error during pagination: {e}")
-                        break
-            
-            print(f"Total games retrieved: {len(games)}")
-            
-            # Filter out non-game apps and format the data
-            games = [
-                {
-                    'appid': app['appid'],
-                    'name': app.get('name', ''),
-                } for app in games
-                if app.get('name')  # Only include apps with names
+            # Check if it's in the DLC category
+            if 'DLC' in categories:
+                return True
+                
+            # Check name patterns for DLC/editions
+            dlc_patterns = [
+                ' dlc',
+                'season pass',
+                'expansion',
+                'content pack',
+                'soundtrack',
+                'artbook',
+                'bonus content',
+                'complete edition',
+                'deluxe edition',
+                'ultimate edition',
+                'digital edition',
+                'collector\'s edition',
+                'definitive edition',
+                'bundle',
+                ' pack' # space before to avoid false positives
             ]
             
-            # Save to cache
-            cache_data = {
-                'last_updated': datetime.now().isoformat(),
-                'games': games
+            return any(pattern in name for pattern in dlc_patterns)
+        
+        # Filter out DLCs and special editions
+        base_games = [game for game in games if not is_dlc(game)]
+        
+        # If we filtered out everything, return the original first result
+        return base_games if base_games else [games[0]]
+
+    async def search_steam_games(self, query: str, language: str = 'english') -> List[GameInfo]:
+        """Search games using Steam store search API with localization support"""
+        try:
+            params = {
+                'term': query,
+                'l': language,
+                'category1': 998,  # Games only
+                'cc': self.LANGUAGES.get(language, {}).get('cc', 'US'),
+                'supportedlang': language,
+                'infinite': 1,
+                'json': 1
             }
-            with open(self.cache_file, 'w', encoding='utf-8') as f:
-                json.dump(cache_data, f, ensure_ascii=False, indent=2)
             
-            print(f"Cached {len(games)} games")
-            return games
+            data = await self._get_with_retry(
+                self.STEAM_SEARCH_URL, 
+                params=params,
+                endpoint='steam_search'
+            )
+            
+            if not data or 'items' not in data:
+                return []
+                
+            games: List[GameInfo] = []
+            for item in data['items']:
+                try:
+                    # Get detailed app info to check if it's DLC
+                    details = await self._get_app_details(item['id'], language)
+                    
+                    names = {}
+                    if language != 'english':
+                        names[language] = {
+                            'name': item['name'],
+                            'language': self.LANGUAGES.get(language, {}).get('name', language)
+                        }
+                    
+                    game_info: GameInfo = {
+                        'appid': item['id'],
+                        'name': item['name'],
+                        'names': names,
+                        'player_count': None,
+                        'is_dlc': details.get('type', '').lower() == 'dlc' if details else False,
+                        'type': details.get('type', '') if details else item.get('type', ''),
+                        'categories': details.get('categories', []) if details else []
+                    }
+                    
+                    # Get player count for top results
+                    if len(games) < 5:
+                        try:
+                            player_count = await self.get_player_count(item['id'])
+                            game_info['player_count'] = player_count
+                        except Exception as e:
+                            logger.error(f"Could not get player count for {item['name']}: {e}")
+                    
+                    games.append(game_info)
+                except Exception as e:
+                    logger.error(f"Error processing search result: {e}")
+                    continue
+            
+            # Filter games to find base game
+            return self._find_base_game(games)
             
         except Exception as e:
-            print(f"Error loading Steam games: {e}")
-            # If loading from API fails, try to use cached data even if it's old
-            if os.path.exists(self.cache_file):
-                with open(self.cache_file, 'r', encoding='utf-8') as f:
-                    cache_data = json.load(f)
-                    print(f"Using cached data with {len(cache_data['games'])} games")
-                    return cache_data['games']
-            raise
-    
-    async def find_game(self, game_name: str) -> Tuple[Optional[Dict], int, Optional[List[Dict]]]:
+            logger.error(f"Error searching Steam games: {e}")
+            return []
+
+    async def find_game(self, game_name: str) -> Tuple[Optional[GameInfo], float, Optional[List[GameInfo]]]:
+        """Search for a game by name in any supported language"""
         try:
-            # Sanitize input
             search_name = game_name.lower().strip()[:50]
-            search_name = ''.join(c for c in search_name if c.isalnum() or c.isspace() or c >= '\u3131')
+            detected_langs = self.detect_languages(search_name)
             
-            # Load games from cache or API
-            games = await self._load_steam_games()
+            logger.info(f"Searching for game: '{game_name}' (detected languages: {', '.join(detected_langs) or 'english'})")
             
-            matches = []
-            is_korean = any(char >= '\u3131' and char <= '\u9fff' for char in search_name)
+            # Search in detected language first
+            primary_lang = detected_langs[0] if detected_langs else 'english'
+            games = await self.search_steam_games(search_name, primary_lang)
             
-            for app in games:
-                app_name = app['name'].lower().strip()
-                
-                # Try to get Korean name for better matching
-                if is_korean:
-                    details = await self.get_game_details(app['appid'])
-                    if details and 'name' in details:
-                        korean_name = details.get('name', '').lower().strip()
-                        if korean_name:
-                            if search_name in korean_name:
-                                app['korean_name'] = details['name']
-                                matches.append((app, 95))
-                                continue
-                            
-                            partial_ratio = fuzz.partial_ratio(korean_name, search_name)
-                            if partial_ratio > 60:
-                                app['korean_name'] = details['name']
-                                matches.append((app, partial_ratio))
-                                continue
-                
-                # Fall back to English name matching
-                if app_name == search_name:
-                    return app, 100, None
-                
-                if search_name in app_name:
-                    matches.append((app, 95))
-                    continue
-                
-                ratio = fuzz.token_sort_ratio(app_name, search_name)
-                if ratio > 85:
-                    matches.append((app, ratio))
+            if not games:
+                # Try English if no results in primary language
+                if primary_lang != 'english':
+                    games = await self.search_steam_games(search_name, 'english')
             
-            if not matches:
+            if not games:
+                logger.info(f"No matches found for query: '{game_name}'")
                 return None, 0, None
             
-            # Sort by similarity first
-            matches.sort(key=lambda x: x[1], reverse=True)
-            top_score = matches[0][1]
+            # Return best match and similar matches
+            best_match = games[0]
+            similar_matches = games[1:5] if len(games) > 1 else None
             
-            # Get matches within 10% of top score
-            similar_matches = [m[0] for m in matches if m[1] >= top_score - 10]
-            
-            # Limit number of matches to process
-            matches = matches[:100]  # Only process top 100 matches
-            
-            # Limit similar matches
-            similar_matches = similar_matches[:5]  # Only return top 5
-            
-            # If we have more than 3 similar matches, return the list
-            if len(similar_matches) > 3:
-                return None, 0, similar_matches[:5]  # Return top 5 matches
-            
-            # Otherwise, get player counts for top matches
-            top_matches = []
-            for match in matches[:3]:
-                try:
-                    player_count = await self.get_player_count(match[0]['appid'])
-                    top_matches.append((match[0], match[1], player_count))
-                except:
-                    top_matches.append((match[0], match[1], 0))
-            
-            if not top_matches:
-                return matches[0][0], matches[0][1], None
-            
-            # Sort by player count and similarity
-            top_matches.sort(key=lambda x: (x[2], x[1]), reverse=True)
-            return top_matches[0][0], top_matches[0][1], None
+            return best_match, 100, similar_matches
             
         except Exception as e:
-            print(f"Steam API Error in find_game: {e}")
+            logger.error(f"Steam API Error in find_game for query '{game_name}': {e}")
             raise
-    
+
     async def get_player_count(self, app_id: int) -> int:
+        """Get current player count for a game"""
         try:
             url = f"https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/?appid={app_id}"
-            data = await self._get(url, endpoint='steam_player_count')
+            data = await self._get_with_retry(url, endpoint='steam_player_count')
             return data['response']['player_count']
         except Exception as e:
-            print(f"Steam API Error in get_player_count: {e}")
+            logger.error(f"Steam API Error in get_player_count: {e}")
             raise
     
     # Population API
     async def get_country_info(self, country_name: str) -> Dict:
         url = f"https://restcountries.com/v3.1/name/{country_name}"
-        data = await self._get(url)
+        data = await self._get_with_retry(url)
         return data[0]
     
     async def close(self):
-        """Close the session when done"""
+        """Close the session and cleanup"""
         try:
             if self.session:
                 await self.session.close()
         except Exception as e:
-            print(f"Error closing session: {e}")
+            logger.error(f"Error closing service: {e}")
         finally:
-            self.session = None 
+            self.session = None
     
-    def _load_korean_names_cache(self):
-        """Load cached Korean names"""
-        try:
-            if os.path.exists(self.korean_names_file):
-                with open(self.korean_names_file, 'r', encoding='utf-8') as f:
-                    self.korean_names_cache = json.load(f)
-        except Exception as e:
-            print(f"Error loading Korean names cache: {e}")
-            self.korean_names_cache = {}
-    
-    def _save_korean_names_cache(self):
-        """Save Korean names to cache"""
-        try:
-            with open(self.korean_names_file, 'w', encoding='utf-8') as f:
-                json.dump(self.korean_names_cache, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"Error saving Korean names cache: {e}") 
+    def detect_languages(self, text: str) -> List[str]:
+        """Detect languages in text based on character ranges
+        
+        Args:
+            text: The text to analyze
+            
+        Returns:
+            List of detected language codes
+        """
+        return [
+            lang for lang, info in self.LANGUAGES.items()
+            if any(info['range'][0] <= c <= info['range'][1] for c in text)
+        ] 
