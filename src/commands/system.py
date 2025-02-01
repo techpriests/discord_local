@@ -1,26 +1,20 @@
 from discord.ext import commands
 import discord
+from .base_commands import BaseCommands
+from ..utils.decorators import command_handler
 
-class SystemCommands(commands.Cog):
+class SystemCommands(BaseCommands):
     def __init__(self, bot):
         self.bot = bot
     
-    @commands.command(
-        name="핑",
-        help="봇의 응답 시간을 확인합니다",
-        brief="핑 체크",
-        aliases=["ping"],
-        description="봇의 현재 응답 시간(지연 시간)을 밀리초(ms) 단위로 보여줍니다.\n"
-                    "사용법: !!핑"
-    )
-    async def ping(self, ctx):
+    @command_handler()
+    async def _handle_ping(self, ctx_or_interaction):
         try:
             embed = discord.Embed(title="🏓 퐁!", color=discord.Color.green())
             embed.add_field(name="지연시간", value=f"{round(self.bot.latency * 1000)}ms")
-            await ctx.send(embed=embed)
+            return await self.send_response(ctx_or_interaction, embed=embed)
         except Exception as e:
-            await ctx.send("오류가 발생했습니다.")
-            print(f"Ping Error: {e}")
+            return await self.send_response(ctx_or_interaction, "오류가 발생했습니다.")
     
     @commands.command(
         name="따라해",

@@ -2,8 +2,10 @@ from discord.ext import commands
 import discord
 import random
 import re
+from .base_commands import BaseCommands
+from ..utils.decorators import command_handler
 
-class EntertainmentCommands(commands.Cog):
+class EntertainmentCommands(BaseCommands):
     def __init__(self):
         self.dice_pattern = re.compile(r'^(\d+)d(\d+)$')  # Pattern for "XdY"
     
@@ -58,42 +60,31 @@ class EntertainmentCommands(commands.Cog):
         """Slash command version of dice roll"""
         await self._handle_roll(interaction, dice)
 
+    @command_handler()
     async def _handle_roll(self, ctx_or_interaction, dice_str: str = "1d6"):
-        try:
-            # Parse dice string
-            match = self.dice_pattern.match(dice_str.lower())
-            if not match:
-                raise ValueError("올바른 주사위 형식이 아닙니다. 예시: 2d6, 1d20, 3d4")
-            
-            num_dice = int(match.group(1))
-            sides = int(match.group(2))
-            
-            # Validate input
-            if num_dice < 1 or num_dice > 100:
-                raise ValueError("주사위 개수는 1-100개 사이여야 합니다")
-            if sides < 2 or sides > 100:
-                raise ValueError("주사위 면의 수는 2-100 사이여야 합니다")
-            
-            # Roll dice
-            rolls = [random.randint(1, sides) for _ in range(num_dice)]
-            total = sum(rolls)
-            
-            # Create response
-            if num_dice == 1:
-                result = f"🎲 주사위 (d{sides}) 결과: **{total}**"
-            else:
-                rolls_str = ' + '.join(str(r) for r in rolls)
-                result = f"🎲 주사위 ({dice_str}) 결과:\n개별: {rolls_str}\n총합: **{total}**"
-            
-            # Send response
-            if isinstance(ctx_or_interaction, discord.Interaction):
-                await ctx_or_interaction.response.send_message(result)
-            else:
-                await ctx_or_interaction.send(result)
-                
-        except ValueError as e:
-            error_msg = str(e)
-            if isinstance(ctx_or_interaction, discord.Interaction):
-                await ctx_or_interaction.response.send_message(error_msg, ephemeral=True)
-            else:
-                await ctx_or_interaction.send(error_msg) 
+        # Parse dice string
+        match = self.dice_pattern.match(dice_str.lower())
+        if not match:
+            raise ValueError("올바른 주사위 형식이 아닙니다. 예시: 2d6, 1d20, 3d4")
+        
+        num_dice = int(match.group(1))
+        sides = int(match.group(2))
+        
+        # Validate input
+        if num_dice < 1 or num_dice > 100:
+            raise ValueError("주사위 개수는 1-100개 사이여야 합니다")
+        if sides < 2 or sides > 100:
+            raise ValueError("주사위 면의 수는 2-100 사이여야 합니다")
+        
+        # Roll dice
+        rolls = [random.randint(1, sides) for _ in range(num_dice)]
+        total = sum(rolls)
+        
+        # Create response
+        if num_dice == 1:
+            result = f"🎲 주사위 (d{sides}) 결과: **{total}**"
+        else:
+            rolls_str = ' + '.join(str(r) for r in rolls)
+            result = f"🎲 주사위 ({dice_str}) 결과:\n개별: {rolls_str}\n총합: **{total}**"
+        
+        return await self.send_response(ctx_or_interaction, result) 
