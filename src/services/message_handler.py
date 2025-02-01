@@ -8,10 +8,15 @@ logger = logging.getLogger(__name__)
 class MessageHandler(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.intercept_enabled = False  # Add flag to control interception
 
     @commands.Cog.listener()
     async def on_message(self, message):
         """Listen for messages that are commands to other bots"""
+        # Skip if interception is disabled
+        if not self.intercept_enabled:
+            return
+
         # Ignore our own messages
         if message.author == self.bot.user:
             return
