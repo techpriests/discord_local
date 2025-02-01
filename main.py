@@ -3,18 +3,14 @@ from src.commands.entertainment import EntertainmentCommands
 from src.commands.information import InformationCommands
 from src.commands.system import SystemCommands
 from src.services.api import APIService
-from src.services.secrets import SecretsManager
+from config import TOKEN, WEATHER_API_KEY, STEAM_KEY
 import asyncio
 
 async def main():
-    # Get secrets from AWS
-    secrets_manager = SecretsManager("discord_bot_secrets")  # Create this secret in AWS
-    secrets = secrets_manager.get_secrets()
-    
-    # Initialize services with secrets
+    # Initialize services
     api_service = APIService(
-        weather_key=secrets['WEATHER_API_KEY'],
-        steam_key=secrets['STEAM_KEY']
+        weather_key=WEATHER_API_KEY,
+        steam_key=STEAM_KEY
     )
     
     # Initialize bot
@@ -28,8 +24,8 @@ async def main():
             SystemCommands(bot.bot)
         ], api_service)
         
-        # Run bot with token from secrets
-        await bot.start(secrets['TOKEN'])
+        # Run bot
+        await bot.start(TOKEN)
     except KeyboardInterrupt:
         await api_service.close()
     except Exception as e:
