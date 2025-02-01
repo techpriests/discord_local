@@ -3,18 +3,22 @@ import discord
 from typing import List
 from src.services.memory_db import MemoryDB
 import logging
+import asyncio
+from discord.app_commands import AppCommandError
 
 logger = logging.getLogger(__name__)
 
 class DiscordBot:
-    def __init__(self, command_prefix: str = "!!"):
-        self.bot = commands.Bot(command_prefix=command_prefix, intents=discord.Intents.all())
+    def __init__(self):
+        intents = discord.Intents.all()
+        self.bot = commands.Bot(command_prefix='!!', intents=intents)
         self.api_service = None
         self.memory_db = MemoryDB()
         
         @self.bot.event
         async def on_ready():
             print(f"{self.bot.user.name} 로그인 성공")
+            await self.bot.tree.sync()
             await self.bot.change_presence(status=discord.Status.online, activity=discord.Game('LIVE'))
     
     async def load_cogs(self, cogs: List[commands.Cog], api_service=None):
@@ -31,50 +35,129 @@ class DiscordBot:
             if self.api_service:
                 await self.api_service.close()
 
+    @discord.app_commands.command(
+        name="exchange",
+        description="환율 정보를 보여줍니다"
+    )
+    async def exchange_slash(self, interaction: discord.Interaction, currency: str = None, amount: float = 1.0):
+        """Slash command version"""
+        await self._handle_exchange(interaction, currency, amount)
+
     @commands.command(name='환율', aliases=['exchange'])
-    async def exchange_rate(self, ctx: commands.Context, currency: str = None, amount: float = 1.0):
-        """Get exchange rates for specific currencies
-        Usage: 
-            !!환율 - Shows all rates for 1000 KRW
-            !!환율 엔화 - Converts 1 JPY to KRW
-            !!환율 달러 100 - Converts 100 USD to KRW
-            !!환율 원달러 - Converts 1 KRW to USD
-            !!환율 원엔화 100 - Converts 100 KRW to JPY
-        """ 
+    async def exchange_prefix(self, ctx: commands.Context, currency: str = None, amount: float = 1.0):
+        """Prefix command version"""
+        await self._handle_exchange(ctx, currency, amount)
+
+    async def _handle_exchange(self, ctx_or_interaction, currency: str = None, amount: float = 1.0):
+        """Shared handler for both command types"""
+        processing_msg = None
+        try:
+            # Get user name
+            user_name = ctx_or_interaction.user.display_name if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.display_name
+            processing_text = f"{user_name}님의 명령어를 처리중입니다..."
+
+            # Send processing message
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.defer(ephemeral=True)
+                await ctx_or_interaction.followup.send(processing_text, ephemeral=True)
+            else:
+                processing_msg = await ctx_or_interaction.send(processing_text)
+
+            # ... exchange rate logic ...
+            embed = discord.Embed(...)  # Your existing embed creation
+
+            # Send result and clean up
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.channel.send(embed=embed)
+            else:
+                await ctx_or_interaction.send(embed=embed)
+                if processing_msg:
+                    await processing_msg.delete()
+
+        except Exception as e:
+            message = f"환율 정보를 가져오는데 실패했습니다: {str(e)}"
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.followup.send(message, ephemeral=True)
+            else:
+                await ctx_or_interaction.send(message)
+                if processing_msg:
+                    await processing_msg.delete()
+
+    @discord.app_commands.command(
+        name="remember",
+        description="정보를 기억합니다"
+    )
+    async def remember_slash(self, interaction: discord.Interaction, text: str, nickname: str):
+        """Slash command version"""
+        await self._handle_remember(interaction, text, nickname)
 
     @commands.command(name='기억')
-    async def remember(self, ctx: commands.Context, *, content: str):
-        """Remember information about a user
-        Usage: !!기억 [text] [user nickname]
-        Example: !!기억 좋아하는 게임 철수
-        """
+    async def remember_prefix(self, ctx: commands.Context, text: str, nickname: str):
+        """Prefix command version"""
+        await self._handle_remember(ctx, text, nickname)
+
+    async def _handle_remember(self, ctx_or_interaction, text: str, nickname: str):
+        processing_msg = None
         try:
-            # Split the last word as nickname
-            *text_parts, nickname = content.rsplit(maxsplit=1)
-            if not text_parts:
-                await ctx.send("텍스트와 닉네임을 모두 입력해주세요.")
-                return
-                
-            text = ' '.join(text_parts)
-            author = str(ctx.author)  # Get Discord username of command user
-            
-            # Store in database
-            if self.memory_db.remember(text, nickname, author):
-                await ctx.send(f"기억했습니다: {text} → {nickname}")
+            # Get user name
+            user_name = ctx_or_interaction.user.display_name if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.display_name
+            processing_text = f"{user_name}님의 명령어를 처리중입니다..."
+
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.defer(ephemeral=True)
+                await ctx_or_interaction.followup.send(processing_text, ephemeral=True)
+                author = str(ctx_or_interaction.user)
             else:
-                await ctx.send("기억하는데 실패했습니다.")
-                
+                processing_msg = await ctx_or_interaction.send(processing_text)
+                author = str(ctx_or_interaction.author)
+
+            if self.memory_db.remember(text, nickname, author):
+                result = f"기억했습니다: {text} → {nickname}"
+            else:
+                result = "기억하는데 실패했습니다."
+
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.channel.send(result)
+            else:
+                await ctx_or_interaction.send(result)
+                if processing_msg:
+                    await processing_msg.delete()
+
         except Exception as e:
-            logger.error(f"Error in remember command: {e}")
-            await ctx.send("올바른 형식으로 입력해주세요: !!기억 [텍스트] [닉네임]")
+            message = "올바른 형식으로 입력해주세요"
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.followup.send(message, ephemeral=True)
+            else:
+                await ctx_or_interaction.send(message)
+                if processing_msg:
+                    await processing_msg.delete()
+
+    @discord.app_commands.command(
+        name="recall",
+        description="정보를 알려줍니다"
+    )
+    async def recall_slash(self, interaction: discord.Interaction, nickname: str):
+        """Slash command version"""
+        await self._handle_recall(interaction, nickname)
 
     @commands.command(name='알려')
-    async def recall(self, ctx: commands.Context, *, nickname: str):
-        """Recall information about a user
-        Usage: !!알려 [nickname]
-        Example: !!알려 철수
-        """
+    async def recall_prefix(self, ctx: commands.Context, nickname: str):
+        """Prefix command version"""
+        await self._handle_recall(ctx, nickname)
+
+    async def _handle_recall(self, ctx_or_interaction, nickname: str):
+        processing_msg = None
         try:
+            # Get user name
+            user_name = ctx_or_interaction.user.display_name if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.display_name
+            processing_text = f"{user_name}님의 명령어를 처리중입니다..."
+
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.defer(ephemeral=True)
+                await ctx_or_interaction.followup.send(processing_text, ephemeral=True)
+            else:
+                processing_msg = await ctx_or_interaction.send(processing_text)
+
             memories = self.memory_db.recall(nickname)
             if memories:
                 embed = discord.Embed(
@@ -89,26 +172,95 @@ class DiscordBot:
                         inline=False
                     )
                 
-                await ctx.send(embed=embed)
+                if isinstance(ctx_or_interaction, discord.Interaction):
+                    await ctx_or_interaction.channel.send(embed=embed)
+                else:
+                    await ctx_or_interaction.send(embed=embed)
+                    if processing_msg:
+                        await processing_msg.delete()
             else:
-                await ctx.send(f"'{nickname}'에 대한 기억이 없습니다.")
+                message = f"'{nickname}'에 대한 기억이 없습니다."
+                if isinstance(ctx_or_interaction, discord.Interaction):
+                    await ctx_or_interaction.channel.send(message)
+                else:
+                    await ctx_or_interaction.send(message)
+                    if processing_msg:
+                        await processing_msg.delete()
                 
         except Exception as e:
             logger.error(f"Error in recall command: {e}")
-            await ctx.send("기억을 불러오는데 실패했습니다.")
+            message = "기억을 불러오는데 실패했습니다."
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.followup.send(message, ephemeral=True)
+            else:
+                await ctx_or_interaction.send(message)
+                if processing_msg:
+                    await processing_msg.delete()
+
+    @discord.app_commands.command(
+        name="forget",
+        description="정보를 잊어버립니다"
+    )
+    async def forget_slash(self, interaction: discord.Interaction, nickname: str):
+        """Slash command version"""
+        await self._handle_forget(interaction, nickname)
 
     @commands.command(name='잊어')
-    async def forget(self, ctx: commands.Context, *, nickname: str):
-        """Delete all information about a user
-        Usage: !!잊어 [nickname]
-        Example: !!잊어 철수
-        """
+    async def forget_prefix(self, ctx: commands.Context, nickname: str):
+        """Prefix command version"""
+        await self._handle_forget(ctx, nickname)
+
+    async def _handle_forget(self, ctx_or_interaction, nickname: str):
+        processing_msg = None
         try:
-            if self.memory_db.forget(nickname):
-                await ctx.send(f"'{nickname}'에 대한 모든 정보를 삭제했습니다.")
+            # Get user name
+            user_name = ctx_or_interaction.user.display_name if isinstance(ctx_or_interaction, discord.Interaction) else ctx_or_interaction.author.display_name
+            processing_text = f"{user_name}님의 명령어를 처리중입니다..."
+
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.defer(ephemeral=True)
+                await ctx_or_interaction.followup.send(processing_text, ephemeral=True)
             else:
-                await ctx.send(f"'{nickname}'에 대한 정보를 찾을 수 없습니다.")
+                processing_msg = await ctx_or_interaction.send(processing_text)
+
+            if self.memory_db.forget(nickname):
+                message = f"'{nickname}'에 대한 모든 정보를 삭제했습니다."
+            else:
+                message = f"'{nickname}'에 대한 정보를 찾을 수 없습니다."
+
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.channel.send(message)
+            else:
+                await ctx_or_interaction.send(message)
+                if processing_msg:
+                    await processing_msg.delete()
                 
         except Exception as e:
             logger.error(f"Error in forget command: {e}")
-            await ctx.send("올바른 형식으로 입력해주세요: !!잊어 [닉네임]") 
+            message = "올바른 형식으로 입력해주세요"
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.followup.send(message, ephemeral=True)
+            else:
+                await ctx_or_interaction.send(message)
+                if processing_msg:
+                    await processing_msg.delete()
+
+    async def setup_hook(self):
+        self.tree.on_error = self.on_app_command_error
+
+    async def on_app_command_error(self, interaction: discord.Interaction, error: AppCommandError):
+        if isinstance(error, commands.CommandOnCooldown):
+            await interaction.response.send_message(
+                f"명령어 사용 제한 중입니다. {error.retry_after:.1f}초 후에 다시 시도해주세요.",
+                ephemeral=True
+            )
+        else:
+            logger.error(f"Slash command error in {interaction.command}: {error}")
+            error_messages = [
+                "예상치 못한 오류가 발생했습니다.",
+                "가능한 해결 방법:",
+                "• 잠시 후 다시 시도",
+                "• 명령어 사용법 확인 (`/help` 명령어 사용)",
+                "• 봇 관리자에게 문의"
+            ]
+            await interaction.response.send_message("\n".join(error_messages), ephemeral=True) 
