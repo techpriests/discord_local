@@ -1,3 +1,6 @@
+from discord.ext import commands
+import discord
+
 class BaseCommands(commands.Cog):
     async def send_response(self, ctx_or_interaction, content=None, *, embed=None):
         """Unified method to send responses"""
@@ -10,4 +13,4 @@ class BaseCommands(commands.Cog):
             if embed:
                 await ctx_or_interaction.send(embed=embed)
             else:
-                await ctx_or_interaction.send(content) 
+                await ctx_or_interaction.send(content)
