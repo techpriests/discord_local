@@ -461,4 +461,29 @@ class APIService:
             
         except Exception as e:
             logger.error(f"Error getting exchange rates: {e}")
-            raise APIError(f"Failed to get exchange rates: {str(e)}") 
+            raise APIError(f"Failed to get exchange rates: {str(e)}")
+
+    async def get_player_history(self, app_id: int) -> Dict:
+        """Get historical player data for a game"""
+        try:
+            url = f"https://steamcharts.com/app/{app_id}/chart-data.json"
+            data = await self._get_with_retry(url, endpoint='steam_charts')
+            
+            if not data:
+                return None
+            
+            # Get last 7 days of data
+            recent_data = data[-7:]
+            
+            # Calculate peak and average
+            peak_players = max(point[1] for point in recent_data)
+            avg_players = sum(point[1] for point in recent_data) // len(recent_data)
+            
+            return {
+                'peak_7d': peak_players,
+                'avg_7d': avg_players,
+                'trend': recent_data[-1][1] - recent_data[0][1]  # Positive means growing
+            }
+        except Exception as e:
+            logger.error(f"Error getting player history for {app_id}: {e}")
+            return None 
