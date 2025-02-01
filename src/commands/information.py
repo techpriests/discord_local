@@ -145,41 +145,56 @@ class InformationCommands(BaseCommands):
 
         game, similarity, similar_matches = await self.api.find_game(game_name)
         
-        # If we got a list of similar matches
+        # If we got similar matches, check for duplicates
         if similar_matches:
-            # Get player counts for similar matches and filter low-count games
-            filtered_matches = []
-            for game in similar_matches:
+            # Create a dictionary to group games by name
+            games_by_name = {}
+            for g in [game] + similar_matches if game else similar_matches:
                 try:
-                    player_count = await self.api.get_player_count(game['appid'])
-                    if player_count >= 100:  # Only include games with 100+ players
-                        game['player_count'] = player_count
-                        filtered_matches.append(game)
+                    name = g.get('korean_name', g['name'])
+                    if name not in games_by_name:
+                        games_by_name[name] = []
+                    player_count = await self.api.get_player_count(g['appid'])
+                    g['player_count'] = player_count
+                    games_by_name[name].append(g)
                 except Exception as e:
-                    logger.error(f"Error getting player count for {game['name']}: {e}")
-                    continue
+                    logger.error(f"Error getting player count for {g['name']}: {e}")
+                    g['player_count'] = 0
+                    games_by_name[name].append(g)
 
-            if filtered_matches:
+            # For each name, keep only the game with highest player count
+            filtered_matches = []
+            for name, games in games_by_name.items():
+                # Sort by player count in descending order
+                games.sort(key=lambda x: x.get('player_count', 0), reverse=True)
+                # Keep the game with highest player count
+                filtered_matches.append(games[0])
+
+            # Filter out games with less than 100 players
+            filtered_matches = [g for g in filtered_matches if g.get('player_count', 0) >= 100]
+
+            if len(filtered_matches) > 1:  # Multiple different games found
                 embed = discord.Embed(
                     title="비슷한 게임이 여러 개 발견되었습니다",
                     description="아래 게임 중 하나를 선택하여 다시 검색해주세요:",
                     color=discord.Color.blue()
                 )
                 
-                for i, game in enumerate(filtered_matches, 1):
-                    name = game.get('korean_name', game['name'])
-                    if 'korean_name' in game and game['korean_name'] != game['name']:
-                        name = f"{game['korean_name']} ({game['name']})"
-                    player_info = f"현재 플레이어: {game['player_count']:,}명"
+                for i, g in enumerate(filtered_matches, 1):
+                    name = g.get('korean_name', g['name'])
+                    if 'korean_name' in g and g['korean_name'] != g['name']:
+                        name = f"{g['korean_name']} ({g['name']})"
+                    player_info = f"현재 플레이어: {g['player_count']:,}명"
                     embed.add_field(
                         name=f"{i}. {name}", 
-                        value=f"{player_info}\nID: {game['appid']}", 
+                        value=f"{player_info}\nID: {g['appid']}", 
                         inline=False
                     )
                 
                 return await self.send_response(ctx_or_interaction, embed=embed)
-            else:
-                # If no games with sufficient players found, continue with the best match
+            elif filtered_matches:  # Single game with enough players
+                game = filtered_matches[0]
+            elif similar_matches:  # No games with enough players, use the original best match
                 game = similar_matches[0]
 
         # If no game found
