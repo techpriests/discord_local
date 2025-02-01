@@ -1,0 +1,28 @@
+name: Auto PR to Main
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          title: "Auto PR: Develop to Main"
+          body: |
+            Automated PR from develop to main
+            
+            Changes included in this PR:
+            - Please review the changes below
+            
+            Note: This PR was automatically created by GitHub Actions
+          branch: develop
+          base: main
+          delete-branch: false 
