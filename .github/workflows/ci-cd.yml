@@ -2,9 +2,9 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
-    branches: [ main, develop ]
+    branches: [ main ]
 
 jobs:
   ci:
@@ -20,7 +20,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -r requirements.txt
+        pip install -e .
         
     # Add tests here when you have them
     # - name: Run tests
@@ -28,7 +28,7 @@ jobs:
 
   cd:
     needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'  # Only deploy from main branch
+    if: github.ref == 'refs/heads/main'  # Only deploy from main branch
     runs-on: ubuntu-latest
     steps:
     - name: Deploy to EC2
@@ -58,7 +58,7 @@ jobs:
           echo "TOKEN = '${{ secrets.DISCORD_TOKEN }}'" > config.py
           echo "STEAM_KEY = '${{ secrets.STEAM_API_KEY }}'" >> config.py
           echo "WEATHER_API_KEY = '${{ secrets.WEATHER_API_KEY }}'" >> config.py
-          git pull origin main  # Explicitly pull from main branch
+          git pull origin main
           docker-compose down
           docker-compose build
           docker-compose up -d 
