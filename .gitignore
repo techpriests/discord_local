@@ -176,6 +176,7 @@ config.py
 # Environment files
 .env
 .env.*
+!.env.example
 
 # Python cache files
 __pycache__/
