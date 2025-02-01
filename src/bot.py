@@ -6,6 +6,7 @@ import logging
 import asyncio
 from discord.app_commands import AppCommandError
 from datetime import datetime
+from src.services.message_handler import MessageHandler
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,8 @@ class DiscordBot:
         self.api_service = api_service
         for cog in cogs:
             await self.bot.add_cog(cog)
+        # Add message handler
+        await self.bot.add_cog(MessageHandler(self.bot))
     
     async def start(self, token: str):
         """Start the bot"""
