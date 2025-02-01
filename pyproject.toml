@@ -8,7 +8,8 @@ dependencies = [
     "aiohttp",
     "fuzzywuzzy",
     "python-Levenshtein",
-    "boto3"
+    "boto3",
+    "pytz"
 ]
 
 [build-system]
