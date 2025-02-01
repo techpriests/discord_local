@@ -147,24 +147,41 @@ class InformationCommands(BaseCommands):
         
         # If we got a list of similar matches
         if similar_matches:
-            embed = discord.Embed(
-                title="비슷한 게임이 여러 개 발견되었습니다",
-                description="아래 게임 중 하나를 선택하여 다시 검색해주세요:",
-                color=discord.Color.blue()
-            )
-            
-            for i, game in enumerate(similar_matches, 1):
-                name = game.get('korean_name', game['name'])
-                if 'korean_name' in game and game['korean_name'] != game['name']:
-                    name = f"{game['korean_name']} ({game['name']})"
-                embed.add_field(
-                    name=f"{i}. {name}", 
-                    value=f"ID: {game['appid']}", 
-                    inline=False
+            # Get player counts for similar matches and filter low-count games
+            filtered_matches = []
+            for game in similar_matches:
+                try:
+                    player_count = await self.api.get_player_count(game['appid'])
+                    if player_count >= 100:  # Only include games with 100+ players
+                        game['player_count'] = player_count
+                        filtered_matches.append(game)
+                except Exception as e:
+                    logger.error(f"Error getting player count for {game['name']}: {e}")
+                    continue
+
+            if filtered_matches:
+                embed = discord.Embed(
+                    title="비슷한 게임이 여러 개 발견되었습니다",
+                    description="아래 게임 중 하나를 선택하여 다시 검색해주세요:",
+                    color=discord.Color.blue()
                 )
-            
-            return await self.send_response(ctx_or_interaction, embed=embed)
-        
+                
+                for i, game in enumerate(filtered_matches, 1):
+                    name = game.get('korean_name', game['name'])
+                    if 'korean_name' in game and game['korean_name'] != game['name']:
+                        name = f"{game['korean_name']} ({game['name']})"
+                    player_info = f"현재 플레이어: {game['player_count']:,}명"
+                    embed.add_field(
+                        name=f"{i}. {name}", 
+                        value=f"{player_info}\nID: {game['appid']}", 
+                        inline=False
+                    )
+                
+                return await self.send_response(ctx_or_interaction, embed=embed)
+            else:
+                # If no games with sufficient players found, continue with the best match
+                game = similar_matches[0]
+
         # If no game found
         if not game:
             suggestions = [
