@@ -2,12 +2,13 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main ]  # Only run on main
   pull_request:
-    branches: [ main ]
+    branches: [ main ]  # Only run on PRs to main
 
 jobs:
   ci:
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -28,7 +29,7 @@ jobs:
 
   cd:
     needs: ci
-    if: github.ref == 'refs/heads/main'  # Only deploy from main branch
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
     - name: Deploy to EC2
