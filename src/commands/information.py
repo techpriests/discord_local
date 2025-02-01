@@ -2,6 +2,8 @@ from discord.ext import commands
 import discord
 from ..services.api import APIService
 import logging
+from datetime import datetime
+import pytz
 
 logger = logging.getLogger(__name__)
 
@@ -331,4 +333,131 @@ class InformationCommands(commands.Cog):
                 "• 명령어 사용법 확인 (`!!help` 명령어 사용)",
                 "• 봇 관리자에게 문의"
             ]
-            await ctx.send("\n".join(error_messages)) 
+            await ctx.send("\n".join(error_messages))
+
+    @commands.command(name='시간')
+    async def time_prefix(self, ctx: commands.Context, timezone: str = None, time_str: str = None):
+        """Convert time between timezones
+        Examples:
+        !!시간  # Show all timezones
+        !!시간 US/Pacific  # Convert current KR time to PST
+        !!시간 US/Pacific 09:00  # Convert PST 09:00 to KR time
+        """
+        await self._handle_time(ctx, timezone, time_str)
+
+    @discord.app_commands.command(
+        name="time",
+        description="세계 시간을 보여줍니다"
+    )
+    async def time_slash(self, interaction: discord.Interaction, timezone: str = None, time: str = None):
+        """Slash command version of time conversion"""
+        await self._handle_time(interaction, timezone, time)
+
+    async def _handle_time(self, ctx_or_interaction, timezone: str = None, time_str: str = None):
+        try:
+            kr_tz = pytz.timezone('Asia/Seoul')
+            kr_time = datetime.now(kr_tz)
+
+            embed = discord.Embed(
+                title="🕐 세계 시간",
+                color=discord.Color.blue(),
+                timestamp=kr_time
+            )
+
+            if timezone and time_str:
+                try:
+                    # Parse the input time
+                    try:
+                        # Try parsing time-only format (HH:MM)
+                        time_parts = time_str.split(':')
+                        hour = int(time_parts[0])
+                        minute = int(time_parts[1]) if len(time_parts) > 1 else 0
+                        
+                        # Use today's date with the specified time
+                        target_tz = pytz.timezone(timezone)
+                        current = datetime.now(target_tz)
+                        input_time = current.replace(hour=hour, minute=minute)
+                        
+                    except ValueError:
+                        raise ValueError("시간 형식이 잘못되었습니다. HH:MM 형식으로 입력해주세요 (예: 09:00)")
+
+                    # Convert to Korean time
+                    kr_time = input_time.astimezone(kr_tz)
+                    
+                    embed.add_field(
+                        name=f"{timezone} 시간",
+                        value=input_time.strftime("%Y-%m-%d %H:%M"),
+                        inline=True
+                    )
+                    embed.add_field(
+                        name="한국 시간",
+                        value=kr_time.strftime("%Y-%m-%d %H:%M"),
+                        inline=True
+                    )
+                    
+                except pytz.exceptions.UnknownTimeZoneError:
+                    raise ValueError(f"지원하지 않는 시간대입니다: {timezone}")
+                
+            elif timezone:
+                # Original functionality (KR → Target)
+                try:
+                    target_tz = pytz.timezone(timezone)
+                    target_time = kr_time.astimezone(target_tz)
+                    embed.add_field(
+                        name="한국 시간",
+                        value=kr_time.strftime("%Y-%m-%d %H:%M"),
+                        inline=True
+                    )
+                    embed.add_field(
+                        name=f"{timezone} 시간",
+                        value=target_time.strftime("%Y-%m-%d %H:%M"),
+                        inline=True
+                    )
+                except pytz.exceptions.UnknownTimeZoneError:
+                    raise ValueError(f"지원하지 않는 시간대입니다: {timezone}")
+            else:
+                # Show common timezones
+                common_timezones = {
+                    'US/Pacific': 'PST',
+                    'US/Eastern': 'EST',
+                    'Europe/London': 'UK',
+                    'Europe/Paris': 'EU',
+                    'Australia/Sydney': 'SYD',
+                }
+                
+                embed.add_field(
+                    name="한국 시간",
+                    value=kr_time.strftime("%Y-%m-%d %H:%M"),
+                    inline=False
+                )
+                
+                for tz_name, display_name in common_timezones.items():
+                    target_tz = pytz.timezone(tz_name)
+                    target_time = kr_time.astimezone(target_tz)
+                    embed.add_field(
+                        name=display_name,
+                        value=target_time.strftime("%Y-%m-%d %H:%M"),
+                        inline=True
+                    )
+
+                # Add usage examples
+                embed.add_field(
+                    name="사용법",
+                    value="• `!!시간` - 모든 시간대 표시\n"
+                          "• `!!시간 US/Pacific` - 한국→PST 변환\n"
+                          "• `!!시간 US/Pacific 09:00` - PST→한국 변환",
+                    inline=False
+                )
+
+            # Send response
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.send_message(embed=embed)
+            else:
+                await ctx_or_interaction.send(embed=embed)
+
+        except Exception as e:
+            error_msg = f"시간 변환에 실패했습니다: {str(e)}"
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.send_message(error_msg, ephemeral=True)
+            else:
+                await ctx_or_interaction.send(error_msg) 
