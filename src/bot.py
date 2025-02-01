@@ -5,6 +5,7 @@ from src.services.memory_db import MemoryDB
 import logging
 import asyncio
 from discord.app_commands import AppCommandError
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -63,8 +64,37 @@ class DiscordBot:
             else:
                 processing_msg = await ctx_or_interaction.send(processing_text)
 
-            # ... exchange rate logic ...
-            embed = discord.Embed(...)  # Your existing embed creation
+            # Get exchange rates
+            rates = await self.api_service.get_exchange_rates()
+            
+            # Create embed with exchange rate info
+            embed = discord.Embed(
+                title="💱 환율 정보",
+                color=discord.Color.blue(),
+                timestamp=datetime.now()
+            )
+
+            if currency:
+                # Convert specific currency
+                currency_code = currency.upper()
+                if currency_code not in rates:
+                    raise ValueError(f"지원하지 않는 통화입니다: {currency}")
+                
+                rate = rates[currency_code]
+                krw_amount = amount * rate
+                embed.description = f"{amount:,.2f} {currency_code} = {krw_amount:,.2f} KRW"
+            else:
+                # Show all rates for 1000 KRW
+                base_amount = 1000
+                for curr, rate in rates.items():
+                    foreign_amount = base_amount * rate
+                    embed.add_field(
+                        name=curr,
+                        value=f"{base_amount:,.0f} KRW = {foreign_amount:,.2f} {curr}",
+                        inline=True
+                    )
+
+            embed.set_footer(text="Data from ExchangeRate-API")
 
             # Send result and clean up
             if isinstance(ctx_or_interaction, discord.Interaction):
