@@ -5,7 +5,14 @@ class SystemCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
     
-    @commands.command(name="핑", help="봇의 지연시간을 확인합니다", aliases=["ping", "레이턴시"])
+    @commands.command(
+        name="핑",
+        help="봇의 응답 시간을 확인합니다",
+        brief="핑 체크",
+        aliases=["ping"],
+        description="봇의 현재 응답 시간(지연 시간)을 밀리초(ms) 단위로 보여줍니다.\n"
+                    "사용법: !!핑"
+    )
     async def ping(self, ctx):
         try:
             embed = discord.Embed(title="🏓 퐁!", color=discord.Color.green())
@@ -15,7 +22,15 @@ class SystemCommands(commands.Cog):
             await ctx.send("오류가 발생했습니다.")
             print(f"Ping Error: {e}")
     
-    @commands.command(name="따라해", help="메시지를 따라합니다", aliases=["copy", "mimic"])
+    @commands.command(
+        name="따라해",
+        help="메시지를 따라합니다",
+        brief="메시지 따라하기",
+        aliases=["copy", "mimic"],
+        description="입력한 메시지를 그대로 따라합니다.\n"
+                    "사용법: !!따라해 [메시지]\n"
+                    "예시: !!따라해 안녕하세요"
+    )
     async def copy_message(self, ctx, *, message: str):
         try:
             await ctx.message.delete()

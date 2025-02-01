@@ -16,10 +16,18 @@ class InformationCommands(commands.Cog):
         """Slash command version"""
         await self._handle_weather(interaction)
 
-    @commands.command(name="날씨", aliases=["weather"])
+    @commands.command(
+        name="날씨",
+        help="서울의 현재 날씨를 알려줍니다 (개발중)",
+        brief="날씨 확인",
+        aliases=["weather"],
+        description="서울의 현재 날씨 정보를 보여줍니다.\n"
+                    "※ 현재 개발 진행중인 기능입니다.\n"
+                    "사용법: !!날씨"
+    )
     async def weather_prefix(self, ctx: commands.Context):
         """Prefix command version"""
-        await self._handle_weather(ctx)
+        await ctx.send("🚧 날씨 기능은 현재 개발 진행중입니다. 조금만 기다려주세요!")
 
     async def _handle_weather(self, ctx_or_interaction):
         processing_msg = None
@@ -76,7 +84,12 @@ class InformationCommands(commands.Cog):
         """Slash command version"""
         await self._handle_population(interaction, country_name)
 
-    @commands.command(name="인구", aliases=["population"])
+    @commands.command(name="인구", help="국가의 인구수를 알려줍니다", brief="인구 확인", aliases=["population"], description="국가의 인구, 수도, 지역 정보를 보여줍니다.\n"
+                "사용법: !!인구 [국가명]\n"
+                "예시:\n"
+                "• !!인구 South Korea\n"
+                "• !!인구 United States\n"
+                "※ 국가명은 영어로 입력해주세요.")
     async def population_prefix(self, ctx: commands.Context, *, country_name: str = None):
         """Prefix command version"""
         await self._handle_population(ctx, country_name)
@@ -162,7 +175,12 @@ class InformationCommands(commands.Cog):
         """Slash command version"""
         await self._handle_steam(interaction, game_name)
 
-    @commands.command(name="스팀")
+    @commands.command(name="스팀", help="스팀 게임의 현재 플레이어 수를 알려줍니다", brief="스팀 게임 정보", aliases=["steam"], description="스팀 게임의 현재 플레이어 수와 정보를 보여줍니다.\n"
+                "사용법: !!스팀 [게임명]\n"
+                "예시:\n"
+                "• !!스팀 Lost Ark\n"
+                "• !!스팀 PUBG\n"
+                "※ 정확한 게임명을 입력하면 더 좋은 결과를 얻을 수 있습니다.")
     async def steam_prefix(self, ctx: commands.Context, *, game_name: str = None):
         """Prefix command version"""
         await self._handle_steam(ctx, game_name)
@@ -171,7 +189,7 @@ class InformationCommands(commands.Cog):
         processing_msg = None
         try:
             if not game_name or len(game_name.strip()) < 2:
-                message = "게임 이름을 2글자 이상 입력해주세요.\n예시: `/steam Lost Ark` 또는 `!!스퀸 로스트아크`"
+                message = "게임 이름을 2글자 이상 입력해주세요.\n예시: `/steam Lost Ark` 또는 `!!스팀 로스트아크`"
                 if isinstance(ctx_or_interaction, discord.Interaction):
                     await ctx_or_interaction.response.send_message(message, ephemeral=True)
                 else:
@@ -335,8 +353,18 @@ class InformationCommands(commands.Cog):
             ]
             await ctx.send("\n".join(error_messages))
 
-    @commands.command(name='시간')
-    async def time_prefix(self, ctx: commands.Context, timezone: str = None, time_str: str = None):
+    @commands.command(
+        name="시간",
+        help="세계 시간을 변환합니다",
+        brief="시간 변환",
+        aliases=["time"],
+        description="한국 시간과 세계 각국의 시간을 변환합니다.\n"
+                    "사용법:\n"
+                    "!!시간  -> 주요 도시 시간 표시\n"
+                    "!!시간 US/Pacific  -> 특정 지역 시간 변환\n"
+                    "!!시간 US/Pacific 09:00  -> 특정 시간 변환"
+    )
+    async def time_prefix(self, ctx, timezone: str = None, time_str: str = None):
         """Convert time between timezones
         Examples:
         !!시간  # Show all timezones
