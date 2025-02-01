@@ -19,7 +19,6 @@ class DiscordBot:
         @self.bot.event
         async def on_ready():
             print(f"{self.bot.user.name} 로그인 성공")
-            await self.bot.tree.sync()
             await self.bot.change_presence(status=discord.Status.online, activity=discord.Game('LIVE'))
     
     async def load_cogs(self, cogs: List[commands.Cog], api_service=None):
@@ -275,6 +274,60 @@ class DiscordBot:
                 if processing_msg:
                     await processing_msg.delete()
 
+    @commands.command(
+        name="help",
+        help="명령어 도움말을 보여줍니다",
+        brief="도움말",
+        description=(
+            "🎮 엔터테인먼트\n"
+            "• !!주사위 [개수]d[면수] - 주사위 굴리기 (예: !!주사위 2d6)\n"
+            "• !!투표/!!골라줘 [선택지...] - 선택지 중 하나 고르기\n"
+            "• !!안녕 - 인사하기\n\n"
+            "🌍 정보\n"
+            "• !!시간 [지역] [시간] - 시간대 변환 (예: !!시간 US/Pacific)\n"
+            "• !!날씨 - 서울 날씨 (개발중)\n"
+            "• !!인구 [국가] - 국가 정보 (예: !!인구 South Korea)\n"
+            "• !!스팀 [게임] - 스팀 게임 정보\n\n"
+            "⚙️ 시스템\n"
+            "• !!핑 - 봇 응답시간 확인\n"
+            "• !!따라해 [메시지] - 메시지 따라하기\n\n"
+            "자세한 사용법은 !!help [명령어] 를 입력해주세요.\n"
+            "예시: !!help 주사위"
+        )
+    )
+    async def help(self, ctx, command_name: str = None):
+        if command_name:
+            # Show specific command help
+            command = self.bot.get_command(command_name)
+            if command:
+                embed = discord.Embed(
+                    title=f"💡 {command.name} 명령어 도움말",
+                    description=command.description,
+                    color=discord.Color.blue()
+                )
+                if command.aliases:
+                    embed.add_field(
+                        name="다른 사용법",
+                        value=", ".join(f"!!{alias}" for alias in command.aliases),
+                        inline=False
+                    )
+            else:
+                embed = discord.Embed(
+                    title="❌ 오류",
+                    description=f"'{command_name}' 명령어를 찾을 수 없습니다.",
+                    color=discord.Color.red()
+                )
+        else:
+            # Show general help
+            embed = discord.Embed(
+                title="🤖 도움말",
+                description=self.help.description,
+                color=discord.Color.blue()
+            )
+            embed.set_footer(text="자세한 사용법은 !!help [명령어] 를 입력해주세요")
+        
+        await ctx.send(embed=embed)
+
     async def setup_hook(self):
         self.tree.on_error = self.on_app_command_error
 
@@ -293,4 +346,11 @@ class DiscordBot:
                 "• 명령어 사용법 확인 (`/help` 명령어 사용)",
                 "• 봇 관리자에게 문의"
             ]
-            await interaction.response.send_message("\n".join(error_messages), ephemeral=True) 
+            await interaction.response.send_message("\n".join(error_messages), ephemeral=True)
+
+    # Add separate command for syncing
+    @commands.command(name="동기화", help="슬래시 명령어를 동기화합니다")
+    @commands.has_permissions(administrator=True)
+    async def sync(self, ctx):
+        await self.bot.tree.sync()
+        await ctx.send("슬래시 명령어 동기화 완료!") 
