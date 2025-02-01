@@ -1,6 +1,0 @@
-discord.py
-python-dotenv
-aiohttp
-fuzzywuzzy
-python-Levenshtein
-boto3 
