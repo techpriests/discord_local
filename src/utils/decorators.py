@@ -21,8 +21,9 @@ def command_handler():
                 processing_text = f"{user_name}님의 명령어를 처리중입니다..."
                 
                 if isinstance(ctx_or_interaction, discord.Interaction):
-                    await ctx_or_interaction.response.defer(ephemeral=True)
-                    await ctx_or_interaction.followup.send(processing_text, ephemeral=True)
+                    if not ctx_or_interaction.response.is_done():
+                        await ctx_or_interaction.response.defer()
+                        await ctx_or_interaction.followup.send(processing_text, ephemeral=True)
                 else:
                     processing_msg = await ctx_or_interaction.send(processing_text)
 
@@ -39,7 +40,10 @@ def command_handler():
                 logger.error(f"Error in {func.__name__}: {e}")
                 error_msg = str(e)
                 if isinstance(ctx_or_interaction, discord.Interaction):
-                    await ctx_or_interaction.followup.send(error_msg, ephemeral=True)
+                    if not ctx_or_interaction.response.is_done():
+                        await ctx_or_interaction.response.send_message(error_msg, ephemeral=True)
+                    else:
+                        await ctx_or_interaction.followup.send(error_msg, ephemeral=True)
                 else:
                     await ctx_or_interaction.send(error_msg)
                     if processing_msg:
