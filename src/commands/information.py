@@ -238,10 +238,27 @@ class InformationCommands(BaseCommands):
             color=discord.Color.blue()
         )
         
-        if player_count is not None and player_count > 0:
-            embed.add_field(name="현재 플레이어 수", value=f"{player_count:,}명")
-        else:
-            embed.add_field(name="현재 플레이어 수", value="정보 없음")
+        # Get current and historical player data
+        try:
+            if player_count is not None and player_count > 0:
+                embed.add_field(name="현재 플레이어", value=f"{player_count:,}명", inline=True)
+                
+                # Get historical data
+                history = await self.api.get_player_history(game['appid'])
+                if history:
+                    trend = "📈" if history['trend'] > 0 else "📉"
+                    embed.add_field(
+                        name="7일 최고/평균", 
+                        value=f"최고: {history['peak_7d']:,}명\n"
+                              f"평균: {history['avg_7d']:,}명\n"
+                              f"추세: {trend}",
+                        inline=True
+                    )
+            else:
+                embed.add_field(name="현재 플레이어", value="정보 없음", inline=True)
+        except Exception as e:
+            logger.error(f"Error getting player history: {e}")
+            embed.add_field(name="플레이어 정보", value="데이터를 가져오는데 실패했습니다", inline=True)
         
         if similarity < 100:
             embed.add_field(
