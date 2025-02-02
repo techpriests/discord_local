@@ -21,11 +21,18 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install -e .
-        
-    # Add tests here when you have them
-    # - name: Run tests
-    #   run: python -m pytest
+        pip install poetry
+        poetry install
+
+    - name: Run tests
+      run: poetry run pytest
+      
+    - name: Run static analysis
+      run: |
+        poetry run mypy src
+        poetry run ruff check src
+        poetry run black src --check
+        poetry run isort src --check
 
   cd:
     needs: ci
@@ -56,10 +63,13 @@ jobs:
 
           # Deploy application
           cd ~/discord_local
-          echo "TOKEN = '${{ secrets.DISCORD_TOKEN }}'" > config.py
-          echo "STEAM_KEY = '${{ secrets.STEAM_API_KEY }}'" >> config.py
-          echo "WEATHER_API_KEY = '${{ secrets.WEATHER_API_KEY }}'" >> config.py
           git pull origin main
+          
+          # Use environment variables in docker-compose
+          echo "DISCORD_BOT_TOKEN='${{ secrets.DISCORD_TOKEN }}'" > .env
+          echo "STEAM_API_KEY='${{ secrets.STEAM_API_KEY }}'" >> .env
+          echo "OPENWEATHER_API_KEY='${{ secrets.WEATHER_API_KEY }}'" >> .env
+          
           docker-compose down
           docker-compose build
           docker-compose up -d 

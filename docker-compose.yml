@@ -1,8 +1,22 @@
 version: '3.8'
+
 services:
-  discord-bot:
+  bot:
     build: .
-    restart: always
+    container_name: discord_bot
+    environment:
+      - DISCORD_BOT_TOKEN=${DISCORD_TOKEN}
+      - OPENWEATHER_API_KEY=${WEATHER_API_KEY}
+      - STEAM_API_KEY=${STEAM_API_KEY}
     volumes:
       - ./data:/app/data
-      - ./config.py:/app/config.py  # Mount config.py as a volume 
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  default:
+    name: discord_bot_network 
