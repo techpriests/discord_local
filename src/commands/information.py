@@ -1,82 +1,36 @@
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Union
+from typing import List, Optional, Dict, Any, Union, cast
 
 import discord
 import pytz
 from discord.ext import commands
 from discord.ext.commands import Context
 
-from ..services.api import APIService
-from ..utils.decorators import command_handler
-from ..utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
-from .base_commands import BaseCommands
+from src.services.api import APIService
+from src.utils.decorators import command_handler
+from src.utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
+from src.commands.base_commands import BaseCommands
+from src.utils.types import CommandContext
+from src.utils.api_types import GameInfo, CountryInfo, WeatherInfo
+from src.utils.command_types import APIServiceProtocol
 
 logger = logging.getLogger(__name__)
 
 class InformationCommands(BaseCommands):
     """Commands for retrieving various information"""
 
-    def __init__(self, api_service: APIService):
+    def __init__(self, api_service: APIServiceProtocol) -> None:
         """Initialize information commands
 
         Args:
             api_service: API service instance for external data
         """
+        super().__init__()
         self.api = api_service
 
-    # Weather command and related functions temporarily disabled
-    # @discord.app_commands.command(name="weather", description="서울의 현재 날씨를 알려드립니다")
-    # async def weather_slash(self, interaction: discord.Interaction):
-    #     '''Slash command version'''
-    #     await self._handle_weather(interaction)
-    #
-    # @commands.command(
-    #     name="날씨",
-    #     help="서울의 현재 날씨를 알려줍니다 (개발중)",
-    #     brief="날씨 확인",
-    #     aliases=["weather"],
-    #     description="서울의 현재 날씨 정보를 보여줍니다.\n"
-    #     "※ 현재 개발 진행중인 기능입니다.\n"
-    #     "사용법: !!날씨",
-    # )
-    # async def weather_prefix(self, ctx: commands.Context):
-    #     '''Prefix command version'''
-    #     await ctx.send("🚧 날씨 기능은 현재 개발 진행중입니다. 조금만 기다려주세요!")
-    #
-    # @command_handler()
-    # async def _handle_weather(self, ctx_or_interaction) -> None:
-    #     '''Handle weather information request'''
-    #     try:
-    #         weather_data = await self._get_weather_data()
-    #         embed = await self._create_weather_embed(weather_data)
-    #         await self.send_response(ctx_or_interaction, embed=embed)
-    #     except Exception:
-    #         await self._send_weather_error_embed(ctx_or_interaction)
-    #
-    # async def _get_weather_data(self) -> dict:
-    #     '''Get weather data from API'''
-    #     return await self.api.weather.get_weather("Seoul")
-    #
-    # async def _create_weather_embed(self, weather_data: dict) -> discord.Embed:
-    #     '''Create embed for weather information'''
-    #     embed = discord.Embed(title="🌤️ 서울 날씨", color=INFO_COLOR)
-    #     embed.add_field(name="온도", value=f"{weather_data['main']['temp']}°C")
-    #     embed.add_field(name="체감", value=f"{weather_data['main']['feels_like']}°C")
-    #     embed.add_field(name="습도", value=f"{weather_data['main']['humidity']}%")
-    #     return embed
-    #
-    # async def _send_weather_error_embed(self, ctx_or_interaction):
-    #     '''Send error embed for weather command'''
-    #     embed = discord.Embed(
-    #         title="❌ 오류", 
-    #         description="날씨 정보를 가져오는데 실패했습니다.", 
-    #         color=ERROR_COLOR
-    #     )
-    #     await self.send_response(ctx_or_interaction, embed=embed)
-
     @discord.app_commands.command(name="population", description="국가의 인구수를 알려드립니다")
-    async def population_slash(self, interaction: discord.Interaction, country_name: str):
+    async def population_slash(self, interaction: discord.Interaction, country_name: str) -> None:
         """Slash command version"""
         await self._handle_population(interaction, country_name)
 
@@ -96,7 +50,11 @@ class InformationCommands(BaseCommands):
         await self._handle_population(ctx, country_name)
 
     @command_handler()
-    async def _handle_population(self, ctx_or_interaction, country_name: str = None):
+    async def _handle_population(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        country_name: Optional[str] = None
+    ) -> None:
         """Handle population information request"""
         if not self._validate_country_name(country_name):
             return await self.send_response(
@@ -109,45 +67,27 @@ class InformationCommands(BaseCommands):
                 ctx_or_interaction, "국가 정보를 검색중입니다..."
             )
             country = await self._get_country_info(country_name)
-            await self._send_country_embed(ctx_or_interaction, country)
+            await self._send_country_embed(ctx_or_interaction, country, processing_msg)
         except Exception as e:
-            await self._handle_population_error(ctx_or_interaction, country_name, e)
+            await self._handle_population_error(ctx_or_interaction, country_name, str(e))
         finally:
             if processing_msg:
                 await processing_msg.delete()
 
-    def _validate_country_name(self, country_name: str) -> bool:
-        """Validate country name input
+    def _validate_country_name(self, country_name: Optional[str]) -> bool:
+        """Validate country name input"""
+        return bool(country_name and len(country_name.strip()) >= 2)
 
-        Args:
-            country_name: Name to validate
-
-        Returns:
-            bool: True if name is valid
-        """
-        return country_name and len(country_name.strip()) >= 2
-
-    async def _get_country_info(self, country_name: str) -> Dict[str, Any]:
-        """Get country information from API
-
-        Args:
-            country_name: Name of country to look up
-
-        Returns:
-            Dict[str, Any]: Country information dictionary
-
-        Raises:
-            ValueError: If country not found or API error
-        """
-        # Sanitize input
+    async def _get_country_info(self, country_name: str) -> CountryInfo:
+        """Get country information from API"""
         country_name = country_name.strip()[:50]
         country_name = "".join(c for c in country_name if c.isalnum() or c.isspace())
         return await self.api.population.get_country_info(country_name)
 
     async def _send_country_embed(
         self, 
-        ctx_or_interaction: Union[Context, discord.Interaction], 
-        country: Dict[str, Any], 
+        ctx_or_interaction: CommandContext, 
+        country: CountryInfo, 
         processing_msg: Optional[discord.Message] = None
     ) -> None:
         """Send embed with country information
@@ -180,56 +120,22 @@ class InformationCommands(BaseCommands):
             await processing_msg.delete()
 
     async def _handle_population_error(
-        self, ctx_or_interaction, country_name, error, processing_msg=None
-    ):
-        """Handle errors in population command
+        self, 
+        ctx_or_interaction: CommandContext, 
+        country_name: str, 
+        error_msg: str
+    ) -> None:
+        """Handle errors in population command"""
+        logger.error(f"Error getting population for {country_name}: {error_msg}")
+        await self.send_response(
+            ctx_or_interaction,
+            f"국가 정보를 가져오는데 실패했습니다: {country_name}"
+        )
 
-        Args:
-            ctx_or_interaction: Command context or interaction
-            country_name: Name of country that caused error
-            error: The error that occurred
-            processing_msg: Optional processing message to delete
-        """
-        logger.error(f"Population API error for '{country_name}': {error}")
-
-        if "Rate limit exceeded" in str(error):
-            message = "API 호출 제한에 도달했습니다. 잠시 후 다시 시도해주세요. (약 1분 후)"
-        else:
-            message = self._get_country_error_message(country_name)
-
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            await ctx_or_interaction.followup.send(message, ephemeral=True)
-        else:
-            await ctx_or_interaction.send(message)
-            if processing_msg:
-                await processing_msg.delete()
-
-    def _get_country_error_message(self, country_name: str) -> str:
-        """Get error message for country lookup failure
-
-        Args:
-            country_name: Name of country that failed
-
-        Returns:
-            str: Formatted error message
-        """
-        error_messages = [
-            f"'{country_name}' 국가를 찾을 수 없습니다.",
-            "다음 사항을 확인해주세요:",
-            "• 영어로 국가명을 입력했는지 확인 (예: 'Korea' ✅, '한국' ❌)",
-            "• 정확한 국가명을 사용했는지 확인 (예: 'South Korea' ✅, 'Korea' ❌)",
-            "• 오타가 없는지 확인",
-            "\n예시: South Korea, United States, Japan, China 등",
-        ]
-        return "\n".join(error_messages)
-
-    @discord.app_commands.command(
-        name="steam", description="스팀 게임의 현재 플레이어 수를 알려드립니다"
-    )
-    @commands.cooldown(1, 3, commands.BucketType.user)
-    async def steam_slash(self, interaction: discord.Interaction, game_name: str):
-        """Slash command version"""
-        await self._handle_steam(interaction, game_name)
+    @discord.app_commands.command(name="game", description="Steam 게임의 동시접속자 수를 알려드립니다")
+    async def game_slash(self, interaction: discord.Interaction, game_name: str) -> None:
+        """Slash command for game search"""
+        await self._handle_game_search(interaction, game_name)
 
     @commands.command(
         name="스팀",
@@ -248,6 +154,35 @@ class InformationCommands(BaseCommands):
     async def steam_prefix(self, ctx: commands.Context, *, game_name: str = None):
         """Prefix command version"""
         await self._handle_steam(ctx, game_name)
+
+    @command_handler()
+    async def _handle_game_search(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        game_name: Optional[str] = None
+    ) -> None:
+        """Handle game search request"""
+        if not self._validate_game_name(game_name):
+            return await self.send_response(
+                ctx_or_interaction,
+                "게임 이름을 2글자 이상 입력해주세요..."
+            )
+
+        try:
+            game, similarity, similar_games = await self.api.steam.find_game(game_name)
+            if game:
+                await self._send_game_embed(ctx_or_interaction, game, similar_games)
+            else:
+                await self.send_response(
+                    ctx_or_interaction,
+                    f"게임을 찾을 수 없습니다: {game_name}"
+                )
+        except Exception as e:
+            await self._handle_game_error(ctx_or_interaction, game_name, str(e))
+
+    def _validate_game_name(self, game_name: Optional[str]) -> bool:
+        """Validate game name input"""
+        return bool(game_name and len(game_name.strip()) >= 2)
 
     @command_handler()
     async def _handle_steam(self, ctx_or_interaction, game_name: str) -> None:
@@ -394,283 +329,232 @@ class InformationCommands(BaseCommands):
 
     @discord.app_commands.command(name="time", description="세계 시간을 보여줍니다")
     async def time_slash(
-        self, interaction: discord.Interaction, timezone: str = None, time: str = None
-    ):
-        """Slash command version of time conversion"""
-        await self._handle_time(interaction, timezone, time)
+        self, 
+        interaction: discord.Interaction, 
+        timezone: Optional[str] = None,
+        time_str: Optional[str] = None
+    ) -> None:
+        """Slash command for world time"""
+        await self._handle_time(interaction, timezone, time_str)
 
-    async def _handle_time(self, ctx_or_interaction, timezone: str = None, time_str: str = None):
-        """Handle time conversion request
-
-        Args:
-            ctx_or_interaction: Command context or interaction
-            timezone: Optional timezone to convert to/from
-            time_str: Optional time string to convert
-
-        Raises:
-            ValueError: If timezone is invalid or time format is incorrect
-        """
+    async def _handle_time(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        timezone: Optional[str] = None,
+        time_str: Optional[str] = None
+    ) -> None:
+        """Handle time conversion request"""
         try:
-            kr_tz = pytz.timezone("Asia/Seoul")
-            kr_time = datetime.now(kr_tz)
+            if timezone:
+                timezone = self._validate_timezone(timezone)
+                if not timezone:
+                    return await self.send_response(
+                        ctx_or_interaction,
+                        "올바른 시간대를 입력해주세요"
+                    )
 
-            embed = discord.Embed(
-                title="�� 세계 시간", color=discord.Color.blue(), timestamp=kr_time
-            )
-
-            if timezone and time_str:
-                await self._handle_specific_time_conversion(embed, timezone, time_str, kr_tz)
-            elif timezone:
-                await self._handle_timezone_conversion(embed, timezone, kr_time)
-            else:
-                await self._show_common_timezones(embed, kr_time)
-
-            await self._send_response(ctx_or_interaction, embed=embed)
-
-        except ValueError as e:
-            raise e  # Re-raise user input errors
+            current_time = self._get_current_time(timezone)
+            await self._send_time_embed(ctx_or_interaction, current_time, timezone or 'Asia/Seoul')
         except Exception as e:
-            logger.error(f"Unexpected error in time command: {e}")
-            raise ValueError("예상치 못한 오류가 발생했습니다") from e
+            await self._handle_time_error(ctx_or_interaction, timezone, str(e))
 
-    async def _handle_specific_time_conversion(self, embed, timezone: str, time_str: str, kr_tz):
-        """Handle conversion of specific time in a timezone
-
-        Args:
-            embed: Discord embed to add fields to
-            timezone: Timezone to convert from
-            time_str: Time string to convert
-            kr_tz: Korean timezone object
-        """
+    def _validate_timezone(self, timezone: str) -> Optional[str]:
+        """Validate timezone string"""
         try:
-            input_time = self._parse_time_string(time_str)
-            target_tz = pytz.timezone(timezone)
-            current = datetime.now(target_tz)
-            input_time = current.replace(hour=input_time[0], minute=input_time[1])
-            kr_time = input_time.astimezone(kr_tz)
-
-            embed.add_field(
-                name=f"{timezone} 시간", value=input_time.strftime("%Y-%m-%d %H:%M"), inline=True
-            )
-            embed.add_field(name="한국 시간", value=kr_time.strftime("%Y-%m-%d %H:%M"), inline=True)
-
-        except pytz.exceptions.UnknownTimeZoneError as e:
-            raise ValueError(f"지원하지 않는 시간대입니다: {timezone}") from e
-
-    def _parse_time_string(self, time_str: str) -> tuple[int, int]:
-        """Parse time string into hour and minute
-
-        Args:
-            time_str: Time string in HH:MM format
-
-        Returns:
-            tuple[int, int]: Hour and minute
-
-        Raises:
-            ValueError: If time format is invalid
-        """
-        try:
-            time_parts = time_str.split(":")
-            if len(time_parts) != 2:
-                raise ValueError("시간은 HH:MM 형식이어야 합니다")
-
-            hour = int(time_parts[0])
-            minute = int(time_parts[1])
-
-            if not (0 <= hour <= 23 and 0 <= minute <= 59):
-                raise ValueError("올바른 시간 범위가 아닙니다")
-
-            return hour, minute
-
-        except (ValueError, IndexError) as e:
-            raise ValueError(
-                "시간 형식이 잘못되었습니다. " "HH:MM 형식으로 입력해주세요 (예: 09:00)"
-            ) from e
-
-    async def _handle_timezone_conversion(self, embed, timezone: str, kr_time):
-        """Handle conversion between KR and target timezone
-
-        Args:
-            embed: Discord embed to add fields to
-            timezone: Target timezone
-            kr_time: Korean current time
-        """
-        try:
-            target_tz = pytz.timezone(timezone)
-            target_time = kr_time.astimezone(target_tz)
-            embed.add_field(name="한국 시간", value=kr_time.strftime("%Y-%m-%d %H:%M"), inline=True)
-            embed.add_field(
-                name=f"{timezone} 시간", value=target_time.strftime("%Y-%m-%d %H:%M"), inline=True
-            )
+            pytz.timezone(timezone)
+            return timezone
         except pytz.exceptions.UnknownTimeZoneError:
-            raise ValueError(f"지원하지 않는 시간대입니다: {timezone}")
+            return None
 
-    async def _show_common_timezones(self, embed, kr_time):
-        """Show common timezone conversions
+    def _get_current_time(self, timezone: Optional[str] = None) -> datetime:
+        """Get current time in specified timezone"""
+        tz = pytz.timezone(timezone or 'Asia/Seoul')
+        return datetime.now(tz)
 
-        Args:
-            embed: Discord embed to add fields to
-            kr_time: Korean current time
-        """
-        common_timezones = {
-            "US/Pacific": "PST",
-            "US/Eastern": "EST",
-            "Europe/London": "UK",
-            "Europe/Paris": "EU",
-            "Australia/Sydney": "SYD",
-        }
+    async def _send_time_embed(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        current_time: datetime, 
+        timezone: str
+    ) -> None:
+        """Send time information embed"""
+        embed = discord.Embed(
+            title=f"🕒 {timezone} 현재 시각",
+            description=current_time.strftime("%Y-%m-%d %H:%M:%S"),
+            color=INFO_COLOR
+        )
+        await self.send_response(ctx_or_interaction, embed=embed)
 
-        embed.add_field(name="한국 시간", value=kr_time.strftime("%Y-%m-%d %H:%M"), inline=False)
+    async def _handle_time_error(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        timezone: Optional[str], 
+        error_msg: str
+    ) -> None:
+        """Handle errors in time command"""
+        logger.error(f"Error handling time for timezone {timezone}: {error_msg}")
+        await self.send_response(
+            ctx_or_interaction,
+            "시간 정보를 처리하는데 실패했습니다"
+        )
 
-        for tz_name, display_name in common_timezones.items():
-            target_tz = pytz.timezone(tz_name)
-            target_time = kr_time.astimezone(target_tz)
-            embed.add_field(
-                name=display_name, value=target_time.strftime("%Y-%m-%d %H:%M"), inline=True
+    @discord.app_commands.command(name="weather", description="도시의 날씨를 알려드립니다")
+    async def weather_slash(self, interaction: discord.Interaction, city_name: str) -> None:
+        """Slash command for weather"""
+        await self._handle_weather(interaction, city_name)
+
+    @command_handler()
+    async def _handle_weather(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        city_name: Optional[str] = None
+    ) -> None:
+        """Handle weather information request"""
+        if not self._validate_city_name(city_name):
+            return await self.send_response(
+                ctx_or_interaction, 
+                "도시 이름을 2글자 이상 입력해주세요..."
             )
 
-        # Add usage examples
-        embed.add_field(
-            name="사용법",
-            value="• `!!시간` - 모든 시간대 표시\n"
-            "• `!!시간 US/Pacific` - 한국→PST 변환\n"
-            "• `!!시간 US/Pacific 09:00` - PST→한국 변환",
-            inline=False,
+        try:
+            weather_info = await self.api.weather.get_weather(city_name)
+            await self._send_weather_embed(ctx_or_interaction, weather_info)
+        except Exception as e:
+            await self._handle_weather_error(ctx_or_interaction, city_name, str(e))
+
+    def _validate_city_name(self, city_name: Optional[str]) -> bool:
+        """Validate city name input"""
+        return bool(city_name and len(city_name.strip()) >= 2)
+
+    async def _send_weather_embed(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        weather: WeatherInfo
+    ) -> None:
+        """Create and send weather information embed"""
+        temp = weather['main'].get('temp', 0)
+        feels_like = weather['main'].get('feels_like', 0)
+        humidity = weather['main'].get('humidity', 0)
+        description = weather['weather'][0].get('description', '') if weather['weather'] else ''
+
+        embed = discord.Embed(
+            title=f"🌤️ {weather['name']}의 날씨",
+            color=INFO_COLOR
+        )
+        embed.add_field(name="온도", value=f"{temp}°C", inline=True)
+        embed.add_field(name="체감 온도", value=f"{feels_like}°C", inline=True)
+        embed.add_field(name="습도", value=f"{humidity}%", inline=True)
+        embed.add_field(name="날씨", value=description, inline=False)
+
+        await self.send_response(ctx_or_interaction, embed=embed)
+
+    async def _handle_weather_error(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        city_name: str, 
+        error_msg: str
+    ) -> None:
+        """Handle errors in weather command"""
+        logger.error(f"Error getting weather for {city_name}: {error_msg}")
+        await self.send_response(
+            ctx_or_interaction,
+            f"날씨 정보를 가져오는데 실패했습니다: {city_name}"
         )
 
     @discord.app_commands.command(name="exchange", description="환율 정보를 보여줍니다")
     async def exchange_slash(
-        self, interaction: discord.Interaction, currency: str = None, amount: float = 1.0
-    ):
-        """Slash command version of exchange rate conversion"""
-        await self._handle_exchange(interaction, currency, amount)
+        self, 
+        interaction: discord.Interaction, 
+        currency: Optional[str] = None
+    ) -> None:
+        """Slash command for exchange rates"""
+        await self._handle_exchange(interaction, currency)
 
     @commands.command(
         name="환율",
-        help="환율 정보를 보여줍니다",
+        help="현재 환율 정보를 보여줍니다",
         brief="환율 확인",
         aliases=["exchange"],
-        description="KRW와 다른 통화 간의 환율을 보여줍니다.\n"
-        "사용법:\n"
-        "!!환율  -> 모든 통화 환율 표시\n"
-        "!!환율 USD  -> USD 환율 표시\n"
-        "!!환율 USD 100  -> 100 USD의 KRW 환산",
+        description="주요 통화의 현재 환율 정보를 보여줍니다.\n"
+        "특정 통화를 지정하면 해당 통화의 환율만 보여줍니다.\n"
+        "사용법: !!환율 [통화코드]",
     )
     async def exchange_prefix(
-        self, ctx: commands.Context, currency: str = None, amount: float = 1.0
-    ):
-        """Prefix command version of exchange rate conversion"""
-        await self._handle_exchange(ctx, currency, amount)
+        self, 
+        ctx: commands.Context, 
+        currency: Optional[str] = None
+    ) -> None:
+        """Prefix command for exchange rates"""
+        await self._handle_exchange(ctx, currency)
 
     @command_handler()
-    async def _handle_exchange(self, ctx_or_interaction, currency: str = None, amount: float = 1.0):
-        """Handle exchange rate conversion command
-
-        Args:
-            ctx_or_interaction: Command context or interaction
-            currency: Optional currency code to convert
-            amount: Amount to convert (default: 1.0)
-
-        Raises:
-            ValueError: If amount is invalid or currency not supported
-        """
+    async def _handle_exchange(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        currency: Optional[str] = None
+    ) -> None:
+        """Handle exchange rate request"""
         try:
-            self._validate_amount(amount)
-            rates = await self._get_exchange_rates()
-            embed = await self._create_exchange_embed(rates, currency, amount)
-            return await self.send_response(ctx_or_interaction, embed=embed)
-
-        except ValueError as e:
-            raise e
+            rates = await self.api.exchange.get_exchange_rates()
+            if currency:
+                await self._send_single_rate(ctx_or_interaction, currency.upper(), rates)
+            else:
+                await self._send_all_rates(ctx_or_interaction, rates)
         except Exception as e:
-            logger.error(f"Exchange rate error: {e}")
-            raise ValueError(f"환율 정보를 가져오는데 실패했습니다: {str(e)}")
+            await self._handle_exchange_error(ctx_or_interaction, currency, str(e))
 
-    def _validate_amount(self, amount: float) -> None:
-        """Validate exchange amount
+    async def _send_single_rate(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        currency: str, 
+        rates: Dict[str, float]
+    ) -> None:
+        """Send exchange rate for single currency"""
+        if currency not in rates:
+            return await self.send_response(
+                ctx_or_interaction,
+                f"지원하지 않는 통화입니다: {currency}"
+            )
 
-        Args:
-            amount: Amount to validate
-
-        Raises:
-            ValueError: If amount is invalid
-        """
-        if amount <= 0:
-            raise ValueError("금액은 0보다 커야 합니다")
-        if amount > 1000000000:
-            raise ValueError("금액이 너무 큽니다 (최대: 1,000,000,000)")
-
-    async def _get_exchange_rates(self):
-        """Get current exchange rates
-
-        Returns:
-            dict: Exchange rates
-
-        Raises:
-            ValueError: If failed to get rates
-        """
-        return await self.api.exchange.get_exchange_rates()
-
-    async def _create_exchange_embed(self, rates: dict, currency: str = None, amount: float = 1.0):
-        """Create embed for exchange rate display
-
-        Args:
-            rates: Exchange rates
-            currency: Optional specific currency to show
-            amount: Amount to convert
-
-        Returns:
-            discord.Embed: Formatted embed with exchange rates
-
-        Raises:
-            ValueError: If currency is not supported
-        """
+        rate = rates[currency]
         embed = discord.Embed(
-            title="💱 환율 정보", color=discord.Color.blue(), timestamp=datetime.now()
+            title=f"💱 {currency} 환율",
+            description=f"1 {currency} = {rate:,.2f} KRW",
+            color=INFO_COLOR
         )
+        await self.send_response(ctx_or_interaction, embed=embed)
 
-        if currency:
-            await self._add_single_currency_field(embed, rates, currency, amount)
-        else:
-            await self._add_all_currencies_fields(embed, rates)
+    async def _send_all_rates(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        rates: Dict[str, float]
+    ) -> None:
+        """Send exchange rates for all supported currencies"""
+        embed = discord.Embed(
+            title="💱 주요 통화 환율",
+            color=INFO_COLOR
+        )
+        
+        for currency in ['USD', 'EUR', 'JPY', 'CNY', 'GBP']:
+            if currency in rates:
+                rate = rates[currency]
+                embed.add_field(
+                    name=currency,
+                    value=f"{rate:,.2f} KRW",
+                    inline=True
+                )
 
-        embed.set_footer(text="Data from ExchangeRate-API")
-        return embed
+        await self.send_response(ctx_or_interaction, embed=embed)
 
-    async def _add_single_currency_field(self, embed, rates: dict, currency: str, amount: float):
-        """Add field for single currency conversion
-
-        Args:
-            embed: Discord embed to add field to
-            rates: Exchange rates
-            currency: Currency to convert
-            amount: Amount to convert
-
-        Raises:
-            ValueError: If currency is not supported
-        """
-        currency_code = currency.upper()
-        if currency_code not in rates:
-            supported_currencies = ", ".join(rates.keys())
-            raise ValueError(
-                f"지원하지 않는 통화입니다: {currency}\n" f"지원되는 통화: {supported_currencies}"
-            )
-
-        krw_amount = amount * rates[currency_code]
-        embed.description = f"{amount:,.2f} {currency_code} = {krw_amount:,.2f} KRW"
-
-    async def _add_all_currencies_fields(self, embed, rates: dict):
-        """Add fields for all currencies
-
-        Args:
-            embed: Discord embed to add fields to
-            rates: Exchange rates
-        """
-        base_amount = 1000
-        for curr, rate in rates.items():
-            foreign_amount = base_amount / rate
-            embed.add_field(
-                name=curr,
-                value=f"{base_amount:,.0f} KRW = {foreign_amount:,.2f} {curr}",
-                inline=True,
-            )
+    async def _handle_exchange_error(
+        self, 
+        ctx_or_interaction: CommandContext, 
+        currency: Optional[str], 
+        error_msg: str
+    ) -> None:
+        """Handle errors in exchange rate command"""
+        logger.error(f"Error getting exchange rates: {error_msg}")
+        await self.send_response(
+            ctx_or_interaction,
+            "환율 정보를 가져오는데 실패했습니다"
+        )

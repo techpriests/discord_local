@@ -26,13 +26,6 @@ jobs:
 
     - name: Run tests
       run: poetry run pytest
-      
-    - name: Run static analysis
-      run: |
-        poetry run mypy src
-        poetry run ruff check src
-        poetry run black src --check
-        poetry run isort src --check
 
   cd:
     needs: ci

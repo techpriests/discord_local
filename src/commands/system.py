@@ -1,10 +1,10 @@
 import logging
-from typing import Union
+from typing import Union, Optional
 
 import discord
 from discord.ext import commands
 
-from ..utils.decorators import command_handler
+from src.utils.decorators import command_handler
 from .base_commands import BaseCommands
 
 # Constants for embed colors
@@ -18,35 +18,43 @@ logger = logging.getLogger(__name__)
 class SystemCommands(BaseCommands):
     """System-related commands for bot management"""
 
-    def __init__(self, bot: commands.Bot):
+    def __init__(self, bot: commands.Bot) -> None:
         """Initialize system commands
 
         Args:
             bot: Discord bot instance
         """
-        self._bot = bot
+        super().__init__()
+        self.bot = bot
 
-    @property
-    def bot(self) -> commands.Bot:
-        return self._bot
-
-    @command_handler()
-    async def _handle_ping(
-        self, ctx_or_interaction: Union[commands.Context, discord.Interaction]
-    ) -> None:
-        """Handle ping command to check bot latency"""
+    @commands.command(name="핑")
+    async def ping(self, ctx: commands.Context) -> None:
+        """Show bot latency"""
         try:
-            embed = discord.Embed(title="🏓 퐁!", color=INFO_COLOR)
-            embed.add_field(name="지연시간", value=f"{round(self.bot.latency * 1000)}ms")
-            await self.send_response(ctx_or_interaction, embed=embed)
+            latency = round(self.bot.latency * 1000)
+            await ctx.send(f"🏓 퐁! ({latency}ms)")
+        except discord.Forbidden:
+            raise commands.BotMissingPermissions(["send_messages"])
         except Exception as e:
             logger.error(f"Error in ping command: {e}")
-            embed = discord.Embed(
-                title="❌ 오류",
-                description="지연시간을 측정하는데 실패했습니다.",
-                color=ERROR_COLOR,
-            )
-            await self.send_response(ctx_or_interaction, embed=embed)
+            raise ValueError("지연시간을 측정할 수 없습니다")
+
+    @commands.command(name="복사")
+    async def echo(self, ctx: commands.Context, *, message: str) -> None:
+        """Echo back a message
+        
+        Args:
+            ctx: Command context
+            message: Message to echo
+        """
+        try:
+            await ctx.message.delete()
+            await ctx.send(message)
+        except discord.Forbidden:
+            raise commands.BotMissingPermissions(["manage_messages"])
+        except Exception as e:
+            logger.error(f"Error in echo command: {e}")
+            raise ValueError("메시지를 복사할 수 없습니다")
 
     @commands.command(
         name="따라해",
@@ -92,22 +100,13 @@ class SystemCommands(BaseCommands):
 
     @commands.command(name="동기화", help="슬래시 명령어를 동기화합니다")
     @commands.has_permissions(administrator=True)
-    async def sync(self, ctx):
-        """Synchronize slash commands (admin only)
-
-        Args:
-            ctx: Command context
-
-        Raises:
-            commands.MissingPermissions: If user is not an administrator
-            discord.Forbidden: If bot lacks required permissions
-        """
+    async def sync(self, ctx: commands.Context) -> None:
+        """Synchronize slash commands (admin only)"""
         try:
             await self.bot.tree.sync()
             await ctx.send("슬래시 명령어 동기화 완료!")
-        except discord.Forbidden as e:
-            logger.error(f"Permission error in sync command: {e}")
-            raise discord.Forbidden("동기화 권한이 없습니다") from e
+        except discord.Forbidden:
+            raise commands.BotMissingPermissions(["manage_guild"])
         except Exception as e:
-            logger.error(f"Error syncing commands: {e}")
+            logger.error(f"Failed to sync commands: {e}")
             raise ValueError("명령어 동기화에 실패했습니다") from e

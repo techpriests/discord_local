@@ -1,101 +1,77 @@
 import logging
-from typing import List, Optional, Tuple, TypedDict
+from typing import Optional, Tuple, List, Dict, Any, cast
 
-from .base import BaseAPI, RateLimitConfig
+import aiohttp
+from src.services.api.base import BaseAPI, RateLimitConfig
+from src.utils.api_types import GameInfo
 
 logger = logging.getLogger(__name__)
 
-# API URLs
-STEAM_SEARCH_URL = "https://store.steampowered.com/api/storesearch"
-STEAM_PLAYER_COUNT_URL = (
-    "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
-)
+class SteamAPI(BaseAPI[GameInfo]):
+    """Steam API client implementation"""
 
+    SEARCH_URL = "https://store.steampowered.com/api/storesearch"
+    PLAYER_COUNT_URL = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
 
-class GameInfo(TypedDict):
-    """Type definition for game information"""
-
-    appid: int
-    name: str
-    type: str
-    player_count: Optional[int]
-
-
-class SteamAPI(BaseAPI):
-    """Steam API client implementation."""
-
-    def __init__(self, api_key: str):
-        """Initialize Steam API client.
+    def __init__(self, api_key: str) -> None:
+        """Initialize Steam API client
         
         Args:
             api_key: Steam Web API key
         """
-        super().__init__()
-        self._api_key = api_key
+        super().__init__(api_key)
         self._rate_limits = {
             "search": RateLimitConfig(30, 60),  # 30 requests per minute
             "player_count": RateLimitConfig(60, 60),  # 60 requests per minute
             "details": RateLimitConfig(150, 300),  # 150 requests per 5 minutes
         }
 
-    @property
-    def api_key(self) -> str:
-        """Get Steam API key."""
-        return self._api_key
-
-    async def initialize(self) -> None:
-        """Initialize Steam API resources"""
-        pass
-
     async def validate_credentials(self) -> bool:
-        """Validate Steam API key"""
+        """Validate Steam API key
+        
+        Returns:
+            bool: True if credentials are valid
+        """
         try:
-            await self.get_player_count(730)  # Test with CS:GO app id
+            # Test with CS:GO app id
+            await self.get_player_count(730)
             return True
         except Exception as e:
             logger.error(f"Steam API key validation failed: {e}")
             return False
 
-    async def get_player_count(self, app_id: int) -> int:
-        """Get current player count for a game
-
+    async def find_game(
+        self, 
+        name: str
+    ) -> Tuple[Optional[GameInfo], float, Optional[List[GameInfo]]]:
+        """Find game by name
+        
         Args:
-            app_id: Steam application ID
+            name: Game name to search
 
         Returns:
-            int: Current number of players
+            Tuple containing:
+            - GameInfo or None: Best match game info
+            - float: Match similarity score (0-100)
+            - List[GameInfo] or None: Similar games list
 
         Raises:
-            ValueError: If app_id is invalid
-            Exception: If API request fails
+            ValueError: If search fails
         """
-        try:
-            params = {"appid": app_id, "key": self.api_key}
-            data = await self._get_with_retry(STEAM_PLAYER_COUNT_URL, params, "player_count")
-
-            if not data or "response" not in data or "player_count" not in data["response"]:
-                raise ValueError(f"Invalid response for app_id: {app_id}")
-
-            return data["response"]["player_count"]
-        except Exception as e:
-            raise ValueError(f"Failed to get player count: {e}") from e
-
-    async def find_game(
-        self, name: str
-    ) -> Tuple[Optional[GameInfo], float, Optional[List[GameInfo]]]:
-        """Search for a game by name"""
         try:
             params = {
                 "term": name,
-                "l": "english",
-                "category1": 998,  # Games only
-                "cc": "US",
-                "supportedlang": "english",
+                "l": "korean",
+                "cc": "KR",
                 "infinite": 1,
                 "json": 1,
             }
 
-            data = await self._get_with_retry(STEAM_SEARCH_URL, params=params, endpoint="search")
+            data = await self._make_request(
+                self.SEARCH_URL, 
+                params=params,
+                endpoint="search"
+            )
 
             if not data or "items" not in data:
                 return None, 0, None
@@ -103,36 +79,68 @@ class SteamAPI(BaseAPI):
             games: List[GameInfo] = []
             for item in data["items"]:
                 try:
-                    game_info: GameInfo = {
-                        "appid": item["id"],
-                        "name": item["name"],
-                        "type": item.get("type", ""),
-                        "player_count": None,
-                    }
-
-                    # Get player count for top results
-                    if len(games) < 5:
-                        try:
-                            player_count = await self.get_player_count(item["id"])
-                            game_info["player_count"] = player_count
-                        except Exception as e:
-                            logger.error(f"Could not get player count for {item['name']}: {e}")
-
+                    game_info = GameInfo(
+                        name=item["name"],
+                        player_count=await self.get_player_count(item["id"])
+                    )
                     games.append(game_info)
                 except Exception as e:
-                    logger.error(f"Error processing search result: {e}")
+                    logger.error(f"Error processing game {item.get('name', 'Unknown')}: {e}")
                     continue
+
+                # Only get player count for top 5 results
+                if len(games) >= 5:
+                    break
 
             if not games:
                 return None, 0, None
 
-            # Return best match and similar matches
-            return games[0], 100, games[1:5] if len(games) > 1 else None
+            # Calculate similarity score (simplified)
+            similarity = 100.0 if games[0]["name"].lower() == name.lower() else 50.0
+            
+            return games[0], similarity, games[1:] if len(games) > 1 else None
 
         except Exception as e:
-            logger.error(f"Steam API Error in find_game for query '{name}': {e}")
-            raise
+            logger.error(f"Error in find_game for query '{name}': {e}")
+            raise ValueError(f"게임 검색에 실패했습니다: {str(e)}") from e
 
-    async def close(self):
+    async def get_player_count(self, app_id: int) -> int:
+        """Get current player count for game
+        
+        Args:
+            app_id: Steam app ID
+
+        Returns:
+            int: Current player count
+
+        Raises:
+            ValueError: If request fails
+        """
+        try:
+            params = {
+                "appid": app_id,
+                "key": self.api_key
+            }
+
+            data = await self._make_request(
+                self.PLAYER_COUNT_URL,
+                params=params,
+                endpoint="player_count"
+            )
+
+            if not data or "response" not in data:
+                raise ValueError("Invalid response format")
+
+            player_count = data["response"].get("player_count")
+            if player_count is None:
+                raise ValueError("Player count not found in response")
+
+            return cast(int, player_count)
+
+        except Exception as e:
+            logger.error(f"Error getting player count for app {app_id}: {e}")
+            return 0  # Return 0 for failed requests
+
+    async def close(self) -> None:
         """Cleanup resources"""
         await super().close()

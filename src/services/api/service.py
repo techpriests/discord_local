@@ -1,83 +1,89 @@
 import logging
-from typing import Optional
+from typing import Dict, Optional, cast
 
-from .exchange import ExchangeAPI
-from .population import PopulationAPI
-from .steam import SteamAPI
-from .weather import WeatherAPI
+from src.config import Config
+from src.services.api.steam import SteamAPI
+from src.services.api.weather import WeatherAPI
+from src.services.api.exchange import ExchangeAPI
+from src.services.api.population import PopulationAPI
 
 logger = logging.getLogger(__name__)
 
-
 class APIService:
-    """Service class that manages all API clients."""
+    """Service managing all API clients"""
 
-    def __init__(self, steam_key: str, weather_key: str):
-        """Initialize API service with required API keys
-
+    def __init__(self, config: Config) -> None:
+        """Initialize API service
+        
         Args:
-            steam_key: Steam API key
-            weather_key: OpenWeather API key
+            config: Application configuration
         """
-        self._steam: Optional[SteamAPI] = None
-        self._weather: Optional[WeatherAPI] = None
-        self._population: Optional[PopulationAPI] = None
-        self._exchange: Optional[ExchangeAPI] = None
-
-        self._steam_key = steam_key
-        self._weather_key = weather_key
-
-    @property
-    def steam(self) -> Optional[SteamAPI]:
-        """Get Steam API client."""
-        return self._steam
-
-    @property
-    def weather(self) -> Optional[WeatherAPI]:
-        """Get Weather API client."""
-        return self._weather
-
-    @property
-    def population(self) -> Optional[PopulationAPI]:
-        """Get Population API client."""
-        return self._population
-
-    @property
-    def exchange(self) -> Optional[ExchangeAPI]:
-        """Get Exchange API client."""
-        return self._exchange
+        self._config = config
+        self._steam_api: Optional[SteamAPI] = None
+        self._weather_api: Optional[WeatherAPI] = None
+        self._exchange_api: Optional[ExchangeAPI] = None
+        self._population_api: Optional[PopulationAPI] = None
 
     async def initialize(self) -> None:
-        """Initialize all API clients
-
-        Raises:
-            Exception: If initialization of any API client fails
-        """
+        """Initialize all API clients"""
         try:
             # Initialize Steam API
-            self._steam = SteamAPI(self._steam_key)
-            await self._steam.initialize()
+            self._steam_api = SteamAPI(self._config.steam_api_key)
+            await self._steam_api.initialize()
 
             # Initialize Weather API
-            self._weather = WeatherAPI(self._weather_key)
-            await self._weather.initialize()
-
-            # Initialize Population API
-            self._population = PopulationAPI()
-            await self._population.initialize()
+            self._weather_api = WeatherAPI(self._config.weather_api_key)
+            await self._weather_api.initialize()
 
             # Initialize Exchange API
-            self._exchange = ExchangeAPI()
-            await self._exchange.initialize()
+            self._exchange_api = ExchangeAPI()
+            await self._exchange_api.initialize()
+
+            # Initialize Population API
+            self._population_api = PopulationAPI()
+            await self._population_api.initialize()
 
         except Exception as e:
-            logger.error(f"Failed to initialize API services: {e}")
-            await self.close()  # Cleanup on failure
-            raise
+            await self.close()
+            raise ValueError(f"Failed to initialize API services: {e}") from e
+
+    @property
+    def exchange(self) -> ExchangeAPI:
+        """Get Exchange API client"""
+        if not self._exchange_api:
+            raise ValueError("Exchange API not initialized")
+        return self._exchange_api
+
+    @property
+    def steam(self) -> SteamAPI:
+        """Get Steam API client"""
+        if not self._steam_api:
+            raise ValueError("Steam API not initialized")
+        return self._steam_api
+
+    @property
+    def weather(self) -> WeatherAPI:
+        """Get Weather API client"""
+        if not self._weather_api:
+            raise ValueError("Weather API not initialized")
+        return self._weather_api
+
+    @property
+    def population(self) -> PopulationAPI:
+        """Get Population API client"""
+        if not self._population_api:
+            raise ValueError("Population API not initialized")
+        return self._population_api
 
     async def close(self) -> None:
-        """Cleanup all API resources"""
-        apis = [self._steam, self._weather, self._population, self._exchange]
+        """Close all API clients"""
+        apis = [
+            self._steam_api,
+            self._weather_api,
+            self._exchange_api,
+            self._population_api
+        ]
+
         for api in apis:
             if api:
                 try:
@@ -85,11 +91,20 @@ class APIService:
                 except Exception as e:
                     logger.error(f"Error closing {api.__class__.__name__}: {e}")
 
-    async def __aenter__(self):
+        self._steam_api = None
+        self._weather_api = None
+        self._exchange_api = None
+        self._population_api = None
+
+    async def __aenter__(self) -> 'APIService':
         """Async context manager entry"""
         await self.initialize()
         return self
 
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         """Async context manager exit"""
         await self.close()
+
+    async def get_exchange_rates(self) -> Dict[str, float]:
+        """Get current exchange rates"""
+        return await self.exchange.get_exchange_rates()

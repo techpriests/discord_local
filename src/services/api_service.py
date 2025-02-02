@@ -2,10 +2,10 @@ import asyncio
 import logging
 from typing import Dict
 
-from .api.exchange import ExchangeAPI
-from .api.population import PopulationAPI
-from .api.steam import SteamAPI
-from .api.weather import WeatherAPI
+from src.services.api.exchange import ExchangeAPI
+from src.services.api.population import PopulationAPI
+from src.services.api.steam import SteamAPI
+from src.services.api.weather import WeatherAPI
 
 logger = logging.getLogger(__name__)
 
