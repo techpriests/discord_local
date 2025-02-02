@@ -4,6 +4,7 @@ from discord.ext import commands
 from discord import app_commands
 from typing import cast
 from unittest.mock import MagicMock, AsyncMock, PropertyMock
+from tests.mocks.config import Config
 
 @pytest.mark.asyncio
 class TestBotBasic:

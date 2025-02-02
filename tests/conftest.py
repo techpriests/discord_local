@@ -5,19 +5,21 @@ from contextlib import ExitStack
 
 import discord
 from discord.ext import commands
-from discord import app_commands  # Import app_commands directly
+from discord import app_commands
 
 from src.bot import DiscordBot
 from src.services.api_service import APIService
 from src.commands.base_commands import BaseCommands
+from tests.mocks.config import Config  # Add this import
 
 @pytest.fixture
 def mock_config() -> Dict[str, str]:
     """Create mock config dictionary with proper API keys"""
+    config = Config()
     return {
-        "DISCORD_TOKEN": "test_token",
-        "WEATHER_API_KEY": "test_weather_key",
-        "STEAM_API_KEY": "test_steam_key"
+        "DISCORD_TOKEN": config.discord_token,
+        "WEATHER_API_KEY": config.weather_api_key,
+        "STEAM_API_KEY": config.steam_api_key
     }
 
 @pytest.fixture
