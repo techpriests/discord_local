@@ -1,22 +1,18 @@
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Dict, Any, Union
 
 import discord
 import pytz
 from discord.ext import commands
+from discord.ext.commands import Context
 
 from ..services.api import APIService
 from ..utils.decorators import command_handler
+from ..utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
 from .base_commands import BaseCommands
 
 logger = logging.getLogger(__name__)
-
-# Constants for embed colors
-SUCCESS_COLOR = discord.Color.green()
-ERROR_COLOR = discord.Color.red()
-INFO_COLOR = discord.Color.blue()
-
 
 class InformationCommands(BaseCommands):
     """Commands for retrieving various information"""
@@ -29,81 +25,55 @@ class InformationCommands(BaseCommands):
         """
         self.api = api_service
 
-    @discord.app_commands.command(name="weather", description="서울의 현재 날씨를 알려드립니다")
-    async def weather_slash(self, interaction: discord.Interaction):
-        """Slash command version"""
-        await self._handle_weather(interaction)
-
-    @commands.command(
-        name="날씨",
-        help="서울의 현재 날씨를 알려줍니다 (개발중)",
-        brief="날씨 확인",
-        aliases=["weather"],
-        description="서울의 현재 날씨 정보를 보여줍니다.\n"
-        "※ 현재 개발 진행중인 기능입니다.\n"
-        "사용법: !!날씨",
-    )
-    async def weather_prefix(self, ctx: commands.Context):
-        """Prefix command version"""
-        await ctx.send("🚧 날씨 기능은 현재 개발 진행중입니다. 조금만 기다려주세요!")
-
-    @command_handler()
-    async def _handle_weather(self, ctx_or_interaction) -> None:
-        """Handle weather information request
-
-        Args:
-            ctx_or_interaction: Command context or interaction
-
-        Raises:
-            ValueError: If weather data cannot be retrieved
-        """
-        try:
-            weather_data = await self._get_weather_data()
-            embed = await self._create_weather_embed(weather_data)
-            await self.send_response(ctx_or_interaction, embed=embed)
-
-        except Exception:
-            await self._send_weather_error_embed(ctx_or_interaction)
-
-    async def _get_weather_data(self) -> dict:
-        """Get weather data from API
-
-        Returns:
-            dict: Weather data for Seoul
-
-        Raises:
-            ValueError: If API request fails
-        """
-        return await self.api.weather.get_weather("Seoul")
-
-    async def _create_weather_embed(self, weather_data: dict) -> discord.Embed:
-        """Create embed for weather information
-
-        Args:
-            weather_data: Weather data from API
-
-        Returns:
-            discord.Embed: Formatted embed with weather information
-        """
-        embed = discord.Embed(title="🌤️ 서울 날씨", color=INFO_COLOR)
-
-        # Add temperature fields
-        embed.add_field(name="온도", value=f"{weather_data['main']['temp']}°C")
-        embed.add_field(name="체감", value=f"{weather_data['main']['feels_like']}°C")
-        embed.add_field(name="습도", value=f"{weather_data['main']['humidity']}%")
-
-        return embed
-
-    async def _send_weather_error_embed(self, ctx_or_interaction):
-        """Send error embed for weather command
-
-        Args:
-            ctx_or_interaction: Command context or interaction
-        """
-        embed = discord.Embed(
-            title="❌ 오류", description="날씨 정보를 가져오는데 실패했습니다.", color=ERROR_COLOR
-        )
-        await self.send_response(ctx_or_interaction, embed=embed)
+    # Weather command and related functions temporarily disabled
+    # @discord.app_commands.command(name="weather", description="서울의 현재 날씨를 알려드립니다")
+    # async def weather_slash(self, interaction: discord.Interaction):
+    #     '''Slash command version'''
+    #     await self._handle_weather(interaction)
+    #
+    # @commands.command(
+    #     name="날씨",
+    #     help="서울의 현재 날씨를 알려줍니다 (개발중)",
+    #     brief="날씨 확인",
+    #     aliases=["weather"],
+    #     description="서울의 현재 날씨 정보를 보여줍니다.\n"
+    #     "※ 현재 개발 진행중인 기능입니다.\n"
+    #     "사용법: !!날씨",
+    # )
+    # async def weather_prefix(self, ctx: commands.Context):
+    #     '''Prefix command version'''
+    #     await ctx.send("🚧 날씨 기능은 현재 개발 진행중입니다. 조금만 기다려주세요!")
+    #
+    # @command_handler()
+    # async def _handle_weather(self, ctx_or_interaction) -> None:
+    #     '''Handle weather information request'''
+    #     try:
+    #         weather_data = await self._get_weather_data()
+    #         embed = await self._create_weather_embed(weather_data)
+    #         await self.send_response(ctx_or_interaction, embed=embed)
+    #     except Exception:
+    #         await self._send_weather_error_embed(ctx_or_interaction)
+    #
+    # async def _get_weather_data(self) -> dict:
+    #     '''Get weather data from API'''
+    #     return await self.api.weather.get_weather("Seoul")
+    #
+    # async def _create_weather_embed(self, weather_data: dict) -> discord.Embed:
+    #     '''Create embed for weather information'''
+    #     embed = discord.Embed(title="🌤️ 서울 날씨", color=INFO_COLOR)
+    #     embed.add_field(name="온도", value=f"{weather_data['main']['temp']}°C")
+    #     embed.add_field(name="체감", value=f"{weather_data['main']['feels_like']}°C")
+    #     embed.add_field(name="습도", value=f"{weather_data['main']['humidity']}%")
+    #     return embed
+    #
+    # async def _send_weather_error_embed(self, ctx_or_interaction):
+    #     '''Send error embed for weather command'''
+    #     embed = discord.Embed(
+    #         title="❌ 오류", 
+    #         description="날씨 정보를 가져오는데 실패했습니다.", 
+    #         color=ERROR_COLOR
+    #     )
+    #     await self.send_response(ctx_or_interaction, embed=embed)
 
     @discord.app_commands.command(name="population", description="국가의 인구수를 알려드립니다")
     async def population_slash(self, interaction: discord.Interaction, country_name: str):
@@ -157,14 +127,14 @@ class InformationCommands(BaseCommands):
         """
         return country_name and len(country_name.strip()) >= 2
 
-    async def _get_country_info(self, country_name: str):
+    async def _get_country_info(self, country_name: str) -> Dict[str, Any]:
         """Get country information from API
 
         Args:
             country_name: Name of country to look up
 
         Returns:
-            dict: Country information
+            Dict[str, Any]: Country information dictionary
 
         Raises:
             ValueError: If country not found or API error
@@ -174,7 +144,12 @@ class InformationCommands(BaseCommands):
         country_name = "".join(c for c in country_name if c.isalnum() or c.isspace())
         return await self.api.population.get_country_info(country_name)
 
-    async def _send_country_embed(self, ctx_or_interaction, country, processing_msg=None):
+    async def _send_country_embed(
+        self, 
+        ctx_or_interaction: Union[Context, discord.Interaction], 
+        country: Dict[str, Any], 
+        processing_msg: Optional[discord.Message] = None
+    ) -> None:
         """Send embed with country information
 
         Args:
@@ -182,15 +157,23 @@ class InformationCommands(BaseCommands):
             country: Country information dictionary
             processing_msg: Optional processing message to delete
         """
+        # Check if 'name' key exists in the country dictionary
+        country_name = country.get('name', {}).get('official', '정보없음')
+
         embed = discord.Embed(
-            title=f"🌏 {country['name']['official']}", color=discord.Color.green()
+            title=f"🌏 {country_name}", 
+            color=discord.Color.green()
         )
-        embed.add_field(name="인구", value=f"{country['population']:,}명", inline=False)
+        
+        # Safely access population with a default value
+        population = country.get('population', 0)
+        embed.add_field(name="인구", value=f"{population:,}명", inline=False)
         embed.add_field(name="수도", value=country.get("capital", ["정보없음"])[0], inline=True)
         embed.add_field(name="지역", value=country.get("region", "정보없음"), inline=True)
 
-        if "flags" in country and "png" in country["flags"]:
-            embed.set_thumbnail(url=country["flags"]["png"])
+        flags = country.get("flags", {})
+        if "png" in flags:
+            embed.set_thumbnail(url=flags["png"])
 
         await self._send_response(ctx_or_interaction, embed=embed)
         if processing_msg:
@@ -432,7 +415,7 @@ class InformationCommands(BaseCommands):
             kr_time = datetime.now(kr_tz)
 
             embed = discord.Embed(
-                title="🕐 세계 시간", color=discord.Color.blue(), timestamp=kr_time
+                title="�� 세계 시간", color=discord.Color.blue(), timestamp=kr_time
             )
 
             if timezone and time_str:
