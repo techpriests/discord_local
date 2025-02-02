@@ -5,11 +5,7 @@ build-backend = "poetry.core.masonry.api"
 [project]
 name = "discord-bot"
 version = "0.1.0"
-authors = [
-    { name = "Your Name", email = "your.email@example.com" },
-]
 description = "Discord bot with various utility commands"
-readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
     "discord.py>=2.0.0",
@@ -111,4 +107,4 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "pass",
     "raise ImportError",
-] 
+]
