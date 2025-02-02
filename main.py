@@ -2,15 +2,15 @@ from src.bot import DiscordBot
 from src.commands.entertainment import EntertainmentCommands
 from src.commands.information import InformationCommands
 from src.commands.system import SystemCommands
-from src.services.api import APIService
+from src.services.api.service import APIService
 from config import TOKEN, WEATHER_API_KEY, STEAM_KEY
 import asyncio
 
 async def main():
     # Initialize services
     api_service = APIService(
-        weather_key=WEATHER_API_KEY,
-        steam_key=STEAM_KEY
+        steam_key=STEAM_KEY,
+        weather_key=WEATHER_API_KEY
     )
     
     # Initialize bot
