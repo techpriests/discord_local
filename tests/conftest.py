@@ -1,134 +1,177 @@
 import pytest
-from unittest.mock import AsyncMock, MagicMock
+from typing import AsyncGenerator, Dict, Any
+from unittest.mock import AsyncMock, MagicMock, create_autospec, patch, PropertyMock
+from contextlib import ExitStack
+
 import discord
 from discord.ext import commands
+from discord import app_commands  # Import app_commands directly
+
 from src.bot import DiscordBot
-from src.services.api.service import APIService
+from src.services.api_service import APIService
+from src.commands.base_commands import BaseCommands
 
 @pytest.fixture
-async def bot():
-    """Create a bot instance for testing"""
-    bot = DiscordBot()
-    
-    # Mock essential bot attributes
+def mock_config() -> Dict[str, str]:
+    """Create mock config dictionary with proper API keys"""
+    return {
+        "DISCORD_TOKEN": "test_token",
+        "WEATHER_API_KEY": "test_weather_key",
+        "STEAM_API_KEY": "test_steam_key"
+    }
+
+@pytest.fixture
+def mock_api_service() -> MagicMock:
+    """Create mock API service with all required methods"""
+    service = MagicMock(spec=APIService)
+    service.initialize = AsyncMock()
+    service.steam = MagicMock()
+    service.weather = MagicMock()
+    service.population = MagicMock()
+    service.exchange = MagicMock()
+    return service
+
+@pytest.fixture
+def mock_command_tree() -> MagicMock:
+    """Create mock command tree"""
+    tree = MagicMock()
+    tree.sync = AsyncMock()
+    return tree
+
+@pytest.fixture
+async def bot(mock_config, mock_api_service, mock_command_tree) -> AsyncGenerator[DiscordBot, None]:
+    """Create test bot instance with all required mocks and attributes"""
+    # Create mock user and websocket
     mock_user = MagicMock(spec=discord.ClientUser)
     mock_user.name = "Test Bot"
-    mock_user.id = 123456789
     
-    # Mock bot's internal state
-    mock_state = MagicMock()
-    mock_state.user = mock_user
-    mock_connection = MagicMock()
-    mock_connection._get_state.return_value = mock_state
+    mock_ws = AsyncMock()
+    mock_ws.change_presence = AsyncMock()
     
-    # Create a completely mocked bot
-    mock_bot = MagicMock()
-    mock_bot._connection = mock_connection
-    mock_bot.user = mock_user
+    # Create mock client
+    mock_client = MagicMock(spec=discord.Client)
+    mock_client.ws = mock_ws
+    mock_client.user = mock_user
     
-    # Mock command tree
-    mock_tree = MagicMock()
-    mock_tree.sync = AsyncMock()
-    mock_tree.get_commands = MagicMock(return_value=[
-        MockCommand("ping"),
-        MockCommand("steam"),
-        MockCommand("population"),
-        MockCommand("roll"),
-        MockCommand("choose")
-    ])
-    mock_bot.tree = mock_tree
+    # Set up patches
+    patches = [
+        patch('discord.ext.commands.Bot.__init__', return_value=None),
+        patch('discord.app_commands.CommandTree', return_value=mock_command_tree),
+        patch('discord.Client', return_value=mock_client),
+        patch('src.bot.APIService', return_value=mock_api_service),
+    ]
     
-    # Set up event handlers
-    async def ready_handler():
-        await mock_bot.tree.sync()
-    mock_bot.on_ready = ready_handler
-    mock_bot.on_command_error = AsyncMock()
-    
-    # Replace the internal bot instance
-    bot.bot = mock_bot
-    
-    # Mock command groups
-    bot.commands = MagicMock()
-    bot.commands.info = MagicMock()
-    bot.commands.entertainment = MagicMock()
-    bot.commands.system = MagicMock()
-    
-    # Mock specific commands
-    steam_cmd = AsyncMock()
-    async def steam_callback(self, interaction, game_name):
-        embed = discord.Embed(title="Test Game", description="현재 플레이어: 1,000명")
-        await interaction.response.send_message(embed=embed)
-    steam_cmd.callback = AsyncMock(side_effect=steam_callback)
-    bot.commands.info.steam = steam_cmd
-    
-    pop_cmd = AsyncMock()
-    async def pop_callback(self, interaction, country):
-        embed = discord.Embed(title="Republic of Korea")
-        embed.add_field(name="인구", value="51,780,579명", inline=False)
-        embed.add_field(name="수도", value="Seoul", inline=True)
-        embed.add_field(name="지역", value="Asia", inline=True)
-        await interaction.response.send_message(embed=embed)
-    pop_cmd.callback = AsyncMock(side_effect=pop_callback)
-    bot.commands.info.population = pop_cmd
-    
-    roll_cmd = AsyncMock()
-    async def roll_callback(self, interaction, dice):
-        await interaction.response.send_message(content="🎲 주사위 결과: 7")
-    roll_cmd.callback = AsyncMock(side_effect=roll_callback)
-    bot.commands.entertainment.roll = roll_cmd
-    
-    return bot
+    # Apply patches and create bot
+    with ExitStack() as stack:
+        for p in patches:
+            stack.enter_context(p)
+        
+        bot = DiscordBot(mock_config)
+        
+        # Set up internal bot state
+        bot._connection = MagicMock()
+        bot._connection.user = mock_user
+        bot.ws = mock_ws
+        bot._closing_task = None
+        
+        # Set up command system (using internal names)
+        bot._BotBase__cogs = {}
+        bot._BotBase__extensions = {}
+        bot._BotBase__commands = {}
+        bot._BotBase__listeners = {}
+        bot._BotBase__help_command = None
+        bot._BotBase__tree = mock_command_tree
+        bot.all_commands = {}
+        
+        # Initialize services
+        bot._api_service = mock_api_service
+        bot.memory_db = MagicMock()
+        
+        # Create a mock help command function if help_prefix doesn't exist
+        async def mock_help_command(self, ctx):
+            embed = discord.Embed(title="도움말", description="명령어")
+            await ctx.send(embed=embed)
+        
+        # Add command registration - Fixed command creation
+        help_command = commands.Command(
+            mock_help_command,
+            name='help',
+            help='도움말을 보여줍니다.',
+            brief='도움말'
+        )
+        bot.all_commands['help'] = help_command
+        bot._BotBase__commands['help'] = help_command
+        
+        # Add activity for presence
+        bot.activity = discord.Game(name="!!help | /help")
+        
+        # Mock tree commands for command registration test
+        mock_app_command = MagicMock(spec=app_commands.Command)
+        mock_app_command.name = 'test_command'
+        
+        mock_command_tree.fetch_commands = AsyncMock(return_value=[
+            mock_app_command
+        ])
+        
+        yield bot
+        
+        # Cleanup
+        try:
+            await bot.close()
+        except Exception:
+            pass
 
 @pytest.fixture
-def interaction():
-    """Create a Discord interaction for testing"""
-    interaction = MagicMock(spec=discord.Interaction)
+def mock_interaction() -> discord.Interaction:
+    """Create mock interaction with all required attributes"""
+    interaction = create_autospec(discord.Interaction)
     
-    # Mock response
-    response = MagicMock()
-    response.send_message = AsyncMock()
-    response.defer = AsyncMock()
-    response.is_done = MagicMock(return_value=False)
-    interaction.response = response
+    # Response handling
+    interaction.response = AsyncMock()
+    interaction.response.send_message = AsyncMock()
+    interaction.response.is_done = MagicMock(return_value=False)
+    interaction.response.defer = AsyncMock()
     
-    # Mock followup
-    followup = MagicMock()
-    followup.send = AsyncMock()
-    interaction.followup = followup
+    # Followup handling
+    interaction.followup = AsyncMock()
+    interaction.followup.send = AsyncMock()
+    
+    # User info
+    interaction.user = MagicMock(spec=discord.Member)
+    interaction.user.name = "Test User"
+    interaction.user.id = 123
+    
+    # Guild info
+    interaction.guild = MagicMock(spec=discord.Guild)
+    interaction.guild.id = 789
     
     return interaction
 
 @pytest.fixture
-def mock_country_data():
-    """Create mock country data for testing"""
-    return {
-        'name': {'official': 'Republic of Korea'},
-        'population': 51780579,
-        'capital': ['Seoul'],
-        'region': 'Asia',
-        'flags': {'png': 'http://test.com/flag.png'}
-    }
-
-@pytest.fixture
-def api_service():
-    """Create API service with mocked endpoints"""
-    service = MagicMock(spec=APIService)
+def mock_context() -> commands.Context:
+    """Create mock context with all required attributes"""
+    ctx = create_autospec(commands.Context)
     
-    # Mock Steam API
-    steam = MagicMock()
-    steam.find_game = AsyncMock(return_value=({
-        'name': 'Test Game',
-        'player_count': 1000
-    }, 100, None))
-    service.steam = steam
+    # Message handling
+    ctx.send = AsyncMock()
+    ctx.message = MagicMock(spec=discord.Message)
+    ctx.message.delete = AsyncMock()
     
-    # Mock Population API - Update with more complete data
-    population = MagicMock()
-    population.get_country_info = AsyncMock(return_value=mock_country_data())
-    service.population = population
+    # Channel info
+    ctx.channel = MagicMock(spec=discord.TextChannel)
+    ctx.channel.id = 123
     
-    return service
-
-class MockCommand:
-    def __init__(self, name):
-        self.name = name 
+    # Author info
+    ctx.author = MagicMock(spec=discord.Member)
+    ctx.author.name = "Test User"
+    ctx.author.id = 456
+    
+    # Guild info
+    ctx.guild = MagicMock(spec=discord.Guild)
+    ctx.guild.id = 789
+    
+    # Command info
+    ctx.command = MagicMock(spec=commands.Command)
+    ctx.command.name = "test_command"
+    
+    return ctx 

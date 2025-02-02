@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import random
+from typing import Optional, Dict, Any, Protocol, Union, List, cast
 
 import discord
 from discord.ext import commands
@@ -9,26 +10,31 @@ logger = logging.getLogger(__name__)
 
 
 class MessageHandler(commands.Cog):
-    def __init__(self, bot):
+    """Handler for message-related events"""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        """Initialize message handler
+        
+        Args:
+            bot: Discord bot instance
+        """
         self.bot = bot
-        self.intercept_enabled = False  # Add flag to control interception
+        self.intercept_enabled = False
+        self._last_message: Optional[str] = None
 
     @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
+    async def on_message(self, message: discord.Message) -> None:
         """Handle message events
-
+        
         Args:
             message: Discord message object
         """
         try:
-            # First handle normal message processing
-            if not self._should_process_message(message):
+            if message.author.bot:
                 return
 
-            await self._process_message(message)
-
-            # Then handle bot interception if enabled
             await self._handle_bot_interception(message)
+            await self._handle_command(message)
 
         except Exception as e:
             logger.error(f"Error handling message: {e}")
@@ -42,10 +48,6 @@ class MessageHandler(commands.Cog):
         Returns:
             bool: True if message should be processed
         """
-        # Ignore bot messages
-        if message.author.bot:
-            return False
-
         # Ignore DMs
         if not isinstance(message.channel, discord.TextChannel):
             return False
@@ -56,21 +58,70 @@ class MessageHandler(commands.Cog):
 
         return True
 
-    async def _process_message(self, message: discord.Message):
-        """Process a message
-
+    async def _handle_bot_interception(self, message: discord.Message) -> None:
+        """Handle bot command interception
+        
         Args:
             message: Discord message object
         """
         try:
-            await self._handle_mentions(message)
-            await self._handle_keywords(message)
-            await self._handle_reactions(message)
+            if not self.intercept_enabled:
+                return
+            if message.author == self.bot.user:
+                return
+
+            if message.content.startswith("샴 스팀 동접"):
+                await self._handle_steam_intercept(message)
 
         except Exception as e:
-            logger.error(f"Error processing message: {e}")
+            logger.error(f"Error in bot interception: {e}")
 
-    async def _handle_mentions(self, message: discord.Message):
+    async def _handle_steam_intercept(self, message: discord.Message) -> None:
+        """Handle Steam command interception
+        
+        Args:
+            message: Discord message object
+        """
+        try:
+            await message.add_reaction("👍")
+            ctx = await self.bot.get_context(message)
+            steam_command = self.bot.get_command("스팀")
+            if steam_command:
+                await ctx.invoke(steam_command)
+        except Exception as e:
+            logger.error(f"Error handling Steam intercept: {e}")
+
+    async def _handle_command(self, message: discord.Message) -> None:
+        """Handle command messages
+        
+        Args:
+            message: Discord message object
+        """
+        try:
+            response = await self.process_command(message.content)
+            if response:
+                await message.channel.send(response)
+        except Exception as e:
+            logger.error(f"Error handling command: {e}")
+
+    async def process_command(self, command: str) -> Optional[str]:
+        """Process command message
+        
+        Args:
+            command: Command to process
+
+        Returns:
+            Optional[str]: Command response if any
+        """
+        try:
+            if command.lower() == "help":
+                return "사용 가능한 명령어: help, 안녕"
+            return None
+        except Exception as e:
+            logger.error(f"Error processing command: {e}")
+            return None
+
+    async def _handle_mentions(self, message: discord.Message) -> None:
         """Handle bot mentions in message
 
         Args:
@@ -79,7 +130,7 @@ class MessageHandler(commands.Cog):
         if self.bot.user in message.mentions:
             await self._send_mention_response(message)
 
-    async def _send_mention_response(self, message: discord.Message):
+    async def _send_mention_response(self, message: discord.Message) -> None:
         """Send response to bot mention
 
         Args:
@@ -93,93 +144,44 @@ class MessageHandler(commands.Cog):
         ]
         await message.channel.send(random.choice(responses))
 
-    async def _handle_keywords(self, message: discord.Message):
+    async def _handle_keywords(self, message: discord.Message) -> None:
         """Handle keywords in message
 
         Args:
             message: Discord message object
         """
         content = message.content.lower()
-
         if "안녕" in content:
             await message.channel.send("안녕하세요!")
         elif "굿모닝" in content:
             await message.channel.send("좋은 아침이에요!")
 
-    async def _handle_reactions(self, message: discord.Message):
+    async def _handle_reactions(self, message: discord.Message) -> None:
         """Handle message reactions
 
         Args:
             message: Discord message object
         """
         content = message.content.lower()
-
         if "축하" in content:
             await message.add_reaction("🎉")
         elif "좋아" in content:
             await message.add_reaction("👍")
 
-    async def _handle_bot_interception(self, message: discord.Message):
-        """Handle bot command interception
-
+    async def handle_message(self, message: str) -> Optional[str]:
+        """Handle incoming message
+        
         Args:
-            message: Discord message object
+            message: Message to handle
+
+        Returns:
+            Optional[str]: Response message if any
         """
         try:
-            # Skip if interception is disabled
-            if not self.intercept_enabled:
-                return
-
-            # Ignore our own messages
-            if message.author == self.bot.user:
-                return
-
-            # Check for the specific command pattern
-            if message.content.startswith("샴 스팀 동접"):
-                await self._handle_steam_intercept(message)
-
+            # Basic message handling logic
+            if message.lower().startswith("안녕"):
+                return "안녕하세요!"
+            return None
         except Exception as e:
-            logger.error(f"Error in bot interception: {e}")
-
-    async def _handle_steam_intercept(self, message: discord.Message):
-        """Handle intercepted Steam player count command
-
-        Args:
-            message: Discord message object
-        """
-        try:
-            # Extract game name
-            game_name = message.content.replace("샴 스팀 동접", "", 1).strip()
-            if not game_name:
-                return
-
-            # Delete the original command message
-            await message.delete()
-
-            # Wait for the other bot's response
-            try:
-                other_bot_msg = await self.bot.wait_for(
-                    "message",
-                    check=lambda msg: (
-                        msg.author.name == "샴고양이"
-                        and msg.author.discriminator == "7251"
-                        and msg.channel == message.channel
-                    ),
-                    timeout=5.0,
-                )
-                await other_bot_msg.delete()
-            except asyncio.TimeoutError:
-                logger.warning("Timeout waiting for 샴고양이 bot response")
-
-            # Use our own steam search
-            ctx = await self.bot.get_context(message)
-            steam_command = self.bot.get_command("스팀")
-            if steam_command:
-                await ctx.invoke(steam_command, game_name=game_name)
-
-        except discord.Forbidden as e:
-            logger.error(f"Permission error in message handling: {e}")
-            await message.channel.send("메시지 삭제 권한이 없습니다")
-        except Exception as e:
-            logger.error(f"Error handling 샴고양이 bot command: {e}")
-            await message.channel.send("명령어 처리 중 오류가 발생했습니다")
+            logger.error(f"Error handling message: {e}")
+            return None
