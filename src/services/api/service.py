@@ -1,7 +1,6 @@
 import logging
 from typing import Dict, Optional, cast
 
-from src.config import Config
 from src.services.api.steam import SteamAPI
 from src.services.api.weather import WeatherAPI
 from src.services.api.exchange import ExchangeAPI
@@ -12,11 +11,11 @@ logger = logging.getLogger(__name__)
 class APIService:
     """Service managing all API clients"""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Dict[str, str]) -> None:
         """Initialize API service
         
         Args:
-            config: Application configuration
+            config: Dictionary containing API keys
         """
         self._config = config
         self._steam_api: Optional[SteamAPI] = None
@@ -28,11 +27,11 @@ class APIService:
         """Initialize all API clients"""
         try:
             # Initialize Steam API
-            self._steam_api = SteamAPI(self._config.steam_api_key)
+            self._steam_api = SteamAPI(self._config["STEAM_API_KEY"])
             await self._steam_api.initialize()
 
             # Initialize Weather API
-            self._weather_api = WeatherAPI(self._config.weather_api_key)
+            self._weather_api = WeatherAPI(self._config["WEATHER_API_KEY"])
             await self._weather_api.initialize()
 
             # Initialize Exchange API

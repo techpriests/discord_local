@@ -1,14 +1,14 @@
 import asyncio
 import logging
 import sys
-from typing import NoReturn
+import os
+from typing import NoReturn, Dict
 
 import discord
 from api_service import APIService
 
 from src.bot import DiscordBot
 from commands import EntertainmentCommands, InformationCommands, SystemCommands
-from src.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,15 @@ def setup_logging() -> None:
         ]
     )
 
-async def start_bot(config: Config) -> NoReturn:
+def get_config() -> Dict[str, str]:
+    """Get configuration from environment variables"""
+    return {
+        "DISCORD_TOKEN": os.getenv("DISCORD_TOKEN", ""),
+        "STEAM_API_KEY": os.getenv("STEAM_API_KEY", ""),
+        "WEATHER_API_KEY": os.getenv("WEATHER_API_KEY", "")
+    }
+
+async def start_bot(config: Dict[str, str]) -> NoReturn:
     """Start the Discord bot
     
     Args:
@@ -35,7 +43,7 @@ async def start_bot(config: Config) -> NoReturn:
     try:
         bot = DiscordBot(config)
         async with bot:
-            await bot.start(config.discord_token)
+            await bot.start(config["DISCORD_TOKEN"])
     except discord.LoginFailure as e:
         logger.error(f"Failed to login: {e}")
         raise SystemExit("Discord 로그인에 실패했습니다") from e
@@ -50,13 +58,13 @@ async def main() -> NoReturn:
         SystemExit: If initialization fails or bot crashes
     """
     try:
-        # Load configuration
-        try:
-            config = Config()
-        except Exception as e:
-            logger.error(f"Failed to load configuration: {e}")
-            raise SystemExit("설정을 불러오는데 실패했습니다") from e
-
+        # Load configuration from environment
+        config = get_config()
+        
+        # Validate config
+        if not all(config.values()):
+            raise ValueError("Missing required environment variables")
+            
         # Start bot
         await start_bot(config)
 
