@@ -2,31 +2,29 @@
 requires = ["poetry-core>=1.0.0"]
 build-backend = "poetry.core.masonry.api"
 
-[project]
+[tool.poetry]
 name = "discord-bot"
 version = "0.1.0"
-authors = [
-    { name = "Your Name", email = "your.email@example.com" },
-]
 description = "Discord bot with various utility commands"
-readme = "README.md"
-requires-python = ">=3.9"
-dependencies = [
-    "discord.py>=2.0.0",
-    "aiohttp>=3.8.0",
-    "pytz>=2023.3"
+authors = ["Your Name <your.email@example.com>"]
+packages = [
+    { include = "src" }
 ]
 
-[project.optional-dependencies]
-test = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
-    "mypy>=1.0.0",
-    "ruff>=0.1.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
-    "docstr-coverage>=2.3.0"
-]
+[tool.poetry.dependencies]
+python = "^3.9"
+"discord.py" = "^2.0.0"
+aiohttp = "^3.8.0"
+pytz = "^2023.3"
+
+[tool.poetry.dev-dependencies]
+pytest = "^7.0.0"
+pytest-asyncio = "^0.21.0"
+mypy = "^1.0.0"
+ruff = "^0.1.0"
+black = "^23.0.0"
+isort = "^5.12.0"
+docstr-coverage = "^2.3.0"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -52,41 +50,6 @@ warn_unreachable = true
 module = ["tests.*"]
 disallow_untyped_defs = false
 
-[tool.ruff]
-line-length = 100
-target-version = "py312"
-
-[tool.ruff.lint]
-select = ["E", "F", "B", "I"]
-ignore = []
-
-[tool.ruff.lint.per-file-ignores]
-"tests/*" = ["E501"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src"]
-
-[tool.poetry]
-name = "discord-bot"
-version = "0.1.0"
-description = "Discord bot with various utility commands"
-authors = ["Your Name <your.email@example.com>"]
-
-[tool.poetry.dependencies]
-python = "^3.9"
-"discord.py" = "^2.0.0"
-aiohttp = "^3.8.0"
-pytz = "^2023.3"
-
-[tool.poetry.dev-dependencies]
-pytest = "^7.0.0"
-pytest-asyncio = "^0.21.0"
-mypy = "^1.0.0"
-ruff = "^0.1.0"
-black = "^23.0.0"
-isort = "^5.12.0"
-docstr-coverage = "^2.3.0"
-
 [tool.black]
 line-length = 100
 target-version = ['py312']
@@ -97,6 +60,17 @@ profile = "black"
 line_length = 100
 multi_line_output = 3
 include_trailing_comma = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "B", "I"]
+ignore = []
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
 
 [tool.coverage.run]
 source = ["src"]
@@ -111,4 +85,4 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "pass",
     "raise ImportError",
-] 
+]
