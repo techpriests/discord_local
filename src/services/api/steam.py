@@ -98,9 +98,9 @@ class SteamAPI(BaseAPI[GameInfo]):
 
         Returns:
             Tuple containing:
-            - GameInfo or None: Best match game info
+            - GameInfo or None: Best match game info (game with most players among top matches)
             - float: Match similarity score (0-100)
-            - List[GameInfo] or None: Similar games list
+            - List[GameInfo] or None: Similar games list (always None)
 
         Raises:
             ValueError: If search fails
@@ -120,14 +120,20 @@ class SteamAPI(BaseAPI[GameInfo]):
                 endpoint="search"
             )
 
-            if not data or "items" not in data:
+            if not data or "items" not in data or not data["items"]:
                 return None, 0, None
 
-            games: List[Tuple[GameInfo, float]] = []
-            for item in data["items"]:
+            # Get top 5 search results
+            top_games = []
+            for item in data["items"][:5]:  # Only process top 5 matches
                 try:
                     app_id = item["id"]
                     current_players = await self.get_player_count(app_id)
+                    
+                    # Skip games with 0 players unless it's an exact name match
+                    if current_players == 0 and item["name"].lower() != name.lower():
+                        continue
+                        
                     history = await self.get_player_history(app_id, include_history)
                     
                     game_info = GameInfo(
@@ -140,29 +146,23 @@ class SteamAPI(BaseAPI[GameInfo]):
                         image_url=item.get("tiny_image") or item.get("large_capsule_image")
                     )
                     
-                    # Calculate similarity score for this game
-                    similarity = self._calculate_similarity(name, item["name"])
-                    games.append((game_info, similarity))
+                    # Calculate match score
+                    similarity = 100.0 if item["name"].lower() == name.lower() else 50.0
+                    top_games.append((game_info, similarity, current_players))
 
                 except Exception as e:
                     logger.error(f"Error processing game {item.get('name', 'Unknown')}: {e}")
                     continue
 
-                # Only get player count for top 5 results
-                if len(games) >= 5:
-                    break
-
-            if not games:
+            if not top_games:
                 return None, 0, None
 
-            # Sort games by similarity score
-            games.sort(key=lambda x: x[1], reverse=True)
+            # Sort by player count (primary) and similarity (secondary)
+            top_games.sort(key=lambda x: (x[2], x[1]), reverse=True)
             
-            # Return best match and other games
-            best_match, best_score = games[0]
-            other_games = [game for game, _ in games[1:]] if len(games) > 1 else None
-            
-            return best_match, best_score, other_games
+            # Return the game with the most players
+            best_match, best_score, _ = top_games[0]
+            return best_match, best_score, None
 
         except Exception as e:
             logger.error(f"Error in find_game for query '{name}': {e}")
