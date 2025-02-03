@@ -68,44 +68,29 @@ class ArknightsGachaCalculator:
         return min(increased_rate, 1.0)  # Cap at 100%
 
     @staticmethod
-    def calculate_pull_sequence_probability(start_pity: int, sequence_length: int) -> Tuple[float, float]:
-        """Calculate probability of getting 6★ and expected pulls until 6★ from a given pity
+    def calculate_first_6star_distribution(max_pulls: int) -> Tuple[list[float], float]:
+        """Calculate probability distribution of getting first 6★
         
         Args:
-            start_pity: Starting pity count
-            sequence_length: Maximum number of pulls to calculate for
+            max_pulls: Maximum number of pulls to calculate for
             
         Returns:
-            Tuple[float, float]: (Probability of getting 6★ within sequence, Expected pulls until 6★)
+            Tuple containing:
+                - List of probabilities of getting first 6★ at each pull
+                - Probability of not getting 6★ within max_pulls
         """
         prob_no_6star = 1.0
-        expected_pulls = 0.0
-        cumulative_prob = 0.0
+        distribution = []
         
-        for i in range(sequence_length):
-            current_pity = start_pity + i
-            rate = ArknightsGachaCalculator.calculate_single_pull_rate(current_pity)
-            
-            # Probability of reaching this pull (not getting 6★ before)
-            prob_reaching_here = prob_no_6star
-            
-            # Probability of getting 6★ at exactly this pull
-            prob_6star_here = prob_reaching_here * rate
-            
-            # Add to expected value
-            expected_pulls += (i + 1) * prob_6star_here
-            
+        for i in range(max_pulls):
+            rate = ArknightsGachaCalculator.calculate_single_pull_rate(i)
+            # Probability of getting 6★ exactly at this pull
+            prob_6star_here = prob_no_6star * rate
+            distribution.append(prob_6star_here)
             # Update probability of not getting 6★
             prob_no_6star *= (1 - rate)
-            
-            # Add to cumulative probability
-            cumulative_prob += prob_6star_here
-            
-            # Optimization: break if probability is close to 1
-            if cumulative_prob > 0.9999:
-                break
         
-        return cumulative_prob, expected_pulls
+        return distribution, prob_no_6star
 
     @staticmethod
     def calculate_banner_probability(pulls: int, is_limited: bool = False) -> Dict[str, float]:
@@ -123,42 +108,36 @@ class ArknightsGachaCalculator:
         """
         rate_up_chance = ArknightsGachaCalculator.LIMITED_RATE_UP_CHANCE if is_limited else ArknightsGachaCalculator.RATE_UP_CHANCE
         
-        # Initialize counters
-        total_prob_no_target = 1.0  # Probability of not getting target operator
+        # Get probability distribution for first 6★
+        first_dist, prob_no_6star = ArknightsGachaCalculator.calculate_first_6star_distribution(pulls)
+        
+        # Calculate expected number of 6★s
         expected_6stars = 0.0
-        expected_target = 0.0
-        current_pity = 0
-        remaining_pulls = pulls
+        remaining_prob = 1.0  # Probability of reaching each scenario
         
-        while remaining_pulls > 0:
-            # Calculate probabilities for next sequence
-            sequence_length = min(remaining_pulls, 99)  # Cap sequence length for efficiency
-            prob_6star, exp_pulls = ArknightsGachaCalculator.calculate_pull_sequence_probability(
-                current_pity, sequence_length
-            )
+        # Add up expected value from first 6★
+        for pull_num, prob in enumerate(first_dist):
+            expected_6stars += prob  # Add probability of getting 6★ here
+            remaining_pulls = pulls - (pull_num + 1)
             
-            # Update expected 6★ count
-            sequence_expected_6stars = prob_6star
-            expected_6stars += sequence_expected_6stars
-            
-            # Update expected target operator count
-            sequence_expected_target = sequence_expected_6stars * rate_up_chance
-            expected_target += sequence_expected_target
-            
-            # Update probability of not getting target
-            prob_no_target_this_sequence = (1 - prob_6star) + (prob_6star * (1 - rate_up_chance))
-            total_prob_no_target *= prob_no_target_this_sequence
-            
-            # Update remaining pulls and pity
-            pulls_this_sequence = min(int(exp_pulls) if prob_6star > 0.5 else sequence_length, remaining_pulls)
-            remaining_pulls -= pulls_this_sequence
-            current_pity = 0  # Reset pity after sequence
+            if remaining_pulls > 0:
+                # For remaining pulls, calculate expected additional 6★s
+                next_dist, next_no_6star = ArknightsGachaCalculator.calculate_first_6star_distribution(remaining_pulls)
+                additional_6stars = sum(next_dist)  # Expected number of additional 6★s
+                expected_6stars += prob * additional_6stars  # Weighted by probability of this scenario
         
-        # Calculate final probability of getting at least one target operator
-        probability = 1 - total_prob_no_target
+        # Calculate probability of getting at least one target operator
+        prob_at_least_one = 0.0
+        for prob in first_dist:
+            # Probability of getting target from this 6★
+            prob_target = prob * rate_up_chance
+            prob_at_least_one += prob_target
+        
+        # Calculate expected number of target operators
+        expected_target = expected_6stars * rate_up_chance
         
         return {
-            'probability': probability,
+            'probability': prob_at_least_one,
             'expected_6stars': expected_6stars,
             'expected_target': expected_target
         } 
