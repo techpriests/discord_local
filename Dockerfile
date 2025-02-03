@@ -24,14 +24,17 @@ RUN poetry config virtualenvs.create false && \
 # Add version labels and environment variables
 ARG GIT_COMMIT
 ARG GIT_BRANCH
+ARG GIT_MAIN_COMMIT
 LABEL org.opencontainers.image.revision=$GIT_COMMIT \
       org.opencontainers.image.version="1.0.0" \
       org.opencontainers.image.source="https://github.com/techpriests/discord_local" \
       git.commit=$GIT_COMMIT \
-      git.branch=$GIT_BRANCH
+      git.branch=$GIT_BRANCH \
+      git.main_commit=$GIT_MAIN_COMMIT
 
 ENV GIT_COMMIT=$GIT_COMMIT \
-    GIT_BRANCH=$GIT_BRANCH
+    GIT_BRANCH=$GIT_BRANCH \
+    GIT_MAIN_COMMIT=$GIT_MAIN_COMMIT
 
 # Run bot
 CMD ["python", "-m", "src"] 

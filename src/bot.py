@@ -129,11 +129,12 @@ class DiscordBot(commands.Bot):
             f"Logged in as {user.name} "
             f"(Version: {self.version_info.version}, "
             f"Commit: {self.version_info.commit}, "
-            f"Branch: {self.version_info.branch})"
+            f"Branch: {self.version_info.branch}, "
+            f"Main: {self.version_info.main_commit})"
         )
         await cast(discord.Client, self).change_presence(
             activity=discord.Game(
-                name=f"!!help | /help | v{self.version_info.version}-{self.version_info.commit}"
+                name=f"!!help | /help | v{self.version_info.version}-{self.version_info.commit} (main: {self.version_info.main_commit})"
             )
         )
 
