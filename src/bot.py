@@ -14,7 +14,8 @@ from src.utils.constants import ERROR_COLOR, INFO_COLOR
 from src.commands.base_commands import BaseCommands
 from src.commands.information import InformationCommands
 from src.commands.entertainment import EntertainmentCommands
-from src.services.api_service import APIService
+from src.commands.system import SystemCommands
+from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,8 @@ class DiscordBot(commands.Bot):
         self._api_service = api_service
         self._command_classes: List[Type[BaseCommands]] = [
             InformationCommands,
-            EntertainmentCommands
+            EntertainmentCommands,
+            SystemCommands
         ]
         self.memory_db: Optional[MemoryDB] = None
 
