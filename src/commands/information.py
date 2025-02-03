@@ -61,13 +61,17 @@ class InformationCommands(BaseCommands):
         """Handle population information request"""
         if not self._validate_country_name(country_name):
             return await self.send_response(
-                ctx_or_interaction, "국가 이름을 2글자 이상 입력해주세요..."
+                ctx_or_interaction, 
+                "국가 이름을 2글자 이상 입력해주세요...",
+                ephemeral=True
             )
 
         processing_msg = None
         try:
             processing_msg = await self.send_response(
-                ctx_or_interaction, "국가 정보를 검색중입니다..."
+                ctx_or_interaction, 
+                "국가 정보를 검색중입니다...",
+                ephemeral=True
             )
             country = await self._get_country_info(country_name)
             await self._send_country_embed(ctx_or_interaction, country, processing_msg)
@@ -132,7 +136,8 @@ class InformationCommands(BaseCommands):
         logger.error(f"Error getting population for {country_name}: {error_msg}")
         await self.send_response(
             ctx_or_interaction,
-            f"국가 정보를 가져오는데 실패했습니다: {country_name}"
+            f"인구 정보를 가져오는데 실패했습니다: {country_name}",
+            ephemeral=True
         )
 
     @discord.app_commands.command(name="game", description="Steam 게임의 동시접속자 수를 알려드립니다")
@@ -198,22 +203,25 @@ class InformationCommands(BaseCommands):
         Raises:
             ValueError: If game not found or API error
         """
-        # Initialize processing_msg as None
+        # Initialize processing_msg and user_name as None
         processing_msg = None
+        user_name = None
+        
         try:
-            # Get user's name
+            # Get user's name first, before any other operations
             user_name = self.get_user_name(ctx_or_interaction)
             
-            # Show processing message
+            # Show processing message (ephemeral)
             processing_msg = await self.send_response(
                 ctx_or_interaction,
-                f"{user_name}님, 게임 정보를 가져오는 중..."
+                f"{user_name}님, 게임 정보를 가져오는 중...",
+                ephemeral=True
             )
 
             game, similarity, similar_games = await self.api.steam.find_game(game_name)
 
             if not game:
-                await self._send_game_not_found_embed(ctx_or_interaction, user_name)
+                await self._send_game_not_found_embed(ctx_or_interaction, user_name or "사용자")
                 return
 
             embed = await self._create_game_embed(game, similar_games, user_name)
@@ -221,7 +229,7 @@ class InformationCommands(BaseCommands):
 
         except Exception as e:
             logger.error(f"Error in steam command: {e}")
-            await self._send_steam_error_embed(ctx_or_interaction, user_name)
+            await self._send_steam_error_embed(ctx_or_interaction, user_name or "사용자")
         finally:
             if processing_msg:
                 try:
@@ -241,7 +249,7 @@ class InformationCommands(BaseCommands):
             description=f"{user_name}님, 입력하신 게임을 찾을 수 없습니다.",
             color=ERROR_COLOR
         )
-        await self.send_response(ctx_or_interaction, embed=embed)
+        await self.send_response(ctx_or_interaction, embed=embed, ephemeral=True)
 
     async def _create_game_embed(
         self, game: dict, similar_games: Optional[List[dict]] = None, user_name: Optional[str] = None
@@ -256,9 +264,12 @@ class InformationCommands(BaseCommands):
         Returns:
             discord.Embed: Formatted embed with game information
         """
+        # Ensure we have a user name, even if it's generic
+        user_name = user_name or "사용자"
+        
         embed = discord.Embed(
             title=f"🎮 {game['name']}", 
-            description=f"{user_name}님이 요청하신 게임의 정보입니다." if user_name else "게임 정보",
+            description=f"{user_name}님이 요청하신 게임의 정보입니다.",
             color=SUCCESS_COLOR
         )
 
@@ -286,7 +297,7 @@ class InformationCommands(BaseCommands):
             description=f"{user_name}님, 게임 정보를 가져오는데 실패했습니다.", 
             color=ERROR_COLOR
         )
-        await self.send_response(ctx_or_interaction, embed=embed)
+        await self.send_response(ctx_or_interaction, embed=embed, ephemeral=True)
 
     @commands.Cog.listener()
     async def on_command_error(self, ctx, error):
@@ -313,8 +324,10 @@ class InformationCommands(BaseCommands):
             ctx: Command context
             error: Cooldown error
         """
-        await ctx.send(
-            f"명령어 사용 제한 중입니다. " f"{error.retry_after:.1f}초 후에 다시 시도해주세요."
+        await self.send_response(
+            ctx,
+            f"명령어 사용 제한 중입니다. {error.retry_after:.1f}초 후에 다시 시도해주세요.",
+            ephemeral=True
         )
 
     async def _handle_missing_argument_error(self, ctx):
@@ -323,8 +336,10 @@ class InformationCommands(BaseCommands):
         Args:
             ctx: Command context
         """
-        await ctx.send(
-            f"필수 입력값이 누락되었습니다. " f"`!!help {ctx.command}` 로 사용법을 확인해주세요."
+        await self.send_response(
+            ctx,
+            f"필수 입력값이 누락되었습니다. `!!help {ctx.command}` 로 사용법을 확인해주세요.",
+            ephemeral=True
         )
 
     async def _handle_unexpected_error(self, ctx, error):
@@ -342,7 +357,11 @@ class InformationCommands(BaseCommands):
             "• 명령어 사용법 확인 (`!!help` 명령어 사용)",
             "• 봇 관리자에게 문의",
         ]
-        await ctx.send("\n".join(error_messages))
+        await self.send_response(
+            ctx,
+            "\n".join(error_messages),
+            ephemeral=True
+        )
 
     @commands.command(
         name="시간",
@@ -432,7 +451,8 @@ class InformationCommands(BaseCommands):
         logger.error(f"Error handling time for timezone {timezone}: {error_msg}")
         await self.send_response(
             ctx_or_interaction,
-            "시간 정보를 처리하는데 실패했습니다"
+            "시간 정보를 처리하는데 실패했습니다",
+            ephemeral=True
         )
 
     @discord.app_commands.command(name="weather", description="도시의 날씨를 알려드립니다")
@@ -454,18 +474,32 @@ class InformationCommands(BaseCommands):
             except ValueError:
                 await self.send_response(
                     ctx_or_interaction,
-                    "날씨 기능은 현재 사용할 수 없습니다. 관리자에게 문의해주세요."
+                    "날씨 기능은 현재 사용할 수 없습니다. 관리자에게 문의해주세요.",
+                    ephemeral=True
                 )
                 return
 
             if not self._validate_city_name(city_name):
                 return await self.send_response(
                     ctx_or_interaction, 
-                    "도시 이름을 2글자 이상 입력해주세요..."
+                    "도시 이름을 2글자 이상 입력해주세요...",
+                    ephemeral=True
                 )
 
-            weather_info = await weather_api.get_weather(city_name)
-            await self._send_weather_embed(ctx_or_interaction, weather_info)
+            # Show processing message
+            processing_msg = await self.send_response(
+                ctx_or_interaction,
+                "날씨 정보를 가져오는 중...",
+                ephemeral=True
+            )
+
+            try:
+                weather_info = await weather_api.get_weather(city_name)
+                await self._send_weather_embed(ctx_or_interaction, weather_info)
+            finally:
+                if processing_msg:
+                    await processing_msg.delete()
+
         except Exception as e:
             await self._handle_weather_error(ctx_or_interaction, city_name, str(e))
 
@@ -505,7 +539,8 @@ class InformationCommands(BaseCommands):
         logger.error(f"Error getting weather for {city_name}: {error_msg}")
         await self.send_response(
             ctx_or_interaction,
-            f"날씨 정보를 가져오는데 실패했습니다: {city_name}"
+            f"날씨 정보를 가져오는데 실패했습니다: {city_name}",
+            ephemeral=True
         )
 
     @discord.app_commands.command(name="exchange", description="환율 정보를 보여줍니다")
@@ -541,7 +576,15 @@ class InformationCommands(BaseCommands):
         currency: Optional[str] = None
     ) -> None:
         """Handle exchange rate request"""
+        processing_msg = None
         try:
+            # Show processing message
+            processing_msg = await self.send_response(
+                ctx_or_interaction,
+                "환율 정보를 가져오는 중...",
+                ephemeral=True
+            )
+
             rates = await self.api.exchange.get_exchange_rates()
             if currency:
                 await self._send_single_rate(ctx_or_interaction, currency.upper(), rates)
@@ -549,6 +592,9 @@ class InformationCommands(BaseCommands):
                 await self._send_all_rates(ctx_or_interaction, rates)
         except Exception as e:
             await self._handle_exchange_error(ctx_or_interaction, currency, str(e))
+        finally:
+            if processing_msg:
+                await processing_msg.delete()
 
     async def _send_single_rate(
         self, 
@@ -603,7 +649,8 @@ class InformationCommands(BaseCommands):
         logger.error(f"Error getting exchange rates: {error_msg}")
         await self.send_response(
             ctx_or_interaction,
-            "환율 정보를 가져오는데 실패했습니다"
+            "환율 정보를 가져오는데 실패했습니다",
+            ephemeral=True
         )
 
     @commands.command(
@@ -651,15 +698,17 @@ class InformationCommands(BaseCommands):
         if not game_name:
             await self.send_response(
                 ctx_or_interaction,
-                f"{user_name}님, 게임 이름을 입력해주세요"
+                f"{user_name}님, 게임 이름을 입력해주세요",
+                ephemeral=True
             )
             return
 
         try:
-            # Show processing message
+            # Show processing message (ephemeral)
             processing_msg = await self.send_response(
                 ctx_or_interaction,
-                f"{user_name}님, 차트 데이터를 가져오는 중..."
+                f"{user_name}님, 차트 데이터를 가져오는 중...",
+                ephemeral=True
             )
 
             # Get game data with history
@@ -710,12 +759,14 @@ class InformationCommands(BaseCommands):
                     logger.error(f"Failed to create chart: {e}")
                     await self.send_response(
                         ctx_or_interaction,
-                        f"{user_name}님, 차트 생성에 실패했습니다"
+                        f"{user_name}님, 차트 생성에 실패했습니다",
+                        ephemeral=True
                     )
             else:
                 await self.send_response(
                     ctx_or_interaction,
-                    f"{user_name}님, 플레이어 수 기록을 찾을 수 없습니다"
+                    f"{user_name}님, 플레이어 수 기록을 찾을 수 없습니다",
+                    ephemeral=True
                 )
 
         except Exception as e:
