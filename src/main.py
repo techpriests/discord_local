@@ -5,7 +5,7 @@ import os
 from typing import NoReturn, Dict
 
 import discord
-from src.services.api_service import APIService
+from src.services.api.service import APIService
 
 from src.bot import DiscordBot
 from src.commands import EntertainmentCommands, InformationCommands, SystemCommands
