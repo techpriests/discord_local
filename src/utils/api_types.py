@@ -4,7 +4,6 @@ class GameInfo(TypedDict):
     """Steam game information"""
     name: str  # Game name (Korean name if available, otherwise English name)
     player_count: int  # Current player count
-    peak_24h: int  # Peak players in last 24 hours
     image_url: Optional[str]  # Game image URL
 
 class CountryInfo(TypedDict):

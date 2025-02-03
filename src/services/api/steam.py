@@ -26,7 +26,6 @@ class SteamAPI(BaseAPI[GameInfo]):
         self._rate_limits = {
             "search": RateLimitConfig(30, 60),  # 30 requests per minute
             "player_count": RateLimitConfig(60, 60),  # 60 requests per minute
-            "store": RateLimitConfig(20, 60),  # 20 requests per minute for store page
             "details": RateLimitConfig(150, 300),  # 150 requests per 5 minutes
         }
 
@@ -167,7 +166,6 @@ class SteamAPI(BaseAPI[GameInfo]):
                     game_info = GameInfo(
                         name=search_item["name"],
                         player_count=current_players,
-                        peak_24h=0,  # Will be updated for best match
                         image_url=item.get("tiny_image") or item.get("large_capsule_image")
                     )
                     logger.debug(f"Created game info: {game_info}")
@@ -182,18 +180,6 @@ class SteamAPI(BaseAPI[GameInfo]):
 
             best_match = max(games, key=lambda g: g["player_count"])
             logger.info(f"Best match: {best_match['name']} with {best_match['player_count']} players")
-            
-            # Get peak data for best match only
-            try:
-                app_id = next(item["id"] for item in data["items"] if item.get("name") == best_match["name"] or 
-                            item.get("name_korean") == best_match["name"] or 
-                            item.get("korean_name") == best_match["name"])
-                history = await self.get_player_history(app_id, include_history)
-                best_match["peak_24h"] = history["peak_24h"]
-                logger.info(f"24h peak for best match {best_match['name']}: {best_match['peak_24h']}")
-            except Exception as e:
-                logger.error(f"Failed to get peak data for best match: {e}")
-                best_match["peak_24h"] = best_match["player_count"]  # Fallback to current player count
             
             other_games = [g for g in games if g != best_match]
             if other_games:
