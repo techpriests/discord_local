@@ -128,21 +128,18 @@ class BaseCommands(commands.Cog):
             ctx_or_interaction: Command context or interaction
 
         Returns:
-            str: Username (server nickname if available, otherwise Discord username)
+            str: Username (server display name if in a guild, otherwise Discord username)
         """
         if isinstance(ctx_or_interaction, discord.Interaction):
-            # For interactions, check if we're in a guild and get the member's nickname
+            # For interactions, check if we're in a guild and get the member's display name
             if ctx_or_interaction.guild:
                 member = ctx_or_interaction.guild.get_member(ctx_or_interaction.user.id)
-                if member and member.nick:
-                    return member.nick
+                if member:
+                    return member.display_name
             return ctx_or_interaction.user.name
         else:
-            # For context, check if author has a nickname
-            if ctx_or_interaction.guild:
-                if ctx_or_interaction.author.nick:
-                    return ctx_or_interaction.author.nick
-            return ctx_or_interaction.author.name
+            # For context, use author's display name
+            return ctx_or_interaction.author.display_name
 
     def get_user_id(self, ctx_or_interaction: CommandContext) -> int:
         """Get user ID from context or interaction

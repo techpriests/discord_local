@@ -98,9 +98,9 @@ class SteamAPI(BaseAPI[GameInfo]):
 
         Returns:
             Tuple containing:
-            - GameInfo or None: Best match game info (game with most players among top matches)
+            - GameInfo or None: Best match game info (game with most players)
             - float: Match similarity score (0-100)
-            - List[GameInfo] or None: Similar games list (always None)
+            - List[GameInfo] or None: Similar games list
 
         Raises:
             ValueError: If search fails
@@ -123,51 +123,44 @@ class SteamAPI(BaseAPI[GameInfo]):
             if not data or "items" not in data or not data["items"]:
                 return None, 0, None
 
-            # First, get player counts for all candidates to find the most active game
-            candidates = []
-            for item in data["items"][:5]:  # Only process top 5 matches
+            # Process all games up to 3 without filtering
+            games: List[GameInfo] = []
+            for i, item in enumerate(data["items"]):
                 try:
-                    app_id = item["id"]
-                    current_players = await self.get_player_count(app_id)
+                    current_players = await self.get_player_count(item["id"])
                     
-                    # Calculate match score
-                    similarity = 100.0 if item["name"].lower() == name.lower() else 50.0
+                    # Only get history for the first match
+                    peak_24h = 0
+                    if i == 0:
+                        history = await self.get_player_history(item["id"], include_history)
+                        peak_24h = history["peak_24h"]
                     
-                    # Only include games with players or exact name matches
-                    if current_players > 0 or similarity == 100.0:
-                        candidates.append((item, current_players, similarity))
-
+                    game_info = GameInfo(
+                        name=item["name"],
+                        player_count=current_players,
+                        peak_24h=peak_24h,
+                        image_url=item.get("tiny_image") or item.get("large_capsule_image")
+                    )
+                    games.append(game_info)
                 except Exception as e:
-                    logger.error(f"Error getting player count for {item.get('name', 'Unknown')}: {e}")
+                    logger.error(f"Error processing game {item.get('name', 'Unknown')}: {e}")
                     continue
 
-            if not candidates:
+                # Only process top 3 results
+                if len(games) >= 3:
+                    break
+
+            if not games:
                 return None, 0, None
 
-            # Sort by player count (primary) and similarity (secondary)
-            candidates.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            # Find the game with the most players
+            best_match = max(games, key=lambda g: g["player_count"])
+            other_games = [g for g in games if g != best_match]
             
-            # Only get history for the best match
-            best_item, current_players, similarity = candidates[0]
+            # Calculate similarity score for the best match
+            similarity = 100.0 if best_match["name"].lower() == name.lower() else 50.0
             
-            try:
-                history = await self.get_player_history(best_item["id"], include_history)
-                
-                game_info = GameInfo(
-                    name=best_item["name"],
-                    player_count=current_players,
-                    peak_24h=history["peak_24h"],
-                    peak_7d=history["peak_7d"],
-                    avg_7d=history["avg_7d"],
-                    history=history.get("history"),
-                    image_url=best_item.get("tiny_image") or best_item.get("large_capsule_image")
-                )
-                
-                return game_info, similarity, None
-
-            except Exception as e:
-                logger.error(f"Error getting history for {best_item.get('name', 'Unknown')}: {e}")
-                return None, 0, None
+            return best_match, similarity, other_games if other_games else None
 
         except Exception as e:
             logger.error(f"Error in find_game for query '{name}': {e}")
@@ -220,10 +213,7 @@ class SteamAPI(BaseAPI[GameInfo]):
         Returns:
             Dict containing:
             - peak_24h: Peak players in last 24 hours
-            - peak_7d: Peak players in last 7 days
-            - avg_7d: Average players in last 7 days
             - history: List of (timestamp, player_count) tuples (only if include_history=True)
-            - peak_all: All-time peak players (only if include_history=True)
 
         Raises:
             ValueError: If request fails
@@ -231,12 +221,9 @@ class SteamAPI(BaseAPI[GameInfo]):
         try:
             url = self.PLAYER_HISTORY_URL.format(app_id)
             
-            # For regular command, only get last 7 days of data
-            # For chart command, get full history
-            if not include_history:
-                # Add timestamp parameter to only get recent data
-                week_ago = int(time.time() - 7 * 24 * 3600)
-                url = f"{url}?from={week_ago}"
+            # Get last 24 hours of data
+            day_ago = int(time.time() - 24 * 3600)
+            url = f"{url}?from={day_ago}"
             
             data = await self._make_request(
                 url,
@@ -246,74 +233,29 @@ class SteamAPI(BaseAPI[GameInfo]):
             if not data:
                 return {
                     "peak_24h": 0,
-                    "peak_7d": 0,
-                    "avg_7d": 0.0,
-                    "history": [] if include_history else None,
-                    "peak_all": 0 if include_history else None
+                    "history": [] if include_history else None
                 }
 
-            # Data is returned as a list of [timestamp, player_count] pairs
-            now = time.time()
-            day_ago = now - 24 * 3600  # 24 hours ago
-            week_ago = now - 7 * 24 * 3600  # 7 days ago
-            
-            counts_7d = []
+            # Find peak in last 24 hours
             peak_24h = 0
-            peak_7d = 0
+            now = time.time()
+            day_ago = now - 24 * 3600
             
             # Process data in chronological order
-            for entry in sorted(data, key=lambda x: x[0]):  # Sort by timestamp
-                timestamp, count = entry
-                if count is None:
-                    continue
-                    
-                # Update peaks based on timestamp
-                if timestamp >= week_ago:
-                    counts_7d.append(count)
-                    peak_7d = max(peak_7d, count)
-                    
-                    if timestamp >= day_ago:
-                        peak_24h = max(peak_24h, count)
-
-            # Calculate 7-day average
-            avg_7d = sum(counts_7d) / len(counts_7d) if counts_7d else 0.0
-
-            # For chart command, include history data
-            if include_history:
-                three_months_ago = now - 90 * 24 * 3600
-                filtered_history = []
-                last_hour = 0
-                peak_all = 0
-                
-                for timestamp, count in sorted(data, key=lambda x: x[0]):
-                    if count is not None:
-                        peak_all = max(peak_all, count)
-                        
-                        if timestamp >= three_months_ago:
-                            current_hour = int(timestamp / 3600)
-                            if current_hour > last_hour:
-                                filtered_history.append((timestamp, count))
-                                last_hour = current_hour
-            else:
-                filtered_history = None
-                peak_all = None
+            for timestamp, count in sorted(data, key=lambda x: x[0]):
+                if count is not None and timestamp >= day_ago:
+                    peak_24h = max(peak_24h, count)
 
             return {
                 "peak_24h": peak_24h,
-                "peak_7d": peak_7d,
-                "avg_7d": avg_7d,
-                "history": filtered_history if include_history else None,
-                "peak_all": peak_all if include_history else None
+                "history": data if include_history else None
             }
 
         except Exception as e:
             logger.error(f"Error getting player history for app {app_id}: {e}")
             return {
                 "peak_24h": 0,
-                "peak_7d": 0,
-                "avg_7d": 0.0,
-                "history": [] if include_history else None,
-                "peak_all": 0 if include_history else None
+                "history": [] if include_history else None
             }
 
     async def close(self) -> None:

@@ -134,9 +134,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in population command"""
         logger.error(f"Error getting population for {country_name}: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            f"인구 정보를 가져오는데 실패했습니다: {country_name}",
+            f"{user_name}님, 인구 정보를 가져오는데 실패했습니다: {country_name}",
             ephemeral=True
         )
 
@@ -176,20 +177,19 @@ class InformationCommands(BaseCommands):
         """
         # Initialize processing_msg and user_name as None
         processing_msg = None
-        user_name = None
+        
+        # Get user's name first, before any other operations
+        user_name = self.get_user_name(ctx_or_interaction)
         
         try:
             # Validate game name
             if not game_name or len(game_name.strip()) < 2:
                 await self.send_response(
                     ctx_or_interaction,
-                    "게임 이름을 2글자 이상 입력해주세요...",
+                    f"{user_name}님, 게임 이름을 2글자 이상 입력해주세요...",
                     ephemeral=True
                 )
                 return
-
-            # Get user's name first, before any other operations
-            user_name = self.get_user_name(ctx_or_interaction)
             
             # Show processing message (ephemeral)
             processing_msg = await self.send_response(
@@ -201,7 +201,7 @@ class InformationCommands(BaseCommands):
             game, similarity, similar_games = await self.api.steam.find_game(game_name)
 
             if not game:
-                await self._send_game_not_found_embed(ctx_or_interaction, user_name or "사용자")
+                await self._send_game_not_found_embed(ctx_or_interaction, user_name)
                 return
 
             embed = await self._create_game_embed(game, similar_games, user_name)
@@ -209,7 +209,7 @@ class InformationCommands(BaseCommands):
 
         except Exception as e:
             logger.error(f"Error in steam command: {e}")
-            await self._send_steam_error_embed(ctx_or_interaction, user_name or "사용자")
+            await self._send_steam_error_embed(ctx_or_interaction, user_name)
         finally:
             if processing_msg:
                 try:
@@ -256,8 +256,6 @@ class InformationCommands(BaseCommands):
         if game.get("player_count") is not None:
             embed.add_field(name="현재 플레이어", value=f"{game['player_count']:,}명", inline=True)
             embed.add_field(name="24시간 최고", value=f"{game['peak_24h']:,}명", inline=True)
-            embed.add_field(name="7일 최고", value=f"{game['peak_7d']:,}명", inline=True)
-            embed.add_field(name="7일 평균", value=f"{game['avg_7d']:,.1f}명", inline=True)
 
         # Add game image if available
         if game.get("image_url"):
@@ -304,9 +302,10 @@ class InformationCommands(BaseCommands):
             ctx: Command context
             error: Cooldown error
         """
+        user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"명령어 사용 제한 중입니다. {error.retry_after:.1f}초 후에 다시 시도해주세요.",
+            f"{user_name}님, 명령어 사용 제한 중입니다. {error.retry_after:.1f}초 후에 다시 시도해주세요.",
             ephemeral=True
         )
 
@@ -316,9 +315,10 @@ class InformationCommands(BaseCommands):
         Args:
             ctx: Command context
         """
+        user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"필수 입력값이 누락되었습니다. `!!help {ctx.command}` 로 사용법을 확인해주세요.",
+            f"{user_name}님, 필수 입력값이 누락되었습니다. `!!help {ctx.command}` 로 사용법을 확인해주세요.",
             ephemeral=True
         )
 
@@ -330,8 +330,9 @@ class InformationCommands(BaseCommands):
             error: The unexpected error
         """
         logger.error(f"Unexpected error in {ctx.command}: {error}")
+        user_name = self.get_user_name(ctx)
         error_messages = [
-            "예상치 못한 오류가 발생했습니다.",
+            f"{user_name}님, 예상치 못한 오류가 발생했습니다.",
             "가능한 해결 방법:",
             "• 잠시 후 다시 시도",
             "• 명령어 사용법 확인 (`!!help` 명령어 사용)",
@@ -429,9 +430,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in time command"""
         logger.error(f"Error handling time for timezone {timezone}: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            "시간 정보를 처리하는데 실패했습니다",
+            f"{user_name}님, 시간 정보를 처리하는데 실패했습니다",
             ephemeral=True
         )
 
@@ -466,10 +468,13 @@ class InformationCommands(BaseCommands):
                     ephemeral=True
                 )
 
+            # Get user's name first
+            user_name = self.get_user_name(ctx_or_interaction)
+
             # Show processing message
             processing_msg = await self.send_response(
                 ctx_or_interaction,
-                "날씨 정보를 가져오는 중...",
+                f"{user_name}님, 날씨 정보를 가져오는 중...",
                 ephemeral=True
             )
 
@@ -517,9 +522,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in weather command"""
         logger.error(f"Error getting weather for {city_name}: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            f"날씨 정보를 가져오는데 실패했습니다: {city_name}",
+            f"{user_name}님, 날씨 정보를 가져오는데 실패했습니다: {city_name}",
             ephemeral=True
         )
 
@@ -627,9 +633,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in exchange rate command"""
         logger.error(f"Error getting exchange rates: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            "환율 정보를 가져오는데 실패했습니다",
+            f"{user_name}님, 환율 정보를 가져오는데 실패했습니다",
             ephemeral=True
         )
 
@@ -721,16 +728,6 @@ class InformationCommands(BaseCommands):
                     embed.add_field(
                         name="24시간 최고",
                         value=f"{game['peak_24h']:,}명",
-                        inline=True
-                    )
-                    embed.add_field(
-                        name="7일 최고",
-                        value=f"{game['peak_7d']:,}명",
-                        inline=True
-                    )
-                    embed.add_field(
-                        name="역대 최고",
-                        value=f"{game['peak_all']:,}명",
                         inline=True
                     )
                     
