@@ -34,10 +34,10 @@ class TestBotBasic:
         assert presence_call is not None
         kwargs = presence_call.kwargs
         assert isinstance(kwargs.get('activity'), discord.Game)
-        # Check that status contains help commands and version info
+        # Check that status contains help commands and commit SHA
         status_name = kwargs['activity'].name
-        assert status_name.startswith("!!help | /help | v")
-        assert "1.0.0-" in status_name  # Check version number
+        assert status_name.startswith("!!help | /help | ")  # Should start with help commands
+        assert len(status_name.split(" | ")) == 3  # Should have three parts separated by |
     
     async def test_bot_help_command(self, bot, mock_context):
         """Test help command"""

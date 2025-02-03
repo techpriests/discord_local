@@ -33,13 +33,17 @@ Same functionality as slash commands with prefix `!!`
 ### Setup
 1. Clone repository
 2. Create `.env` file with:
-   ```
+   ```bash
+   # Required API keys
    DISCORD_TOKEN=your_token_here
    STEAM_API_KEY=your_key_here
    WEATHER_API_KEY=your_key_here
-   GIT_COMMIT=$(git rev-parse --short HEAD)
-   GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+   
+   # For local development, run these commands:
+   # echo "GIT_COMMIT=$(git rev-parse --short HEAD)" >> .env
+   # echo "GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)" >> .env
    ```
+   Note: In CI/CD, Git information is handled automatically.
 3. Install dependencies: `pip install -e .`
 4. Run with Docker: `docker-compose up -d`
 

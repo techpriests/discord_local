@@ -57,14 +57,17 @@ jobs:
           # Deploy application
           cd ~/discord_local
           git pull origin main
-          echo "Current commit:"
-          git rev-parse HEAD
-          git status
+          
+          # Set Git environment variables
+          export GIT_COMMIT=$(git rev-parse --short HEAD)
+          export GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
           
           # Use environment variables in docker-compose
           echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
           echo "STEAM_API_KEY=${{ secrets.STEAM_API_KEY }}" >> .env
           echo "WEATHER_API_KEY=${{ secrets.WEATHER_API_KEY }}" >> .env
+          echo "GIT_COMMIT=$GIT_COMMIT" >> .env
+          echo "GIT_BRANCH=$GIT_BRANCH" >> .env
           
           # Stop the current containers
           docker-compose down
