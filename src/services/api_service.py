@@ -24,7 +24,9 @@ class APIService:
         """
         try:
             self._steam_api = SteamAPI(self._get_required_key(config, "STEAM_API_KEY"))
-            self._weather_api = WeatherAPI(self._get_required_key(config, "WEATHER_API_KEY"))
+            # Make weather API optional
+            weather_api_key = config.get("WEATHER_API_KEY", "")
+            self._weather_api = WeatherAPI(weather_api_key) if weather_api_key else None
             self._population_api = PopulationAPI()
             self._exchange_api = ExchangeAPI()
         except KeyError as e:
@@ -51,6 +53,20 @@ class APIService:
             raise KeyError(f"{key} is required")
         return value
 
+    @property
+    def weather(self) -> WeatherAPI:
+        """Get weather API client
+        
+        Returns:
+            WeatherAPI: Weather API client
+            
+        Raises:
+            ValueError: If weather API is not initialized
+        """
+        if not self._weather_api:
+            raise ValueError("Weather API is not available - API key not provided")
+        return self._weather_api
+
     async def initialize(self) -> None:
         """Initialize all API clients
 
@@ -59,7 +75,8 @@ class APIService:
         """
         try:
             await self._steam_api.initialize()
-            await self._weather_api.initialize()
+            if self._weather_api:
+                await self._weather_api.initialize()
             await self._population_api.initialize()
             await self._exchange_api.initialize()
         except Exception as e:
@@ -73,17 +90,23 @@ class APIService:
             bool: True if all credentials are valid
         """
         try:
-            results = await asyncio.gather(
+            apis_to_validate = [
                 self._steam_api.validate_credentials(),
-                self._weather_api.validate_credentials(),
                 self._population_api.validate_credentials(),
                 self._exchange_api.validate_credentials(),
-                return_exceptions=True,
-            )
+            ]
+            
+            # Only validate weather API if it's initialized
+            if self._weather_api:
+                apis_to_validate.append(self._weather_api.validate_credentials())
+
+            results = await asyncio.gather(*apis_to_validate, return_exceptions=True)
 
             for i, result in enumerate(results):
                 if isinstance(result, Exception):
-                    api_names = ["Steam", "Weather", "Population", "Exchange"]
+                    api_names = ["Steam", "Population", "Exchange"]
+                    if self._weather_api:
+                        api_names.insert(1, "Weather")
                     logger.error(f"{api_names[i]} API validation failed: {result}")
                     return False
                 if not result:
