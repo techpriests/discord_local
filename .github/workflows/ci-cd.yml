@@ -66,6 +66,23 @@ jobs:
           echo "STEAM_API_KEY=${{ secrets.STEAM_API_KEY }}" >> .env
           echo "WEATHER_API_KEY=${{ secrets.WEATHER_API_KEY }}" >> .env
           
+          # Stop the current containers
           docker-compose down
+          
+          # Clean up old resources related to our bot only
+          # Remove old bot images, keeping the ones from last 24h
+          docker images "discord_local_bot" -q | xargs -r docker rmi 2>/dev/null || true
+          # Remove dangling images created by our bot's builds
+          docker images -f "dangling=true" -f "label=com.docker.compose.project=discord_local" -q | xargs -r docker rmi 2>/dev/null || true
+          # Remove stopped containers related to our bot
+          docker ps -a -f "name=discord_local" -f "status=exited" -q | xargs -r docker rm 2>/dev/null || true
+          # Remove unused networks created by our bot
+          docker network ls -f "name=discord_local" -f "dangling=true" -q | xargs -r docker network rm 2>/dev/null || true
+          
+          # Build and start new containers
           docker-compose build
-          docker-compose up -d 
+          docker-compose up -d
+          
+          # After successful deployment, remove old images
+          # This removes images that aren't used by any container
+          docker image prune -a --force --filter "until=24h" 
