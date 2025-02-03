@@ -8,10 +8,10 @@ import asyncio
 
 async def main():
     # Initialize services
-    api_service = APIService(
-        steam_key=STEAM_KEY,
-        weather_key=WEATHER_API_KEY
-    )
+    api_service = APIService({
+        "STEAM_API_KEY": STEAM_KEY,
+        "WEATHER_API_KEY": WEATHER_API_KEY
+    })
     
     # Initialize bot
     bot = DiscordBot()
