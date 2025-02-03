@@ -59,9 +59,9 @@ jobs:
           git pull origin main
           
           # Use environment variables in docker-compose
-          echo "DISCORD_BOT_TOKEN='${{ secrets.DISCORD_TOKEN }}'" > .env
-          echo "STEAM_API_KEY='${{ secrets.STEAM_API_KEY }}'" >> .env
-          echo "OPENWEATHER_API_KEY='${{ secrets.WEATHER_API_KEY }}'" >> .env
+          echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
+          echo "STEAM_API_KEY=${{ secrets.STEAM_API_KEY }}" >> .env
+          echo "WEATHER_API_KEY=${{ secrets.WEATHER_API_KEY }}" >> .env
           
           docker-compose down
           docker-compose build
