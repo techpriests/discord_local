@@ -12,11 +12,14 @@ COPY pyproject.toml poetry.lock ./
 RUN pip install --no-cache-dir --root-user-action=ignore build && \
     pip install --no-cache-dir --root-user-action=ignore poetry && \
     poetry config virtualenvs.create false && \
-    poetry install --only main --no-interaction --no-ansi
+    poetry install --only main --no-root --no-interaction --no-ansi
 
 # Copy the source code
 # This layer will only rebuild when code changes
 COPY src/ ./src/
+
+# Install our project
+RUN poetry install --only-root
 
 # Run the bot
 CMD ["python", "-m", "src.main"] 
