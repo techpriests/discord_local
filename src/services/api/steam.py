@@ -251,37 +251,47 @@ class SteamAPI(BaseAPI[GameInfo]):
             now = time.time()
             day_ago = now - 24 * 3600  # 24 hours ago
             week_ago = now - 7 * 24 * 3600  # 7 days ago
-            three_months_ago = now - 90 * 24 * 3600  # 90 days ago
             
             counts_7d = []
             peak_24h = 0
             peak_7d = 0
-            peak_all = 0 if include_history else None
             
-            # For history, keep hourly data points from last 3 months
-            filtered_history = []
-            last_hour = 0
-            
-            for entry in data:
+            # Process data in chronological order
+            for entry in sorted(data, key=lambda x: x[0]):  # Sort by timestamp
                 timestamp, count = entry
-                if count is not None:
-                    if include_history:
-                        peak_all = max(peak_all, count)  # Track all-time peak only for chart command
+                if count is None:
+                    continue
                     
-                    if timestamp >= week_ago:
-                        counts_7d.append(count)
-                        peak_7d = max(peak_7d, count)
-                        if timestamp >= day_ago:
-                            peak_24h = max(peak_24h, count)
-                
-                # If including history, filter to hourly points for last 3 months
-                if include_history and timestamp >= three_months_ago:
-                    current_hour = int(timestamp / 3600)
-                    if current_hour > last_hour:  # Only keep one point per hour
-                        filtered_history.append((timestamp, count))
-                        last_hour = current_hour
+                # Update peaks based on timestamp
+                if timestamp >= week_ago:
+                    counts_7d.append(count)
+                    peak_7d = max(peak_7d, count)
+                    
+                    if timestamp >= day_ago:
+                        peak_24h = max(peak_24h, count)
 
+            # Calculate 7-day average
             avg_7d = sum(counts_7d) / len(counts_7d) if counts_7d else 0.0
+
+            # For chart command, include history data
+            if include_history:
+                three_months_ago = now - 90 * 24 * 3600
+                filtered_history = []
+                last_hour = 0
+                peak_all = 0
+                
+                for timestamp, count in sorted(data, key=lambda x: x[0]):
+                    if count is not None:
+                        peak_all = max(peak_all, count)
+                        
+                        if timestamp >= three_months_ago:
+                            current_hour = int(timestamp / 3600)
+                            if current_hour > last_hour:
+                                filtered_history.append((timestamp, count))
+                                last_hour = current_hour
+            else:
+                filtered_history = None
+                peak_all = None
 
             return {
                 "peak_24h": peak_24h,
