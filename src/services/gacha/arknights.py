@@ -1,3 +1,4 @@
+import numpy as np
 from typing import Dict, Tuple
 
 class ArknightsGachaCalculator:
@@ -9,13 +10,18 @@ class ArknightsGachaCalculator:
     PITY_INCREASE_PER_PULL = 0.02  # 2% increase per pull after pity starts
     RATE_UP_CHANCE = 0.5  # Rate up operator has 50% chance when getting 6*
     LIMITED_RATE_UP_CHANCE = 0.35  # Limited operator has 35% chance when getting 6*
+    MAX_PITY = 99  # Maximum pity state (guaranteed 6★)
     
     # Resource conversion rates
     ORUNDUM_PER_PULL = 600
     ORIGINIUM_TO_ORUNDUM = 180  # 1 Originite Prime = 180 Orundum
     
-    @staticmethod
+    def __init__(self) -> None:
+        """Initialize calculator with pre-computed rates"""
+        self.rates = np.array([self._calculate_single_pull_rate(i) for i in range(self.MAX_PITY + 1)])
+
     def calculate_pulls_from_resources(
+        self,
         orundum: int = 0,
         originite: int = 0,
         permits: int = 0
@@ -35,9 +41,9 @@ class ArknightsGachaCalculator:
                 'from_permits': Pulls from permits
         """
         # Calculate pulls from each source
-        pulls_from_orundum = orundum // ArknightsGachaCalculator.ORUNDUM_PER_PULL
-        orundum_from_originite = originite * ArknightsGachaCalculator.ORIGINIUM_TO_ORUNDUM
-        pulls_from_originite = orundum_from_originite // ArknightsGachaCalculator.ORUNDUM_PER_PULL
+        pulls_from_orundum = orundum // self.ORUNDUM_PER_PULL
+        orundum_from_originite = originite * self.ORIGINIUM_TO_ORUNDUM
+        pulls_from_originite = orundum_from_originite // self.ORUNDUM_PER_PULL
         
         total_pulls = pulls_from_orundum + pulls_from_originite + permits
         
@@ -48,8 +54,7 @@ class ArknightsGachaCalculator:
             'from_permits': permits
         }
     
-    @staticmethod
-    def calculate_single_pull_rate(pulls_without_6star: int) -> float:
+    def _calculate_single_pull_rate(self, pulls_without_6star: int) -> float:
         """Calculate the rate for a single pull based on pity
         
         Args:
@@ -58,12 +63,16 @@ class ArknightsGachaCalculator:
         Returns:
             float: Probability of getting a 6 star on next pull
         """
-        if pulls_without_6star < ArknightsGachaCalculator.PITY_START:
-            return ArknightsGachaCalculator.BASE_6_STAR_RATE
+        # Guaranteed 6★ at 99 pity
+        if pulls_without_6star >= 99:
+            return 1.0
             
-        increased_rate = ArknightsGachaCalculator.BASE_6_STAR_RATE + \
-            (pulls_without_6star - ArknightsGachaCalculator.PITY_START) * \
-            ArknightsGachaCalculator.PITY_INCREASE_PER_PULL
+        if pulls_without_6star < self.PITY_START:
+            return self.BASE_6_STAR_RATE
+            
+        increased_rate = self.BASE_6_STAR_RATE + \
+            (pulls_without_6star - self.PITY_START) * \
+            self.PITY_INCREASE_PER_PULL
         
         return min(increased_rate, 1.0)  # Cap at 100%
 
@@ -122,10 +131,9 @@ class ArknightsGachaCalculator:
             matrix.append(row)
         return matrix
 
-    @staticmethod
-    def calculate_banner_probability(pulls: int, is_limited: bool = False) -> Dict[str, float]:
+    def calculate_banner_probability(self, pulls: int, is_limited: bool = False) -> Dict[str, float]:
         """Calculate probability of getting desired rate-up operator in X pulls
-        using Markov chain approach
+        using optimized NumPy operations
         
         Args:
             pulls: Number of pulls to calculate for
@@ -137,42 +145,43 @@ class ArknightsGachaCalculator:
                 'expected_6stars': Expected number of 6* operators
                 'expected_target': Expected number of target operator
         """
-        rate_up_chance = ArknightsGachaCalculator.LIMITED_RATE_UP_CHANCE if is_limited else ArknightsGachaCalculator.RATE_UP_CHANCE
+        rate_up_chance = self.LIMITED_RATE_UP_CHANCE if is_limited else self.RATE_UP_CHANCE
         
-        # Get transition matrix
-        transition = ArknightsGachaCalculator.calculate_transition_matrix()
-        
-        # Initial state distribution (start at pity 0)
-        state = [0.0] * len(transition)
-        state[0] = 1.0
+        # Initialize state vector (start at pity 0)
+        current_state = np.zeros(self.MAX_PITY + 1)
+        current_state[0] = 1.0
         
         # Variables to track
-        expected_6stars = 0.0
+        total_6star_prob = 0.0
+        expected_target = 0.0
         prob_no_target = 1.0
         
         # For each pull
         for _ in range(pulls):
-            # Calculate probabilities for this pull
-            new_state = [0.0] * len(transition)
-            for curr_state in range(len(transition)):
-                if state[curr_state] > 0.001:  # Optimization: skip negligible states
-                    # Get 6★ probability directly from transition matrix
-                    prob_6star = state[curr_state] * transition[curr_state][0]
-                    expected_6stars += prob_6star
-                    # Update probability of not getting target
-                    prob_no_target *= (1 - (prob_6star * rate_up_chance))
-                    
-                    # Update next state
-                    for next_state in range(len(transition)):
-                        new_state[next_state] += state[curr_state] * transition[curr_state][next_state]
-            state = new_state
-        
-        # Calculate final probabilities
-        probability = 1 - prob_no_target
-        expected_target = expected_6stars * rate_up_chance
+            # Calculate success probabilities for current state
+            success_probs = current_state * self.rates
+            total_success = np.sum(success_probs)
+            
+            # Update tracking variables
+            total_6star_prob += total_success
+            expected_target += total_success * rate_up_chance
+            prob_no_target *= (1 - total_success * rate_up_chance)
+            
+            # Calculate next state
+            # First, shift all states that didn't get 6★
+            shifted = np.roll(current_state * (1 - self.rates), 1)
+            shifted[0] = 0  # Clear shifted value at 0
+            
+            # Then update new state
+            new_state = shifted.copy()
+            new_state[0] += total_success  # Add all successful pulls to state 0
+            new_state[0] += new_state[self.MAX_PITY]  # Add guaranteed pulls from max pity
+            new_state[self.MAX_PITY] = 0  # Clear max pity state
+            
+            current_state = new_state
         
         return {
-            'probability': probability,
-            'expected_6stars': expected_6stars,
+            'probability': 1 - prob_no_target,
+            'expected_6stars': total_6star_prob,
             'expected_target': expected_target
         } 
