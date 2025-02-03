@@ -134,9 +134,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in population command"""
         logger.error(f"Error getting population for {country_name}: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            f"인구 정보를 가져오는데 실패했습니다: {country_name}",
+            f"{user_name}님, 인구 정보를 가져오는데 실패했습니다: {country_name}",
             ephemeral=True
         )
 
@@ -302,9 +303,10 @@ class InformationCommands(BaseCommands):
             ctx: Command context
             error: Cooldown error
         """
+        user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"명령어 사용 제한 중입니다. {error.retry_after:.1f}초 후에 다시 시도해주세요.",
+            f"{user_name}님, 명령어 사용 제한 중입니다. {error.retry_after:.1f}초 후에 다시 시도해주세요.",
             ephemeral=True
         )
 
@@ -314,9 +316,10 @@ class InformationCommands(BaseCommands):
         Args:
             ctx: Command context
         """
+        user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"필수 입력값이 누락되었습니다. `!!help {ctx.command}` 로 사용법을 확인해주세요.",
+            f"{user_name}님, 필수 입력값이 누락되었습니다. `!!help {ctx.command}` 로 사용법을 확인해주세요.",
             ephemeral=True
         )
 
@@ -328,8 +331,9 @@ class InformationCommands(BaseCommands):
             error: The unexpected error
         """
         logger.error(f"Unexpected error in {ctx.command}: {error}")
+        user_name = self.get_user_name(ctx)
         error_messages = [
-            "예상치 못한 오류가 발생했습니다.",
+            f"{user_name}님, 예상치 못한 오류가 발생했습니다.",
             "가능한 해결 방법:",
             "• 잠시 후 다시 시도",
             "• 명령어 사용법 확인 (`!!help` 명령어 사용)",
@@ -427,9 +431,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in time command"""
         logger.error(f"Error handling time for timezone {timezone}: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            "시간 정보를 처리하는데 실패했습니다",
+            f"{user_name}님, 시간 정보를 처리하는데 실패했습니다",
             ephemeral=True
         )
 
@@ -629,9 +634,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in exchange rate command"""
         logger.error(f"Error getting exchange rates: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            "환율 정보를 가져오는데 실패했습니다",
+            f"{user_name}님, 환율 정보를 가져오는데 실패했습니다",
             ephemeral=True
         )
 
