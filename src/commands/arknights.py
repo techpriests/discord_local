@@ -120,7 +120,6 @@ class ArknightsCommands(BaseCommands):
             embed.add_field(
                 name="뽑기 정보",
                 value=f"계획 뽑기 횟수: {pulls}회\n"
-                      f"시작 피티: 0\n"
                       f"배너 종류: {banner_type} ({banner_rate} 확률)",
                 inline=False
             )
@@ -134,14 +133,6 @@ class ArknightsCommands(BaseCommands):
                 value=f"픽업 오퍼레이터를 얻을 확률: {prob_percent:.1f}%\n"
                       f"예상 6성 획득 횟수: {expected_6stars:.1f}회\n"
                       f"예상 픽업 오퍼레이터 획득 횟수: {expected_target:.2f}회",
-                inline=False
-            )
-
-            # Add first pull rate info
-            first_pull_rate = self.calculator.calculate_single_pull_rate(0)
-            embed.add_field(
-                name="첫 뽑기 6성 확률",
-                value=f"{first_pull_rate*100:.1f}%",
                 inline=False
             )
 
