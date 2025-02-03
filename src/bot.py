@@ -16,6 +16,7 @@ from src.commands.base_commands import BaseCommands
 from src.commands.information import InformationCommands
 from src.commands.entertainment import EntertainmentCommands
 from src.commands.system import SystemCommands
+from src.commands.arknights import ArknightsCommands
 from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
@@ -64,7 +65,8 @@ class DiscordBot(commands.Bot):
         self._command_classes: List[Type[BaseCommands]] = [
             InformationCommands,
             EntertainmentCommands,
-            SystemCommands
+            SystemCommands,
+            ArknightsCommands
         ]
         self.memory_db: Optional[MemoryDB] = None
         self.version_info: VersionInfo = get_git_info()
