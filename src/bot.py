@@ -42,11 +42,12 @@ HELP_DESCRIPTION = """
 class DiscordBot(commands.Bot):
     """Main bot class handling commands and events"""
 
-    def __init__(self, config: Dict[str, str]) -> None:
+    def __init__(self, config: Dict[str, str], api_service: Optional[APIService] = None) -> None:
         """Initialize bot
         
         Args:
             config: Configuration dictionary containing API keys
+            api_service: Optional APIService instance. If not provided, one will be created.
         """
         intents = discord.Intents.default()
         intents.message_content = True
@@ -57,7 +58,7 @@ class DiscordBot(commands.Bot):
         )
 
         self._config = config
-        self._api_service: Optional[APIService] = None
+        self._api_service = api_service
         self._command_classes: List[Type[BaseCommands]] = [
             InformationCommands,
             EntertainmentCommands
@@ -82,8 +83,9 @@ class DiscordBot(commands.Bot):
         """Set up bot hooks and initialize services"""
         try:
             self.memory_db = MemoryDB()
-            self._api_service = APIService(self._config)
-            await self._api_service.initialize()
+            if not self._api_service:
+                self._api_service = APIService(self._config)
+                await self._api_service.initialize()
             await self._register_commands()
         except Exception as e:
             logger.error(f"Failed to setup bot: {e}")
