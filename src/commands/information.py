@@ -199,30 +199,42 @@ class InformationCommands(BaseCommands):
             ValueError: If game not found or API error
         """
         try:
+            # Get user's name
+            user_name = self.get_user_name(ctx_or_interaction)
+            
+            # Show processing message
+            processing_msg = await self.send_response(
+                ctx_or_interaction,
+                f"{user_name}님, 게임 정보를 가져오는 중..."
+            )
+
             game, similarity, similar_games = await self.api.steam.find_game(game_name)
 
             if not game:
-                await self._send_game_not_found_embed(ctx_or_interaction)
+                await self._send_game_not_found_embed(ctx_or_interaction, user_name)
                 return
 
-            embed, chart_file = await self._create_game_embed(game, similar_games)
-            
-            # Send response with chart if available
-            if chart_file:
-                await self.send_response(ctx_or_interaction, embed=embed, file=chart_file)
-            else:
-                await self.send_response(ctx_or_interaction, embed=embed)
+            embed = await self._create_game_embed(game, similar_games)
+            await self.send_response(ctx_or_interaction, embed=embed)
 
         except Exception:
-            await self._send_steam_error_embed(ctx_or_interaction)
+            await self._send_steam_error_embed(ctx_or_interaction, user_name)
+        finally:
+            if processing_msg:
+                await processing_msg.delete()
 
-    async def _send_game_not_found_embed(self, ctx_or_interaction):
+    async def _send_game_not_found_embed(self, ctx_or_interaction, user_name: str):
         """Send embed for game not found error
 
         Args:
             ctx_or_interaction: Command context or interaction
+            user_name: Name of the user who issued the command
         """
-        embed = discord.Embed(title="❌ 게임을 찾을 수 없습니다", color=ERROR_COLOR)
+        embed = discord.Embed(
+            title="❌ 게임을 찾을 수 없습니다", 
+            description=f"{user_name}님, 입력하신 게임을 찾을 수 없습니다.",
+            color=ERROR_COLOR
+        )
         await self.send_response(ctx_or_interaction, embed=embed)
 
     async def _create_game_embed(
@@ -247,14 +259,17 @@ class InformationCommands(BaseCommands):
 
         return embed
 
-    async def _send_steam_error_embed(self, ctx_or_interaction):
+    async def _send_steam_error_embed(self, ctx_or_interaction, user_name: str):
         """Send embed for Steam API error
 
         Args:
             ctx_or_interaction: Command context or interaction
+            user_name: Name of the user who issued the command
         """
         embed = discord.Embed(
-            title="❌ 오류", description="게임 정보를 가져오는데 실패했습니다.", color=ERROR_COLOR
+            title="❌ 오류", 
+            description=f"{user_name}님, 게임 정보를 가져오는데 실패했습니다.", 
+            color=ERROR_COLOR
         )
         await self.send_response(ctx_or_interaction, embed=embed)
 
@@ -605,10 +620,13 @@ class InformationCommands(BaseCommands):
             ctx_or_interaction: Command context or interaction
             game_name: Name of the game to search for
         """
+        # Get user's name
+        user_name = self.get_user_name(ctx_or_interaction)
+        
         if not game_name:
             await self.send_response(
                 ctx_or_interaction,
-                "게임 이름을 입력해주세요"
+                f"{user_name}님, 게임 이름을 입력해주세요"
             )
             return
 
@@ -616,14 +634,14 @@ class InformationCommands(BaseCommands):
             # Show processing message
             processing_msg = await self.send_response(
                 ctx_or_interaction,
-                "차트 데이터를 가져오는 중..."
+                f"{user_name}님, 차트 데이터를 가져오는 중..."
             )
 
             # Get game data with history
             game, similarity, _ = await self.api.steam.find_game(game_name, include_history=True)
 
             if not game:
-                await self._send_game_not_found_embed(ctx_or_interaction)
+                await self._send_game_not_found_embed(ctx_or_interaction, user_name)
                 return
 
             # Create chart
@@ -635,6 +653,7 @@ class InformationCommands(BaseCommands):
                     # Create embed with chart
                     embed = discord.Embed(
                         title=f"🎮 {game['name']} - 플레이어 수 추이 (최근 3개월)",
+                        description=f"{user_name}님이 요청하신 게임의 플레이어 수 차트입니다.",
                         color=SUCCESS_COLOR
                     )
                     embed.set_image(url="attachment://player_count.png")
@@ -666,17 +685,17 @@ class InformationCommands(BaseCommands):
                     logger.error(f"Failed to create chart: {e}")
                     await self.send_response(
                         ctx_or_interaction,
-                        "차트 생성에 실패했습니다"
+                        f"{user_name}님, 차트 생성에 실패했습니다"
                     )
             else:
                 await self.send_response(
                     ctx_or_interaction,
-                    "플레이어 수 기록을 찾을 수 없습니다"
+                    f"{user_name}님, 플레이어 수 기록을 찾을 수 없습니다"
                 )
 
         except Exception as e:
             logger.error(f"Error in steam chart command: {e}")
-            await self._send_steam_error_embed(ctx_or_interaction)
+            await self._send_steam_error_embed(ctx_or_interaction, user_name)
         finally:
             if processing_msg:
                 await processing_msg.delete()
