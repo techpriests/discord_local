@@ -19,12 +19,10 @@ async def main():
     bot = DiscordBot(config)
     
     try:
-        # Load cogs
-        await bot.load_cogs([
-            EntertainmentCommands(),
-            InformationCommands(api_service),
-            SystemCommands(bot.bot)
-        ], api_service)
+        # Add cogs
+        await bot.add_cog(EntertainmentCommands())
+        await bot.add_cog(InformationCommands(api_service))
+        await bot.add_cog(SystemCommands(bot.bot))
         
         # Run bot
         await bot.start(os.getenv("DISCORD_TOKEN"))
