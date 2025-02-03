@@ -177,20 +177,19 @@ class InformationCommands(BaseCommands):
         """
         # Initialize processing_msg and user_name as None
         processing_msg = None
-        user_name = None
+        
+        # Get user's name first, before any other operations
+        user_name = self.get_user_name(ctx_or_interaction)
         
         try:
             # Validate game name
             if not game_name or len(game_name.strip()) < 2:
                 await self.send_response(
                     ctx_or_interaction,
-                    "게임 이름을 2글자 이상 입력해주세요...",
+                    f"{user_name}님, 게임 이름을 2글자 이상 입력해주세요...",
                     ephemeral=True
                 )
                 return
-
-            # Get user's name first, before any other operations
-            user_name = self.get_user_name(ctx_or_interaction)
             
             # Show processing message (ephemeral)
             processing_msg = await self.send_response(
@@ -202,7 +201,7 @@ class InformationCommands(BaseCommands):
             game, similarity, similar_games = await self.api.steam.find_game(game_name)
 
             if not game:
-                await self._send_game_not_found_embed(ctx_or_interaction, user_name or "사용자")
+                await self._send_game_not_found_embed(ctx_or_interaction, user_name)
                 return
 
             embed = await self._create_game_embed(game, similar_games, user_name)
@@ -210,7 +209,7 @@ class InformationCommands(BaseCommands):
 
         except Exception as e:
             logger.error(f"Error in steam command: {e}")
-            await self._send_steam_error_embed(ctx_or_interaction, user_name or "사용자")
+            await self._send_steam_error_embed(ctx_or_interaction, user_name)
         finally:
             if processing_msg:
                 try:
