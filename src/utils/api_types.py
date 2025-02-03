@@ -4,10 +4,7 @@ class GameInfo(TypedDict):
     name: str
     player_count: int
     peak_24h: int
-    peak_7d: int
-    avg_7d: float
     image_url: Optional[str]
-    history: Optional[List[Tuple[float, int]]]
 
 class CountryInfo(TypedDict):
     name: Dict[str, str]
