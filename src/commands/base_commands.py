@@ -39,23 +39,33 @@ class BaseCommands(commands.Cog):
             discord.HTTPException: If sending message fails
         """
         try:
+            # Create default embed with description if none provided
+            if not embed:
+                embed = discord.Embed(description=message or "No message provided")
+                message = None  # Clear message since we moved it to embed description
+
+            # Ensure embed has a description
+            if not embed.description:
+                embed.description = message or "No message provided"
+                message = None  # Clear message since we moved it to embed description
+
             if isinstance(ctx_or_interaction, discord.Interaction):
                 if ctx_or_interaction.response.is_done():
                     await ctx_or_interaction.followup.send(
-                        content=message or "",
-                        embed=embed or discord.Embed(),
+                        content=message,  # This might be None now
+                        embed=embed,
                         ephemeral=ephemeral
                     )
                 else:
                     await ctx_or_interaction.response.send_message(
-                        content=message or "",
-                        embed=embed or discord.Embed(),
+                        content=message,  # This might be None now
+                        embed=embed,
                         ephemeral=ephemeral
                     )
             else:
                 await ctx_or_interaction.send(
-                    content=message or "",
-                    embed=embed or discord.Embed()
+                    content=message,  # This might be None now
+                    embed=embed
                 )
         except Exception as e:
             logger.error(f"Error sending response: {e}")
