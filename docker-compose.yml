@@ -2,7 +2,13 @@ version: '3.8'
 
 services:
   bot:
-    build: .
+    build:
+      context: .
+      args:
+        - GIT_COMMIT=$(git rev-parse --short HEAD)
+        - GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+    env_file:
+      - .env
     container_name: discord_bot
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
@@ -10,6 +16,7 @@ services:
       - STEAM_API_KEY=${STEAM_API_KEY}
     volumes:
       - ./data:/app/data
+      - .:/app
     restart: unless-stopped
     logging:
       driver: "json-file"

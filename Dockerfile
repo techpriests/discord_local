@@ -1,25 +1,34 @@
-# Use an official Python runtime as a parent image
+# Use Python 3.12 slim image
 FROM python:3.12-slim
 
-# Set the working directory in the container
+# Set working directory
 WORKDIR /app
 
-# Copy dependency files first
+# Install system dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install poetry
+RUN pip install poetry
+
+# Copy project files
 COPY pyproject.toml poetry.lock ./
+COPY src ./src/
 
-# Install dependencies in a separate layer
-# This layer will be cached unless pyproject.toml or poetry.lock changes
-RUN pip install --no-cache-dir --root-user-action=ignore build && \
-    pip install --no-cache-dir --root-user-action=ignore poetry && \
-    poetry config virtualenvs.create false && \
-    poetry install --only main --no-root --no-interaction --no-ansi
+# Install dependencies
+RUN poetry config virtualenvs.create false && \
+    poetry install --no-dev --no-interaction --no-ansi
 
-# Copy the source code
-# This layer will only rebuild when code changes
-COPY src/ ./src/
+# Add version labels
+ARG GIT_COMMIT
+ARG GIT_BRANCH
+LABEL org.opencontainers.image.revision=$GIT_COMMIT \
+      org.opencontainers.image.version="1.0.0" \
+      org.opencontainers.image.source="https://github.com/techpriests/discord_local" \
+      git.commit=$GIT_COMMIT \
+      git.branch=$GIT_BRANCH
 
-# Install our project
-RUN poetry install --only-root
-
-# Run the bot
-CMD ["python", "-m", "src.main"] 
+# Run bot
+CMD ["python", "-m", "src"] 
