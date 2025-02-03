@@ -37,4 +37,4 @@ ENV GIT_COMMIT=$GIT_COMMIT \
     GIT_MAIN_COMMIT=$GIT_MAIN_COMMIT
 
 # Run bot
-CMD ["python", "-m", "src"] 
+CMD ["python", "src/main.py"] 
