@@ -464,10 +464,13 @@ class InformationCommands(BaseCommands):
                     ephemeral=True
                 )
 
+            # Get user's name first
+            user_name = self.get_user_name(ctx_or_interaction)
+
             # Show processing message
             processing_msg = await self.send_response(
                 ctx_or_interaction,
-                "날씨 정보를 가져오는 중...",
+                f"{user_name}님, 날씨 정보를 가져오는 중...",
                 ephemeral=True
             )
 
@@ -515,9 +518,10 @@ class InformationCommands(BaseCommands):
     ) -> None:
         """Handle errors in weather command"""
         logger.error(f"Error getting weather for {city_name}: {error_msg}")
+        user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            f"날씨 정보를 가져오는데 실패했습니다: {city_name}",
+            f"{user_name}님, 날씨 정보를 가져오는데 실패했습니다: {city_name}",
             ephemeral=True
         )
 
