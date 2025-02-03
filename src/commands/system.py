@@ -5,6 +5,7 @@ import discord
 from discord.ext import commands
 
 from src.utils.decorators import command_handler
+from src.utils.types import CommandContext
 from .base_commands import BaseCommands
 
 # Constants for embed colors
