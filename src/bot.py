@@ -133,7 +133,7 @@ class DiscordBot(commands.Bot):
         )
         await cast(discord.Client, self).change_presence(
             activity=discord.Game(
-                name=f"!!help | /help | v{self.version_info.version}-{self.version_info.commit}"
+                name=f"!!help | /help | {self.version_info.commit}"
             )
         )
 

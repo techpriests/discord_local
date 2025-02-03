@@ -4,9 +4,6 @@ services:
   bot:
     build:
       context: .
-      args:
-        - GIT_COMMIT=$(git rev-parse --short HEAD)
-        - GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
     env_file:
       - .env
     container_name: discord_bot
@@ -14,8 +11,8 @@ services:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
       - WEATHER_API_KEY=${WEATHER_API_KEY}
       - STEAM_API_KEY=${STEAM_API_KEY}
-      - GIT_COMMIT=$(git rev-parse --short HEAD)
-      - GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+      - GIT_COMMIT=${GIT_COMMIT:-unknown}
+      - GIT_BRANCH=${GIT_BRANCH:-unknown}
     volumes:
       - ./data:/app/data
       - .:/app
