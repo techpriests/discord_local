@@ -57,6 +57,9 @@ jobs:
           # Deploy application
           cd ~/discord_local
           git pull origin main
+          echo "Current commit:"
+          git rev-parse HEAD
+          git status
           
           # Use environment variables in docker-compose
           echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
