@@ -54,6 +54,15 @@ class APIService:
         return value
 
     @property
+    def steam(self) -> SteamAPI:
+        """Get Steam API client
+        
+        Returns:
+            SteamAPI: Steam API client
+        """
+        return self._steam_api
+
+    @property
     def weather(self) -> WeatherAPI:
         """Get weather API client
         
