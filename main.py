@@ -3,18 +3,20 @@ from src.commands.entertainment import EntertainmentCommands
 from src.commands.information import InformationCommands
 from src.commands.system import SystemCommands
 from src.services.api.service import APIService
-from config import TOKEN, WEATHER_API_KEY, STEAM_KEY
+import os
 import asyncio
 
 async def main():
     # Initialize services
-    api_service = APIService({
-        "STEAM_API_KEY": STEAM_KEY,
-        "WEATHER_API_KEY": WEATHER_API_KEY
-    })
+    config = {
+        "STEAM_API_KEY": os.getenv("STEAM_API_KEY"),
+        "WEATHER_API_KEY": os.getenv("WEATHER_API_KEY")
+    }
+    
+    api_service = APIService(config)
     
     # Initialize bot
-    bot = DiscordBot()
+    bot = DiscordBot(config)
     
     try:
         # Load cogs
@@ -25,7 +27,7 @@ async def main():
         ], api_service)
         
         # Run bot
-        await bot.start(TOKEN)
+        await bot.start(os.getenv("DISCORD_TOKEN"))
     except KeyboardInterrupt:
         await api_service.close()
     except Exception as e:
