@@ -436,14 +436,24 @@ class InformationCommands(BaseCommands):
         city_name: Optional[str] = None
     ) -> None:
         """Handle weather information request"""
-        if not self._validate_city_name(city_name):
-            return await self.send_response(
-                ctx_or_interaction, 
-                "도시 이름을 2글자 이상 입력해주세요..."
-            )
-
         try:
-            weather_info = await self.api.weather.get_weather(city_name)
+            # Check if weather API is available
+            try:
+                weather_api = self.api.weather
+            except ValueError:
+                await self.send_response(
+                    ctx_or_interaction,
+                    "날씨 기능은 현재 사용할 수 없습니다. 관리자에게 문의해주세요."
+                )
+                return
+
+            if not self._validate_city_name(city_name):
+                return await self.send_response(
+                    ctx_or_interaction, 
+                    "도시 이름을 2글자 이상 입력해주세요..."
+                )
+
+            weather_info = await weather_api.get_weather(city_name)
             await self._send_weather_embed(ctx_or_interaction, weather_info)
         except Exception as e:
             await self._handle_weather_error(ctx_or_interaction, city_name, str(e))
