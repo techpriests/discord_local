@@ -110,3 +110,39 @@ class SystemCommands(BaseCommands):
         except Exception as e:
             logger.error(f"Failed to sync commands: {e}")
             raise ValueError("명령어 동기화에 실패했습니다") from e
+
+    @commands.command(
+        name="버전",
+        help="봇의 현재 버전을 확인합니다",
+        brief="버전 확인",
+        aliases=["version"],
+    )
+    async def version_prefix(self, ctx: commands.Context) -> None:
+        """Show bot version information"""
+        await self._handle_version(ctx)
+
+    @discord.app_commands.command(
+        name="version",
+        description="봇의 현재 버전을 확인합니다"
+    )
+    async def version_slash(self, interaction: discord.Interaction) -> None:
+        """Slash command for version"""
+        await self._handle_version(interaction)
+
+    async def _handle_version(self, ctx_or_interaction: CommandContext) -> None:
+        """Handle version command
+        
+        Args:
+            ctx_or_interaction: Command context or interaction
+        """
+        version_info = self.bot.version_info
+        embed = discord.Embed(
+            title="🤖 봇 버전 정보",
+            description=(
+                f"**버전:** {version_info.version}\n"
+                f"**커밋:** {version_info.commit}\n"
+                f"**브랜치:** {version_info.branch}"
+            ),
+            color=INFO_COLOR
+        )
+        await self.send_response(ctx_or_interaction, embed=embed)

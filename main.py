@@ -20,9 +20,6 @@ async def main():
     bot = DiscordBot(config, api_service)
     
     try:
-        # Add system commands (other commands are registered automatically)
-        await bot.add_cog(SystemCommands(bot))
-        
         # Run bot
         await bot.start(os.getenv("DISCORD_TOKEN"))
     except KeyboardInterrupt:

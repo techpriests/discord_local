@@ -143,13 +143,13 @@ class InformationCommands(BaseCommands):
     @discord.app_commands.command(name="game", description="Steam 게임의 동시접속자 수를 알려드립니다")
     async def game_slash(self, interaction: discord.Interaction, game_name: str) -> None:
         """Slash command for game search"""
-        await self._handle_game_search(interaction, game_name)
+        await self._handle_steam(interaction, game_name)
 
     @commands.command(
         name="스팀",
         help="스팀 게임의 현재 플레이어 수를 알려줍니다",
         brief="스팀 게임 정보",
-        aliases=["steam"],
+        aliases=["steam", "game"],
         description=(
             "스팀 게임의 현재 플레이어 수와 정보를 보여줍니다.\n"
             "사용법: !!스팀 [게임명]\n"
@@ -164,36 +164,7 @@ class InformationCommands(BaseCommands):
         await self._handle_steam(ctx, game_name)
 
     @command_handler()
-    async def _handle_game_search(
-        self, 
-        ctx_or_interaction: CommandContext, 
-        game_name: Optional[str] = None
-    ) -> None:
-        """Handle game search request"""
-        if not self._validate_game_name(game_name):
-            return await self.send_response(
-                ctx_or_interaction,
-                "게임 이름을 2글자 이상 입력해주세요..."
-            )
-
-        try:
-            game, similarity, similar_games = await self.api.steam.find_game(game_name)
-            if game:
-                await self._send_game_embed(ctx_or_interaction, game, similar_games)
-            else:
-                await self.send_response(
-                    ctx_or_interaction,
-                    f"게임을 찾을 수 없습니다: {game_name}"
-                )
-        except Exception as e:
-            await self._handle_game_error(ctx_or_interaction, game_name, str(e))
-
-    def _validate_game_name(self, game_name: Optional[str]) -> bool:
-        """Validate game name input"""
-        return bool(game_name and len(game_name.strip()) >= 2)
-
-    @command_handler()
-    async def _handle_steam(self, ctx_or_interaction, game_name: str) -> None:
+    async def _handle_steam(self, ctx_or_interaction, game_name: Optional[str] = None) -> None:
         """Handle Steam game information request
 
         Args:
@@ -208,6 +179,15 @@ class InformationCommands(BaseCommands):
         user_name = None
         
         try:
+            # Validate game name
+            if not game_name or len(game_name.strip()) < 2:
+                await self.send_response(
+                    ctx_or_interaction,
+                    "게임 이름을 2글자 이상 입력해주세요...",
+                    ephemeral=True
+                )
+                return
+
             # Get user's name first, before any other operations
             user_name = self.get_user_name(ctx_or_interaction)
             

@@ -11,6 +11,7 @@ from src.services.memory_db import MemoryDB, MemoryInfo
 from src.services.message_handler import MessageHandler
 from src.utils.types import CommandContext
 from src.utils.constants import ERROR_COLOR, INFO_COLOR
+from src.utils.version import get_git_info, VersionInfo
 from src.commands.base_commands import BaseCommands
 from src.commands.information import InformationCommands
 from src.commands.entertainment import EntertainmentCommands
@@ -66,6 +67,7 @@ class DiscordBot(commands.Bot):
             SystemCommands
         ]
         self.memory_db: Optional[MemoryDB] = None
+        self.version_info: VersionInfo = get_git_info()
 
     @property
     def api_service(self) -> APIService:
@@ -100,6 +102,8 @@ class DiscordBot(commands.Bot):
             for command_class in self._command_classes:
                 if command_class == InformationCommands:
                     await self.add_cog(command_class(self.api_service))
+                elif command_class == SystemCommands:
+                    await self.add_cog(command_class(self))
                 else:
                     await self.add_cog(command_class())
             await self.tree.sync()
@@ -121,9 +125,16 @@ class DiscordBot(commands.Bot):
     async def on_ready(self) -> None:
         """Handle bot ready event"""
         user = cast(discord.ClientUser, self.user)
-        logger.info(f"Logged in as {user.name}")
+        logger.info(
+            f"Logged in as {user.name} "
+            f"(Version: {self.version_info.version}, "
+            f"Commit: {self.version_info.commit}, "
+            f"Branch: {self.version_info.branch})"
+        )
         await cast(discord.Client, self).change_presence(
-            activity=discord.Game(name="!!help | /help")
+            activity=discord.Game(
+                name=f"!!help | /help | v{self.version_info.version}-{self.version_info.commit}"
+            )
         )
 
     async def on_command_error(
