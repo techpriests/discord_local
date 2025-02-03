@@ -123,46 +123,51 @@ class SteamAPI(BaseAPI[GameInfo]):
             if not data or "items" not in data or not data["items"]:
                 return None, 0, None
 
-            # Get top 5 search results
-            top_games = []
+            # First, get player counts for all candidates to find the most active game
+            candidates = []
             for item in data["items"][:5]:  # Only process top 5 matches
                 try:
                     app_id = item["id"]
                     current_players = await self.get_player_count(app_id)
                     
-                    # Skip games with 0 players unless it's an exact name match
-                    if current_players == 0 and item["name"].lower() != name.lower():
-                        continue
-                        
-                    history = await self.get_player_history(app_id, include_history)
-                    
-                    game_info = GameInfo(
-                        name=item["name"],
-                        player_count=current_players,
-                        peak_24h=history["peak_24h"],
-                        peak_7d=history["peak_7d"],
-                        avg_7d=history["avg_7d"],
-                        history=history.get("history"),
-                        image_url=item.get("tiny_image") or item.get("large_capsule_image")
-                    )
-                    
                     # Calculate match score
                     similarity = 100.0 if item["name"].lower() == name.lower() else 50.0
-                    top_games.append((game_info, similarity, current_players))
+                    
+                    # Only include games with players or exact name matches
+                    if current_players > 0 or similarity == 100.0:
+                        candidates.append((item, current_players, similarity))
 
                 except Exception as e:
-                    logger.error(f"Error processing game {item.get('name', 'Unknown')}: {e}")
+                    logger.error(f"Error getting player count for {item.get('name', 'Unknown')}: {e}")
                     continue
 
-            if not top_games:
+            if not candidates:
                 return None, 0, None
 
             # Sort by player count (primary) and similarity (secondary)
-            top_games.sort(key=lambda x: (x[2], x[1]), reverse=True)
+            candidates.sort(key=lambda x: (x[1], x[2]), reverse=True)
             
-            # Return the game with the most players
-            best_match, best_score, _ = top_games[0]
-            return best_match, best_score, None
+            # Only get history for the best match
+            best_item, current_players, similarity = candidates[0]
+            
+            try:
+                history = await self.get_player_history(best_item["id"], include_history)
+                
+                game_info = GameInfo(
+                    name=best_item["name"],
+                    player_count=current_players,
+                    peak_24h=history["peak_24h"],
+                    peak_7d=history["peak_7d"],
+                    avg_7d=history["avg_7d"],
+                    history=history.get("history"),
+                    image_url=best_item.get("tiny_image") or best_item.get("large_capsule_image")
+                )
+                
+                return game_info, similarity, None
+
+            except Exception as e:
+                logger.error(f"Error getting history for {best_item.get('name', 'Unknown')}: {e}")
+                return None, 0, None
 
         except Exception as e:
             logger.error(f"Error in find_game for query '{name}': {e}")
