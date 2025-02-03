@@ -198,6 +198,8 @@ class InformationCommands(BaseCommands):
         Raises:
             ValueError: If game not found or API error
         """
+        # Initialize processing_msg as None
+        processing_msg = None
         try:
             # Get user's name
             user_name = self.get_user_name(ctx_or_interaction)
@@ -214,14 +216,18 @@ class InformationCommands(BaseCommands):
                 await self._send_game_not_found_embed(ctx_or_interaction, user_name)
                 return
 
-            embed = await self._create_game_embed(game, similar_games)
+            embed = await self._create_game_embed(game, similar_games, user_name)
             await self.send_response(ctx_or_interaction, embed=embed)
 
-        except Exception:
+        except Exception as e:
+            logger.error(f"Error in steam command: {e}")
             await self._send_steam_error_embed(ctx_or_interaction, user_name)
         finally:
             if processing_msg:
-                await processing_msg.delete()
+                try:
+                    await processing_msg.delete()
+                except Exception as e:
+                    logger.error(f"Error deleting processing message: {e}")
 
     async def _send_game_not_found_embed(self, ctx_or_interaction, user_name: str):
         """Send embed for game not found error
@@ -238,18 +244,23 @@ class InformationCommands(BaseCommands):
         await self.send_response(ctx_or_interaction, embed=embed)
 
     async def _create_game_embed(
-        self, game: dict, similar_games: Optional[List[dict]] = None
+        self, game: dict, similar_games: Optional[List[dict]] = None, user_name: Optional[str] = None
     ) -> discord.Embed:
         """Create embed for game information
 
         Args:
             game: Game information dictionary
             similar_games: Optional list of similar games (not used)
+            user_name: Name of the user who issued the command
 
         Returns:
             discord.Embed: Formatted embed with game information
         """
-        embed = discord.Embed(title=f"🎮 {game['name']}", color=SUCCESS_COLOR)
+        embed = discord.Embed(
+            title=f"🎮 {game['name']}", 
+            description=f"{user_name}님이 요청하신 게임의 정보입니다." if user_name else "게임 정보",
+            color=SUCCESS_COLOR
+        )
 
         if game.get("player_count") is not None:
             embed.add_field(name="현재 플레이어", value=f"{game['player_count']:,}명", inline=True)
