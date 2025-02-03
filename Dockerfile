@@ -7,12 +7,16 @@ WORKDIR /app
 # Copy dependency files first
 COPY pyproject.toml poetry.lock ./
 
-# Copy source code
-COPY src/ ./src/
-
-# Install dependencies
+# Install dependencies in a separate layer
+# This layer will be cached unless pyproject.toml or poetry.lock changes
 RUN pip install --no-cache-dir build && \
-    pip install --no-cache-dir -e .
+    pip install --no-cache-dir poetry && \
+    poetry config virtualenvs.create false && \
+    poetry install --no-dev --no-interaction --no-ansi
+
+# Copy the source code
+# This layer will only rebuild when code changes
+COPY src/ ./src/
 
 # Run the bot
 CMD ["python", "-m", "src.main"] 
