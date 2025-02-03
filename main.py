@@ -22,7 +22,7 @@ async def main():
         # Add cogs
         await bot.add_cog(EntertainmentCommands())
         await bot.add_cog(InformationCommands(api_service))
-        await bot.add_cog(SystemCommands(bot.bot))
+        await bot.add_cog(SystemCommands(bot))
         
         # Run bot
         await bot.start(os.getenv("DISCORD_TOKEN"))

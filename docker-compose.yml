@@ -5,8 +5,8 @@ services:
     build: .
     container_name: discord_bot
     environment:
-      - DISCORD_BOT_TOKEN=${DISCORD_TOKEN}
-      - OPENWEATHER_API_KEY=${WEATHER_API_KEY}
+      - DISCORD_TOKEN=${DISCORD_TOKEN}
+      - WEATHER_API_KEY=${WEATHER_API_KEY}
       - STEAM_API_KEY=${STEAM_API_KEY}
     volumes:
       - ./data:/app/data
