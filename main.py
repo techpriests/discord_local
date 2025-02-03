@@ -14,14 +14,13 @@ async def main():
     }
     
     api_service = APIService(config)
+    await api_service.initialize()  # Initialize API service first
     
-    # Initialize bot
-    bot = DiscordBot(config)
+    # Initialize bot with API service
+    bot = DiscordBot(config, api_service)
     
     try:
-        # Add cogs
-        await bot.add_cog(EntertainmentCommands())
-        await bot.add_cog(InformationCommands(api_service))
+        # Add system commands (other commands are registered automatically)
         await bot.add_cog(SystemCommands(bot))
         
         # Run bot
