@@ -8,7 +8,7 @@ from discord.ext import commands
 from discord import app_commands
 
 from src.bot import DiscordBot
-from src.services.api_service import APIService
+from src.services.api.service import APIService
 from src.commands.base_commands import BaseCommands
 
 @pytest.fixture
@@ -16,8 +16,7 @@ def mock_config() -> Dict[str, str]:
     """Create mock config dictionary with proper API keys"""
     return {
         "DISCORD_TOKEN": "mock_discord_token",
-        "WEATHER_API_KEY": "mock_weather_api_key",
-        "STEAM_API_KEY": "mock_steam_api_key"
+        "STEAM_API_KEY": "mock_steam_api_key",
     }
 
 @pytest.fixture
