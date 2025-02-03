@@ -1,6 +1,7 @@
 import logging
 from typing import Optional, Tuple, List, Dict, Any, cast
 import time
+import re
 
 import aiohttp
 from src.services.api.base import BaseAPI, RateLimitConfig
@@ -28,6 +29,47 @@ class SteamAPI(BaseAPI[GameInfo]):
             "player_history": RateLimitConfig(20, 60),  # 20 requests per minute for historical data
             "details": RateLimitConfig(150, 300),  # 150 requests per 5 minutes
         }
+
+    def _calculate_similarity(self, query: str, game_name: str) -> float:
+        """Calculate similarity between query and game name
+        
+        Args:
+            query: Search query
+            game_name: Game name to compare
+
+        Returns:
+            float: Similarity score (0-100)
+        """
+        # Convert both to lowercase for case-insensitive comparison
+        query = query.lower()
+        game_name = game_name.lower()
+
+        # Exact match
+        if query == game_name:
+            return 100.0
+
+        # Check if query is a substring of game name
+        if query in game_name:
+            return 90.0
+
+        # Check if game name contains all characters from query in order
+        query_chars = list(query)
+        game_chars = list(game_name)
+        i = 0
+        j = 0
+        matches = 0
+        while i < len(query_chars) and j < len(game_chars):
+            if query_chars[i] == game_chars[j]:
+                matches += 1
+                i += 1
+            j += 1
+        
+        if matches == len(query_chars):
+            return 80.0
+
+        # Calculate character match ratio
+        match_ratio = matches / len(query_chars)
+        return match_ratio * 70.0
 
     async def validate_credentials(self) -> bool:
         """Validate Steam API key
@@ -81,7 +123,7 @@ class SteamAPI(BaseAPI[GameInfo]):
             if not data or "items" not in data:
                 return None, 0, None
 
-            games: List[GameInfo] = []
+            games: List[Tuple[GameInfo, float]] = []
             for item in data["items"]:
                 try:
                     app_id = item["id"]
@@ -97,7 +139,11 @@ class SteamAPI(BaseAPI[GameInfo]):
                         history=history.get("history"),
                         image_url=item.get("tiny_image") or item.get("large_capsule_image")
                     )
-                    games.append(game_info)
+                    
+                    # Calculate similarity score for this game
+                    similarity = self._calculate_similarity(name, item["name"])
+                    games.append((game_info, similarity))
+
                 except Exception as e:
                     logger.error(f"Error processing game {item.get('name', 'Unknown')}: {e}")
                     continue
@@ -109,10 +155,14 @@ class SteamAPI(BaseAPI[GameInfo]):
             if not games:
                 return None, 0, None
 
-            # Calculate similarity score (simplified)
-            similarity = 100.0 if games[0]["name"].lower() == name.lower() else 50.0
+            # Sort games by similarity score
+            games.sort(key=lambda x: x[1], reverse=True)
             
-            return games[0], similarity, games[1:] if len(games) > 1 else None
+            # Return best match and other games
+            best_match, best_score = games[0]
+            other_games = [game for game, _ in games[1:]] if len(games) > 1 else None
+            
+            return best_match, best_score, other_games
 
         except Exception as e:
             logger.error(f"Error in find_game for query '{name}': {e}")
@@ -201,37 +251,47 @@ class SteamAPI(BaseAPI[GameInfo]):
             now = time.time()
             day_ago = now - 24 * 3600  # 24 hours ago
             week_ago = now - 7 * 24 * 3600  # 7 days ago
-            three_months_ago = now - 90 * 24 * 3600  # 90 days ago
             
             counts_7d = []
             peak_24h = 0
             peak_7d = 0
-            peak_all = 0 if include_history else None
             
-            # For history, keep hourly data points from last 3 months
-            filtered_history = []
-            last_hour = 0
-            
-            for entry in data:
+            # Process data in chronological order
+            for entry in sorted(data, key=lambda x: x[0]):  # Sort by timestamp
                 timestamp, count = entry
-                if count is not None:
-                    if include_history:
-                        peak_all = max(peak_all, count)  # Track all-time peak only for chart command
+                if count is None:
+                    continue
                     
-                    if timestamp >= week_ago:
-                        counts_7d.append(count)
-                        peak_7d = max(peak_7d, count)
-                        if timestamp >= day_ago:
-                            peak_24h = max(peak_24h, count)
-                
-                # If including history, filter to hourly points for last 3 months
-                if include_history and timestamp >= three_months_ago:
-                    current_hour = int(timestamp / 3600)
-                    if current_hour > last_hour:  # Only keep one point per hour
-                        filtered_history.append((timestamp, count))
-                        last_hour = current_hour
+                # Update peaks based on timestamp
+                if timestamp >= week_ago:
+                    counts_7d.append(count)
+                    peak_7d = max(peak_7d, count)
+                    
+                    if timestamp >= day_ago:
+                        peak_24h = max(peak_24h, count)
 
+            # Calculate 7-day average
             avg_7d = sum(counts_7d) / len(counts_7d) if counts_7d else 0.0
+
+            # For chart command, include history data
+            if include_history:
+                three_months_ago = now - 90 * 24 * 3600
+                filtered_history = []
+                last_hour = 0
+                peak_all = 0
+                
+                for timestamp, count in sorted(data, key=lambda x: x[0]):
+                    if count is not None:
+                        peak_all = max(peak_all, count)
+                        
+                        if timestamp >= three_months_ago:
+                            current_hour = int(timestamp / 3600)
+                            if current_hour > last_hour:
+                                filtered_history.append((timestamp, count))
+                                last_hour = current_hour
+            else:
+                filtered_history = None
+                peak_all = None
 
             return {
                 "peak_24h": peak_24h,
