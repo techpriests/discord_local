@@ -24,13 +24,9 @@ pytest-asyncio = "^0.21.0"
 pytest-cov = "^4.1.0"
 mypy = "^1.0.0"
 ruff = "^0.1.0"
-
-[tool.poetry.dev-dependencies]
 black = "^23.0.0"
 isort = "^5.12.0"
 docstr-coverage = "^2.3.0"
-
-[tool.poetry.group.dev.dependencies]
 types-pytz = "^2024.2.0.20241221"
 
 [tool.pytest.ini_options]
@@ -92,22 +88,4 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "pass",
     "raise ImportError",
-]
-
-[project]
-name = "discord-bot"
-version = "0.1.0"
-description = "Discord bot for various utilities"
-dependencies = [
-    "discord.py>=2.0.0,<3.0.0",
-    "aiohttp>=3.8.0,<4.0.0",
-    "pytz>=2023.3,<2024.0",
-    "matplotlib>=3.10.0,<4.0.0",  # For generating player count charts
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0,<8.0.0",
-    "pytest-asyncio>=0.21.0,<0.22.0",
-    "pytest-cov>=4.1.0,<5.0.0",
 ]
