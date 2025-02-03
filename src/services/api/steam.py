@@ -1,5 +1,6 @@
 import logging
 from typing import Optional, Tuple, List, Dict, Any, cast
+import time
 
 import aiohttp
 from src.services.api.base import BaseAPI, RateLimitConfig
@@ -12,6 +13,7 @@ class SteamAPI(BaseAPI[GameInfo]):
 
     SEARCH_URL = "https://store.steampowered.com/api/storesearch"
     PLAYER_COUNT_URL = "https://api.steampowered.com/ISteamUserStats/GetNumberOfCurrentPlayers/v1/"
+    PLAYER_HISTORY_URL = "https://steamcharts.com/app/{}/chart-data.json"
 
     def __init__(self, api_key: str) -> None:
         """Initialize Steam API client
@@ -23,6 +25,7 @@ class SteamAPI(BaseAPI[GameInfo]):
         self._rate_limits = {
             "search": RateLimitConfig(30, 60),  # 30 requests per minute
             "player_count": RateLimitConfig(60, 60),  # 60 requests per minute
+            "player_history": RateLimitConfig(20, 60),  # 20 requests per minute for historical data
             "details": RateLimitConfig(150, 300),  # 150 requests per 5 minutes
         }
 
@@ -79,9 +82,16 @@ class SteamAPI(BaseAPI[GameInfo]):
             games: List[GameInfo] = []
             for item in data["items"]:
                 try:
+                    app_id = item["id"]
+                    current_players = await self.get_player_count(app_id)
+                    history = await self.get_player_history(app_id)
+                    
                     game_info = GameInfo(
                         name=item["name"],
-                        player_count=await self.get_player_count(item["id"])
+                        player_count=current_players,
+                        peak_24h=history["peak_24h"],
+                        peak_7d=history["peak_7d"],
+                        avg_7d=history["avg_7d"]
                     )
                     games.append(game_info)
                 except Exception as e:
@@ -140,6 +150,59 @@ class SteamAPI(BaseAPI[GameInfo]):
         except Exception as e:
             logger.error(f"Error getting player count for app {app_id}: {e}")
             return 0  # Return 0 for failed requests
+
+    async def get_player_history(self, app_id: int) -> Dict[str, Any]:
+        """Get historical player count data for game
+        
+        Args:
+            app_id: Steam app ID
+
+        Returns:
+            Dict containing:
+            - peak_24h: Peak players in last 24 hours
+            - peak_7d: Peak players in last 7 days
+            - avg_7d: Average players in last 7 days
+
+        Raises:
+            ValueError: If request fails
+        """
+        try:
+            url = self.PLAYER_HISTORY_URL.format(app_id)
+            data = await self._make_request(
+                url,
+                endpoint="player_history"
+            )
+
+            if not data:
+                return {"peak_24h": 0, "peak_7d": 0, "avg_7d": 0.0}
+
+            # Data is returned as a list of [timestamp, player_count] pairs
+            now = time.time()
+            day_ago = now - 24 * 3600
+            week_ago = now - 7 * 24 * 3600
+            
+            counts_7d = []
+            peak_24h = 0
+            peak_7d = 0
+            
+            for timestamp, count in data:
+                if timestamp >= week_ago:
+                    counts_7d.append(count)
+                    peak_7d = max(peak_7d, count)
+                    if timestamp >= day_ago:
+                        peak_24h = max(peak_24h, count)
+
+            avg_7d = sum(counts_7d) / len(counts_7d) if counts_7d else 0.0
+
+            return {
+                "peak_24h": peak_24h,
+                "peak_7d": peak_7d,
+                "avg_7d": avg_7d
+            }
+
+        except Exception as e:
+            logger.error(f"Error getting player history for app {app_id}: {e}")
+            return {"peak_24h": 0, "peak_7d": 0, "avg_7d": 0.0}
 
     async def close(self) -> None:
         """Cleanup resources"""

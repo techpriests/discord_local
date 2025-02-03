@@ -3,6 +3,9 @@ from typing import TypedDict, List, Dict, Any, Optional
 class GameInfo(TypedDict):
     name: str
     player_count: int
+    peak_24h: int
+    peak_7d: int
+    avg_7d: float
 
 class CountryInfo(TypedDict):
     name: Dict[str, str]
