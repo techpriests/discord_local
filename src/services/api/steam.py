@@ -136,7 +136,7 @@ class SteamAPI(BaseAPI[GameInfo]):
                         peak_24h = history["peak_24h"]
                     
                     game_info = GameInfo(
-                        name=item["name"],
+                        name=item.get("korean_name", item["name"]),
                         player_count=current_players,
                         peak_24h=peak_24h,
                         image_url=item.get("tiny_image") or item.get("large_capsule_image")
