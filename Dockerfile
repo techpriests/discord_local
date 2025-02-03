@@ -9,8 +9,8 @@ COPY pyproject.toml poetry.lock ./
 
 # Install dependencies in a separate layer
 # This layer will be cached unless pyproject.toml or poetry.lock changes
-RUN pip install --no-cache-dir build && \
-    pip install --no-cache-dir poetry && \
+RUN pip install --no-cache-dir --root-user-action=ignore build && \
+    pip install --no-cache-dir --root-user-action=ignore poetry && \
     poetry config virtualenvs.create false && \
     poetry install --only main --no-interaction --no-ansi
 
