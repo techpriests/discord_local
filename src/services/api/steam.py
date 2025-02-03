@@ -124,49 +124,57 @@ class SteamAPI(BaseAPI[GameInfo]):
                     logger.warning(f"No games found for query: {name}")
                     return None, 0, None
 
-            games: List[GameInfo] = []
-            logger.info(f"Found {len(data['items'])} potential matches")
+            # First, analyze name similarity for all results
+            search_items = []
+            for item in data["items"]:
+                game_name = item.get("name", "")
+                if "name_korean" in item:
+                    game_name = item["name_korean"]
+                elif "korean_name" in item:
+                    game_name = item["korean_name"]
+                
+                similarity = self._calculate_similarity(name, game_name)
+                search_items.append({
+                    "item": item,
+                    "name": game_name,
+                    "similarity": similarity
+                })
             
-            for i, item in enumerate(data["items"]):
+            # Sort by name similarity
+            search_items.sort(key=lambda x: x["similarity"], reverse=True)
+            
+            # If the best match by name is significantly better, only process that one
+            if (len(search_items) == 1 or 
+                (search_items[0]["similarity"] > 90 and 
+                 search_items[0]["similarity"] - search_items[1]["similarity"] > 20)):
+                logger.info(f"Found clear best match by name: {search_items[0]['name']}")
+                items_to_process = [search_items[0]]
+            else:
+                # Process up to 3 games if names are similar
+                items_to_process = search_items[:3]
+                logger.info(f"Processing {len(items_to_process)} potential matches")
+
+            games: List[GameInfo] = []
+            for search_item in items_to_process:
                 try:
+                    item = search_item["item"]
                     app_id = item.get("id")
-                    logger.debug(f"Processing game {i+1}: ID={app_id}, Name={item.get('name', 'Unknown')}")
+                    logger.debug(f"Processing game: ID={app_id}, Name={search_item['name']}")
                     
                     current_players = await self.get_player_count(app_id)
-                    logger.info(f"Current players for {item.get('name')}: {current_players}")
-                    
-                    peak_24h = 0
-                    if i == 0:
-                        logger.debug("Getting history for first match")
-                        history = await self.get_player_history(app_id, include_history)
-                        peak_24h = history["peak_24h"]
-                        logger.info(f"24h peak for {item.get('name')}: {peak_24h}")
-                    
-                    game_name = item.get("name", "")
-                    if "name_korean" in item:
-                        logger.debug(f"Found Korean name (name_korean): {item['name_korean']}")
-                        game_name = item["name_korean"]
-                    elif "korean_name" in item:
-                        logger.debug(f"Found Korean name (korean_name): {item['korean_name']}")
-                        game_name = item["korean_name"]
-                    else:
-                        logger.debug(f"No Korean name found, using English name: {game_name}")
+                    logger.info(f"Current players for {search_item['name']}: {current_players}")
                     
                     game_info = GameInfo(
-                        name=game_name,
+                        name=search_item["name"],
                         player_count=current_players,
-                        peak_24h=peak_24h,
+                        peak_24h=0,  # Will be updated for best match
                         image_url=item.get("tiny_image") or item.get("large_capsule_image")
                     )
                     logger.debug(f"Created game info: {game_info}")
                     games.append(game_info)
                 except Exception as e:
-                    logger.error(f"Error processing game {item.get('name', 'Unknown')}: {e}", exc_info=True)
+                    logger.error(f"Error processing game {search_item['name']}: {e}", exc_info=True)
                     continue
-
-                if len(games) >= 3:
-                    logger.debug("Reached maximum of 3 games, stopping search")
-                    break
 
             if not games:
                 logger.warning("No valid games found after processing")
@@ -175,11 +183,25 @@ class SteamAPI(BaseAPI[GameInfo]):
             best_match = max(games, key=lambda g: g["player_count"])
             logger.info(f"Best match: {best_match['name']} with {best_match['player_count']} players")
             
+            # Get peak data for best match only
+            try:
+                app_id = next(item["id"] for item in data["items"] if item.get("name") == best_match["name"] or 
+                            item.get("name_korean") == best_match["name"] or 
+                            item.get("korean_name") == best_match["name"])
+                history = await self.get_player_history(app_id, include_history)
+                best_match["peak_24h"] = history["peak_24h"]
+                logger.info(f"24h peak for best match {best_match['name']}: {best_match['peak_24h']}")
+            except Exception as e:
+                logger.error(f"Failed to get peak data for best match: {e}")
+                best_match["peak_24h"] = best_match["player_count"]  # Fallback to current player count
+            
             other_games = [g for g in games if g != best_match]
             if other_games:
                 logger.debug(f"Similar games: {[g['name'] for g in other_games]}")
             
-            similarity = 100.0 if best_match["name"].lower() == name.lower() else 50.0
+            # Use the pre-calculated similarity score
+            similarity = next(item["similarity"] for item in items_to_process 
+                           if item["name"] == best_match["name"])
             logger.debug(f"Similarity score: {similarity}")
             
             return best_match, similarity, other_games if other_games else None
@@ -249,12 +271,17 @@ class SteamAPI(BaseAPI[GameInfo]):
                 "User-Agent": "Mozilla/5.0"
             }
             
-            data = await self._make_request(
-                url,
-                endpoint="store",
-                headers=headers,
-                raw_text=True  # Get raw HTML response
-            )
+            # Use direct aiohttp request instead of _make_request to get raw HTML
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers=headers) as response:
+                    if response.status != 200:
+                        logger.error(f"Failed to get store page: {response.status}")
+                        return {
+                            "peak_24h": 0,
+                            "history": [] if include_history else None
+                        }
+                    
+                    data = await response.text()
 
             if not data:
                 return {
@@ -263,13 +290,15 @@ class SteamAPI(BaseAPI[GameInfo]):
                 }
 
             # Extract peak players from the store page HTML
-            # The data is typically in a div with class "player_count_row"
-            import re
             peak_match = re.search(r'24-hour peak:\s*([0-9,]+)', data)
             peak_24h = 0
             if peak_match:
-                peak_str = peak_match.group(1).replace(',', '')
-                peak_24h = int(peak_str)
+                try:
+                    peak_str = peak_match.group(1).replace(',', '')
+                    peak_24h = int(peak_str)
+                    logger.info(f"Found 24h peak for app {app_id}: {peak_24h}")
+                except (ValueError, IndexError) as e:
+                    logger.error(f"Error parsing peak count: {e}")
 
             return {
                 "peak_24h": peak_24h,
