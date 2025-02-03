@@ -1,6 +1,6 @@
-import subprocess
-from typing import NamedTuple
+import os
 import logging
+from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
@@ -11,23 +11,16 @@ class VersionInfo(NamedTuple):
     version: str = "1.0.0"  # Semantic version
 
 def get_git_info() -> VersionInfo:
-    """Get current git commit and branch information
+    """Get version information from environment variables
     
     Returns:
         VersionInfo: Current version information
     """
     try:
-        commit = subprocess.check_output(
-            ['git', 'rev-parse', '--short', 'HEAD'],
-            text=True
-        ).strip()
-        
-        branch = subprocess.check_output(
-            ['git', 'rev-parse', '--abbrev-ref', 'HEAD'],
-            text=True
-        ).strip()
+        commit = os.getenv("GIT_COMMIT", "unknown")
+        branch = os.getenv("GIT_BRANCH", "unknown")
         
         return VersionInfo(commit=commit, branch=branch)
     except Exception as e:
-        logger.error(f"Failed to get git info: {e}")
+        logger.error(f"Failed to get version info: {e}")
         return VersionInfo(commit="unknown", branch="unknown") 
