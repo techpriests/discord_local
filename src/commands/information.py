@@ -455,7 +455,7 @@ class InformationCommands(BaseCommands):
                 await self.send_response(
                     ctx_or_interaction,
                     "날씨 기능은 현재 사용할 수 없습니다. 관리자에게 문의해주세요.",
-                    ephemeral=Truepy
+                    ephemeral=True
                 )
                 return
 

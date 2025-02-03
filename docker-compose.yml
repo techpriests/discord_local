@@ -7,6 +7,7 @@ services:
       args:
         - GIT_COMMIT=$(git rev-parse --short HEAD)
         - GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+        - GIT_MAIN_COMMIT=$(git rev-parse --short origin/main)
     env_file:
       - .env
     container_name: discord_bot
