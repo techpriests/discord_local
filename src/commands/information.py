@@ -232,7 +232,10 @@ class InformationCommands(BaseCommands):
         embed = discord.Embed(title=f"🎮 {game['name']}", color=SUCCESS_COLOR)
 
         if game.get("player_count") is not None:
-            embed.add_field(name="현재 플레이어", value=f"{game['player_count']:,}명")
+            embed.add_field(name="현재 플레이어", value=f"{game['player_count']:,}명", inline=True)
+            embed.add_field(name="24시간 최고", value=f"{game['peak_24h']:,}명", inline=True)
+            embed.add_field(name="7일 최고", value=f"{game['peak_7d']:,}명", inline=True)
+            embed.add_field(name="7일 평균", value=f"{game['avg_7d']:,.1f}명", inline=True)
 
         if similar_games:
             similar_names = "\n".join(g["name"] for g in similar_games)
