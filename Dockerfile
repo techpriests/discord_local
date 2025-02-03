@@ -5,18 +5,18 @@ FROM python:3.12-slim
 WORKDIR /app
 
 # Copy dependency files first
-COPY pyproject.toml .
+COPY pyproject.toml poetry.lock ./
 
 # Install dependencies in a separate layer
+# This layer will be cached unless pyproject.toml or poetry.lock changes
 RUN pip install --no-cache-dir build && \
-    pip install --no-cache-dir -e .[dev]
+    pip install --no-cache-dir poetry && \
+    poetry config virtualenvs.create false && \
+    poetry install --no-dev --no-interaction --no-ansi
 
-# Copy the rest of the application code
+# Copy the source code
 # This layer will only rebuild when code changes
-COPY . .
+COPY src/ ./src/
 
-# Final installation to handle any local dependencies
-RUN pip install --no-cache-dir -e .
-
-# Run the bot when the container launches
-CMD ["python", "src/main.py"] 
+# Run the bot
+CMD ["python", "-m", "src.main"] 
