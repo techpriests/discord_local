@@ -94,7 +94,8 @@ class SteamAPI(BaseAPI[GameInfo]):
                         peak_24h=history["peak_24h"],
                         peak_7d=history["peak_7d"],
                         avg_7d=history["avg_7d"],
-                        history=history.get("history")
+                        history=history.get("history"),
+                        image_url=item.get("tiny_image") or item.get("large_capsule_image")
                     )
                     games.append(game_info)
                 except Exception as e:

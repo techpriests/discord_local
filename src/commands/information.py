@@ -257,6 +257,10 @@ class InformationCommands(BaseCommands):
             embed.add_field(name="7일 최고", value=f"{game['peak_7d']:,}명", inline=True)
             embed.add_field(name="7일 평균", value=f"{game['avg_7d']:,.1f}명", inline=True)
 
+        # Add game image if available
+        if game.get("image_url"):
+            embed.set_thumbnail(url=game["image_url"])
+
         return embed
 
     async def _send_steam_error_embed(self, ctx_or_interaction, user_name: str):

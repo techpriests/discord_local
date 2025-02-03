@@ -5,10 +5,10 @@ import os
 from typing import NoReturn, Dict
 
 import discord
-from api_service import APIService
+from src.services.api_service import APIService
 
 from src.bot import DiscordBot
-from commands import EntertainmentCommands, InformationCommands, SystemCommands
+from src.commands import EntertainmentCommands, InformationCommands, SystemCommands
 
 logger = logging.getLogger(__name__)
 

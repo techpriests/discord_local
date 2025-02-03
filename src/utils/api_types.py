@@ -1,4 +1,4 @@
-from typing import TypedDict, List, Dict, Any, Optional
+from typing import TypedDict, List, Dict, Any, Optional, Tuple
 
 class GameInfo(TypedDict):
     name: str
@@ -6,6 +6,8 @@ class GameInfo(TypedDict):
     peak_24h: int
     peak_7d: int
     avg_7d: float
+    image_url: Optional[str]
+    history: Optional[List[Tuple[float, int]]]
 
 class CountryInfo(TypedDict):
     name: Dict[str, str]
