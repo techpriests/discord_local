@@ -93,8 +93,39 @@ class ArknightsGachaCalculator:
         return distribution, prob_no_6star
 
     @staticmethod
+    def calculate_transition_matrix(max_state: int = 99) -> list[list[float]]:
+        """Calculate the transition matrix for the Markov chain
+        
+        Each state represents number of pulls without 6★ (0 to max_state-1)
+        Transitions are:
+            - Get 6★: Go to state 0
+            - No 6★: Go to next state
+            
+        Args:
+            max_state: Maximum number of states (default 99 due to pity)
+            
+        Returns:
+            List of lists representing transition matrix
+        """
+        matrix = []
+        for state in range(max_state):
+            row = [0.0] * max_state
+            rate = ArknightsGachaCalculator.calculate_single_pull_rate(state)
+            # Probability of getting 6★ -> go to state 0
+            row[0] = rate
+            # Probability of no 6★ -> go to next state
+            if state < max_state - 1:
+                row[state + 1] = 1 - rate
+            else:
+                # At max state, guaranteed 6★
+                row[0] = 1.0
+            matrix.append(row)
+        return matrix
+
+    @staticmethod
     def calculate_banner_probability(pulls: int, is_limited: bool = False) -> Dict[str, float]:
         """Calculate probability of getting desired rate-up operator in X pulls
+        using Markov chain approach
         
         Args:
             pulls: Number of pulls to calculate for
@@ -108,36 +139,40 @@ class ArknightsGachaCalculator:
         """
         rate_up_chance = ArknightsGachaCalculator.LIMITED_RATE_UP_CHANCE if is_limited else ArknightsGachaCalculator.RATE_UP_CHANCE
         
-        # Get probability distribution for first 6★
-        first_dist, prob_no_6star = ArknightsGachaCalculator.calculate_first_6star_distribution(pulls)
+        # Get transition matrix
+        transition = ArknightsGachaCalculator.calculate_transition_matrix()
         
-        # Calculate expected number of 6★s
+        # Initial state distribution (start at pity 0)
+        state = [0.0] * len(transition)
+        state[0] = 1.0
+        
+        # Variables to track
         expected_6stars = 0.0
-        remaining_prob = 1.0  # Probability of reaching each scenario
+        prob_no_target = 1.0
         
-        # Add up expected value from first 6★
-        for pull_num, prob in enumerate(first_dist):
-            expected_6stars += prob  # Add probability of getting 6★ here
-            remaining_pulls = pulls - (pull_num + 1)
-            
-            if remaining_pulls > 0:
-                # For remaining pulls, calculate expected additional 6★s
-                next_dist, next_no_6star = ArknightsGachaCalculator.calculate_first_6star_distribution(remaining_pulls)
-                additional_6stars = sum(next_dist)  # Expected number of additional 6★s
-                expected_6stars += prob * additional_6stars  # Weighted by probability of this scenario
+        # For each pull
+        for _ in range(pulls):
+            # Calculate probabilities for this pull
+            new_state = [0.0] * len(transition)
+            for curr_state in range(len(transition)):
+                if state[curr_state] > 0.001:  # Optimization: skip negligible states
+                    # Get 6★ probability directly from transition matrix
+                    prob_6star = state[curr_state] * transition[curr_state][0]
+                    expected_6stars += prob_6star
+                    # Update probability of not getting target
+                    prob_no_target *= (1 - (prob_6star * rate_up_chance))
+                    
+                    # Update next state
+                    for next_state in range(len(transition)):
+                        new_state[next_state] += state[curr_state] * transition[curr_state][next_state]
+            state = new_state
         
-        # Calculate probability of getting at least one target operator
-        prob_at_least_one = 0.0
-        for prob in first_dist:
-            # Probability of getting target from this 6★
-            prob_target = prob * rate_up_chance
-            prob_at_least_one += prob_target
-        
-        # Calculate expected number of target operators
+        # Calculate final probabilities
+        probability = 1 - prob_no_target
         expected_target = expected_6stars * rate_up_chance
         
         return {
-            'probability': prob_at_least_one,
+            'probability': probability,
             'expected_6stars': expected_6stars,
             'expected_target': expected_target
         } 
