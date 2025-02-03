@@ -28,7 +28,6 @@ def get_config() -> Dict[str, str]:
     return {
         "DISCORD_TOKEN": os.getenv("DISCORD_TOKEN", ""),
         "STEAM_API_KEY": os.getenv("STEAM_API_KEY", ""),
-        "WEATHER_API_KEY": os.getenv("WEATHER_API_KEY", "")
     }
 
 async def start_bot(config: Dict[str, str]) -> NoReturn:
