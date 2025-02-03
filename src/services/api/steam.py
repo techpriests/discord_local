@@ -45,12 +45,14 @@ class SteamAPI(BaseAPI[GameInfo]):
 
     async def find_game(
         self, 
-        name: str
+        name: str,
+        include_history: bool = False
     ) -> Tuple[Optional[GameInfo], float, Optional[List[GameInfo]]]:
         """Find game by name
         
         Args:
             name: Game name to search
+            include_history: Whether to include player count history data
 
         Returns:
             Tuple containing:
@@ -84,14 +86,15 @@ class SteamAPI(BaseAPI[GameInfo]):
                 try:
                     app_id = item["id"]
                     current_players = await self.get_player_count(app_id)
-                    history = await self.get_player_history(app_id)
+                    history = await self.get_player_history(app_id, include_history)
                     
                     game_info = GameInfo(
                         name=item["name"],
                         player_count=current_players,
                         peak_24h=history["peak_24h"],
                         peak_7d=history["peak_7d"],
-                        avg_7d=history["avg_7d"]
+                        avg_7d=history["avg_7d"],
+                        history=history.get("history")
                     )
                     games.append(game_info)
                 except Exception as e:
@@ -151,58 +154,101 @@ class SteamAPI(BaseAPI[GameInfo]):
             logger.error(f"Error getting player count for app {app_id}: {e}")
             return 0  # Return 0 for failed requests
 
-    async def get_player_history(self, app_id: int) -> Dict[str, Any]:
+    async def get_player_history(self, app_id: int, include_history: bool = False) -> Dict[str, Any]:
         """Get historical player count data for game
         
         Args:
             app_id: Steam app ID
+            include_history: Whether to include full history data
 
         Returns:
             Dict containing:
             - peak_24h: Peak players in last 24 hours
             - peak_7d: Peak players in last 7 days
             - avg_7d: Average players in last 7 days
+            - history: List of (timestamp, player_count) tuples (only if include_history=True)
+            - peak_all: All-time peak players (only if include_history=True)
 
         Raises:
             ValueError: If request fails
         """
         try:
             url = self.PLAYER_HISTORY_URL.format(app_id)
+            
+            # For regular command, only get last 7 days of data
+            # For chart command, get full history
+            if not include_history:
+                # Add timestamp parameter to only get recent data
+                week_ago = int(time.time() - 7 * 24 * 3600)
+                url = f"{url}?from={week_ago}"
+            
             data = await self._make_request(
                 url,
                 endpoint="player_history"
             )
 
             if not data:
-                return {"peak_24h": 0, "peak_7d": 0, "avg_7d": 0.0}
+                return {
+                    "peak_24h": 0,
+                    "peak_7d": 0,
+                    "avg_7d": 0.0,
+                    "history": [] if include_history else None,
+                    "peak_all": 0 if include_history else None
+                }
 
             # Data is returned as a list of [timestamp, player_count] pairs
             now = time.time()
-            day_ago = now - 24 * 3600
-            week_ago = now - 7 * 24 * 3600
+            day_ago = now - 24 * 3600  # 24 hours ago
+            week_ago = now - 7 * 24 * 3600  # 7 days ago
+            three_months_ago = now - 90 * 24 * 3600  # 90 days ago
             
             counts_7d = []
             peak_24h = 0
             peak_7d = 0
+            peak_all = 0 if include_history else None
             
-            for timestamp, count in data:
-                if timestamp >= week_ago:
-                    counts_7d.append(count)
-                    peak_7d = max(peak_7d, count)
-                    if timestamp >= day_ago:
-                        peak_24h = max(peak_24h, count)
+            # For history, keep hourly data points from last 3 months
+            filtered_history = []
+            last_hour = 0
+            
+            for entry in data:
+                timestamp, count = entry
+                if count is not None:
+                    if include_history:
+                        peak_all = max(peak_all, count)  # Track all-time peak only for chart command
+                    
+                    if timestamp >= week_ago:
+                        counts_7d.append(count)
+                        peak_7d = max(peak_7d, count)
+                        if timestamp >= day_ago:
+                            peak_24h = max(peak_24h, count)
+                
+                # If including history, filter to hourly points for last 3 months
+                if include_history and timestamp >= three_months_ago:
+                    current_hour = int(timestamp / 3600)
+                    if current_hour > last_hour:  # Only keep one point per hour
+                        filtered_history.append((timestamp, count))
+                        last_hour = current_hour
 
             avg_7d = sum(counts_7d) / len(counts_7d) if counts_7d else 0.0
 
             return {
                 "peak_24h": peak_24h,
                 "peak_7d": peak_7d,
-                "avg_7d": avg_7d
+                "avg_7d": avg_7d,
+                "history": filtered_history if include_history else None,
+                "peak_all": peak_all if include_history else None
             }
 
         except Exception as e:
             logger.error(f"Error getting player history for app {app_id}: {e}")
-            return {"peak_24h": 0, "peak_7d": 0, "avg_7d": 0.0}
+            return {
+                "peak_24h": 0,
+                "peak_7d": 0,
+                "avg_7d": 0.0,
+                "history": [] if include_history else None,
+                "peak_all": 0 if include_history else None
+            }
 
     async def close(self) -> None:
         """Cleanup resources"""

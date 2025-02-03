@@ -1,11 +1,13 @@
 import logging
 from datetime import datetime
-from typing import List, Optional, Dict, Any, Union, cast
+from typing import List, Optional, Dict, Any, Union, cast, Tuple
+import io
 
 import discord
 import pytz
 from discord.ext import commands
 from discord.ext.commands import Context
+from discord import File
 
 from src.services.api import APIService
 from src.utils.decorators import command_handler
@@ -14,6 +16,7 @@ from src.commands.base_commands import BaseCommands
 from src.utils.types import CommandContext
 from src.utils.api_types import GameInfo, CountryInfo, WeatherInfo
 from src.utils.command_types import APIServiceProtocol
+from src.utils.chart_generator import create_player_count_chart
 
 logger = logging.getLogger(__name__)
 
@@ -202,8 +205,13 @@ class InformationCommands(BaseCommands):
                 await self._send_game_not_found_embed(ctx_or_interaction)
                 return
 
-            embed = await self._create_game_embed(game, similar_games)
-            await self.send_response(ctx_or_interaction, embed=embed)
+            embed, chart_file = await self._create_game_embed(game, similar_games)
+            
+            # Send response with chart if available
+            if chart_file:
+                await self.send_response(ctx_or_interaction, embed=embed, file=chart_file)
+            else:
+                await self.send_response(ctx_or_interaction, embed=embed)
 
         except Exception:
             await self._send_steam_error_embed(ctx_or_interaction)
@@ -224,7 +232,7 @@ class InformationCommands(BaseCommands):
 
         Args:
             game: Game information dictionary
-            similar_games: Optional list of similar games
+            similar_games: Optional list of similar games (not used)
 
         Returns:
             discord.Embed: Formatted embed with game information
@@ -236,10 +244,6 @@ class InformationCommands(BaseCommands):
             embed.add_field(name="24시간 최고", value=f"{game['peak_24h']:,}명", inline=True)
             embed.add_field(name="7일 최고", value=f"{game['peak_7d']:,}명", inline=True)
             embed.add_field(name="7일 평균", value=f"{game['avg_7d']:,.1f}명", inline=True)
-
-        if similar_games:
-            similar_names = "\n".join(g["name"] for g in similar_games)
-            embed.add_field(name="비슷한 게임들", value=similar_names, inline=False)
 
         return embed
 
@@ -561,3 +565,118 @@ class InformationCommands(BaseCommands):
             ctx_or_interaction,
             "환율 정보를 가져오는데 실패했습니다"
         )
+
+    @commands.command(
+        name="스팀차트",
+        help="스팀 게임의 플레이어 수 차트를 보여줍니다",
+        brief="스팀 게임 차트",
+        aliases=["steamchart"],
+        description=(
+            "스팀 게임의 플레이어 수 변화 차트를 보여줍니다.\n"
+            "사용법: !!스팀차트 [게임명]\n"
+            "예시: !!스팀차트 PUBG"
+        ),
+    )
+    async def steam_chart_prefix(self, ctx: commands.Context, *, game_name: str = None):
+        """Show Steam game player count chart"""
+        await self._handle_steam_chart(ctx, game_name)
+
+    @discord.app_commands.command(
+        name="steamchart",
+        description="스팀 게임의 플레이어 수 차트를 보여줍니다"
+    )
+    async def steam_chart_slash(
+        self,
+        interaction: discord.Interaction,
+        game_name: str
+    ) -> None:
+        """Show Steam game player count chart"""
+        await self._handle_steam_chart(interaction, game_name)
+
+    @command_handler()
+    async def _handle_steam_chart(
+        self,
+        ctx_or_interaction: CommandContext,
+        game_name: Optional[str] = None
+    ) -> None:
+        """Handle Steam game chart request
+        
+        Args:
+            ctx_or_interaction: Command context or interaction
+            game_name: Name of the game to search for
+        """
+        if not game_name:
+            await self.send_response(
+                ctx_or_interaction,
+                "게임 이름을 입력해주세요"
+            )
+            return
+
+        try:
+            # Show processing message
+            processing_msg = await self.send_response(
+                ctx_or_interaction,
+                "차트 데이터를 가져오는 중..."
+            )
+
+            # Get game data with history
+            game, similarity, _ = await self.api.steam.find_game(game_name, include_history=True)
+
+            if not game:
+                await self._send_game_not_found_embed(ctx_or_interaction)
+                return
+
+            # Create chart
+            if game.get("history"):
+                try:
+                    chart_data = create_player_count_chart(game["history"], game["name"])
+                    chart_file = File(chart_data, filename="player_count.png")
+                    
+                    # Create embed with chart
+                    embed = discord.Embed(
+                        title=f"🎮 {game['name']} - 플레이어 수 추이 (최근 3개월)",
+                        color=SUCCESS_COLOR
+                    )
+                    embed.set_image(url="attachment://player_count.png")
+                    
+                    # Add current stats
+                    embed.add_field(
+                        name="현재 플레이어",
+                        value=f"{game['player_count']:,}명",
+                        inline=True
+                    )
+                    embed.add_field(
+                        name="24시간 최고",
+                        value=f"{game['peak_24h']:,}명",
+                        inline=True
+                    )
+                    embed.add_field(
+                        name="7일 최고",
+                        value=f"{game['peak_7d']:,}명",
+                        inline=True
+                    )
+                    embed.add_field(
+                        name="역대 최고",
+                        value=f"{game['peak_all']:,}명",
+                        inline=True
+                    )
+                    
+                    await self.send_response(ctx_or_interaction, embed=embed, file=chart_file)
+                except Exception as e:
+                    logger.error(f"Failed to create chart: {e}")
+                    await self.send_response(
+                        ctx_or_interaction,
+                        "차트 생성에 실패했습니다"
+                    )
+            else:
+                await self.send_response(
+                    ctx_or_interaction,
+                    "플레이어 수 기록을 찾을 수 없습니다"
+                )
+
+        except Exception as e:
+            logger.error(f"Error in steam chart command: {e}")
+            await self._send_steam_error_embed(ctx_or_interaction)
+        finally:
+            if processing_msg:
+                await processing_msg.delete()

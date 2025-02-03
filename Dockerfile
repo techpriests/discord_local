@@ -4,12 +4,19 @@ FROM python:3.12-slim
 # Set the working directory in the container
 WORKDIR /app
 
-# Copy the pyproject.toml and the rest of your application's code
+# Copy dependency files first
 COPY pyproject.toml .
+
+# Install dependencies in a separate layer
+RUN pip install --no-cache-dir build && \
+    pip install --no-cache-dir -e .[dev]
+
+# Copy the rest of the application code
+# This layer will only rebuild when code changes
 COPY . .
 
-# Install dependencies
+# Final installation to handle any local dependencies
 RUN pip install --no-cache-dir -e .
 
 # Run the bot when the container launches
-CMD ["python", "main.py"] 
+CMD ["python", "src/main.py"] 
