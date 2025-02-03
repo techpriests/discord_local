@@ -254,7 +254,6 @@ class InformationCommands(BaseCommands):
 
         if game.get("player_count") is not None:
             embed.add_field(name="현재 플레이어", value=f"{game['player_count']:,}명", inline=True)
-            embed.add_field(name="24시간 최고", value=f"{game['peak_24h']:,}명", inline=True)
 
         # Add game image if available
         if game.get("image_url"):
