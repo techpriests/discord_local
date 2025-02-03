@@ -1,10 +1,11 @@
 from typing import TypedDict, List, Dict, Any, Optional, Tuple
 
 class GameInfo(TypedDict):
-    name: str
-    player_count: int
-    peak_24h: int
-    image_url: Optional[str]
+    """Steam game information"""
+    name: str  # Game name (Korean name if available, otherwise English name)
+    player_count: int  # Current player count
+    peak_24h: int  # Peak players in last 24 hours
+    image_url: Optional[str]  # Game image URL
 
 class CountryInfo(TypedDict):
     name: Dict[str, str]

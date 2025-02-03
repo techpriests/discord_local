@@ -8,7 +8,6 @@ class VersionInfo(NamedTuple):
     """Bot version information"""
     commit: str  # Current commit
     branch: str  # Current branch
-    main_commit: str  # Main branch's latest commit
     version: str = "1.0.0"  # Semantic version
 
 def get_git_info() -> VersionInfo:
@@ -20,17 +19,14 @@ def get_git_info() -> VersionInfo:
     try:
         commit = os.getenv("GIT_COMMIT", "unknown")
         branch = os.getenv("GIT_BRANCH", "unknown")
-        main_commit = os.getenv("GIT_MAIN_COMMIT", "unknown")
         
         return VersionInfo(
             commit=commit,
-            branch=branch,
-            main_commit=main_commit
+            branch=branch
         )
     except Exception as e:
         logger.error(f"Failed to get version info: {e}")
         return VersionInfo(
             commit="unknown",
-            branch="unknown",
-            main_commit="unknown"
+            branch="unknown"
         ) 
