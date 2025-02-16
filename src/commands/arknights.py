@@ -98,19 +98,31 @@ class ArknightsCommands(BaseCommands):
     ) -> None:
         """Handle pull calculation request"""
         try:
-            # Input validation
+            # Validate input
             if pulls <= 0:
-                raise ValueError("뽑기 횟수는 1 이상이어야 합니다")
+                await self.send_error(
+                    ctx_or_interaction,
+                    "뽑기 횟수는 1회 이상이어야 합니다",
+                    ephemeral=True
+                )
+                return
+
             if pulls > 1000:
-                raise ValueError("계산 가능한 최대 뽑기 횟수는 1000회입니다")
+                await self.send_error(
+                    ctx_or_interaction,
+                    "계산 가능한 최대 뽑기 횟수는 1000회입니다",
+                    ephemeral=True
+                )
+                return
 
             # Calculate probabilities
-            result = self.calculator.calculate_banner_probability(pulls=pulls, is_limited=is_limited)
-
-            # Create response embed
+            result = self.calculator.calculate_probabilities(pulls, is_limited)
+            
+            # Create embed
+            user_name = self.get_user_name(ctx_or_interaction)
             embed = discord.Embed(
-                title="🎲 명일방주 확률 계산기",
-                description="픽업 6성 오퍼레이터 획득 확률 계산",
+                title="🎲 명일방주 뽑기 확률 계산",
+                description=f"{user_name}님의 {pulls}회 뽑기 결과입니다.",
                 color=INFO_COLOR
             )
 
