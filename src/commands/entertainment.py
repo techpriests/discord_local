@@ -57,7 +57,8 @@ class EntertainmentCommands(BaseCommands):
         try:
             self._validate_choices(args)
             choice = self._make_random_choice(args)
-            await ctx.send(f"음... 저는 '{choice}'을(를) 선택합니다!")
+            user_name = self.get_user_name(ctx)
+            await ctx.send(f"{user_name}님, 저는 '{choice}'을(를) 선택합니다!")
         except discord.Forbidden:
             raise commands.BotMissingPermissions(["send_messages"])
         except ValueError as e:
