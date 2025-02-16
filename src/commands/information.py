@@ -78,7 +78,10 @@ class InformationCommands(BaseCommands):
             await self._handle_population_error(ctx_or_interaction, country_name, str(e))
         finally:
             if processing_msg:
-                await processing_msg.delete()
+                try:
+                    await processing_msg.delete()
+                except Exception as e:
+                    logger.error(f"Error deleting processing message: {e}")
 
     def _validate_country_name(self, country_name: Optional[str]) -> bool:
         """Validate country name input"""
@@ -101,7 +104,7 @@ class InformationCommands(BaseCommands):
         Args:
             ctx_or_interaction: Command context or interaction
             country: Country information dictionary
-            processing_msg: Optional processing message to delete
+            processing_msg: Optional processing message to delete (handled by caller)
         """
         # Check if 'name' key exists in the country dictionary
         country_name = country.get('name', {}).get('official', '정보없음')
@@ -122,8 +125,6 @@ class InformationCommands(BaseCommands):
             embed.set_thumbnail(url=flags["png"])
 
         await self._send_response(ctx_or_interaction, embed=embed)
-        if processing_msg:
-            await processing_msg.delete()
 
     async def _handle_population_error(
         self, 
@@ -174,22 +175,17 @@ class InformationCommands(BaseCommands):
         Raises:
             ValueError: If game not found or API error
         """
-        # Initialize processing_msg and user_name as None
+        if not game_name:
+            await self.send_response(
+                ctx_or_interaction,
+                "게임 이름을 입력해주세요...",
+                ephemeral=True
+            )
+            return
+
         processing_msg = None
-        
-        # Get user's name first, before any other operations
         user_name = self.get_user_name(ctx_or_interaction)
-        
         try:
-            # Validate game name
-            if not game_name or len(game_name.strip()) < 2:
-                await self.send_response(
-                    ctx_or_interaction,
-                    f"{user_name}님, 게임 이름을 2글자 이상 입력해주세요...",
-                    ephemeral=True
-                )
-                return
-            
             # Show processing message (ephemeral)
             processing_msg = await self.send_response(
                 ctx_or_interaction,
@@ -412,12 +408,16 @@ class InformationCommands(BaseCommands):
         current_time: datetime, 
         timezone: str
     ) -> None:
-        """Send time information embed"""
+        """Send embed with time information"""
+        user_name = self.get_user_name(ctx_or_interaction)
         embed = discord.Embed(
-            title=f"🕒 {timezone} 현재 시각",
-            description=current_time.strftime("%Y-%m-%d %H:%M:%S"),
+            title="🕒 세계 시간",
+            description=f"{user_name}님이 요청하신 시간 정보입니다.",
             color=INFO_COLOR
         )
+        embed.add_field(name="시간대", value=timezone, inline=True)
+        embed.add_field(name="현재 시간", value=current_time.strftime("%Y-%m-%d %H:%M:%S"), inline=True)
+
         await self.send_response(ctx_or_interaction, embed=embed)
 
     async def _handle_time_error(
@@ -447,6 +447,7 @@ class InformationCommands(BaseCommands):
         city_name: Optional[str] = None
     ) -> None:
         """Handle weather information request"""
+        processing_msg = None
         try:
             # Check if weather API is available
             try:
@@ -476,15 +477,17 @@ class InformationCommands(BaseCommands):
                 ephemeral=True
             )
 
-            try:
-                weather_info = await weather_api.get_weather(city_name)
-                await self._send_weather_embed(ctx_or_interaction, weather_info)
-            finally:
-                if processing_msg:
-                    await processing_msg.delete()
+            weather_info = await weather_api.get_weather(city_name)
+            await self._send_weather_embed(ctx_or_interaction, weather_info)
 
         except Exception as e:
             await self._handle_weather_error(ctx_or_interaction, city_name, str(e))
+        finally:
+            if processing_msg:
+                try:
+                    await processing_msg.delete()
+                except Exception as e:
+                    logger.error(f"Error deleting processing message: {e}")
 
     def _validate_city_name(self, city_name: Optional[str]) -> bool:
         """Validate city name input"""
@@ -495,16 +498,18 @@ class InformationCommands(BaseCommands):
         ctx_or_interaction: CommandContext, 
         weather: WeatherInfo
     ) -> None:
-        """Create and send weather information embed"""
+        """Send embed with weather information"""
+        user_name = self.get_user_name(ctx_or_interaction)
+        embed = discord.Embed(
+            title=f"🌤️ {weather.city}의 날씨",
+            description=f"{user_name}님이 요청하신 날씨 정보입니다.",
+            color=INFO_COLOR
+        )
         temp = weather['main'].get('temp', 0)
         feels_like = weather['main'].get('feels_like', 0)
         humidity = weather['main'].get('humidity', 0)
         description = weather['weather'][0].get('description', '') if weather['weather'] else ''
 
-        embed = discord.Embed(
-            title=f"🌤️ {weather['name']}의 날씨",
-            color=INFO_COLOR
-        )
         embed.add_field(name="온도", value=f"{temp}°C", inline=True)
         embed.add_field(name="체감 온도", value=f"{feels_like}°C", inline=True)
         embed.add_field(name="습도", value=f"{humidity}%", inline=True)
@@ -578,7 +583,10 @@ class InformationCommands(BaseCommands):
             await self._handle_exchange_error(ctx_or_interaction, currency, str(e))
         finally:
             if processing_msg:
-                await processing_msg.delete()
+                try:
+                    await processing_msg.delete()
+                except Exception as e:
+                    logger.error(f"Error deleting processing message: {e}")
 
     async def _send_single_rate(
         self, 
