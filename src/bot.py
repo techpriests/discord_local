@@ -32,8 +32,9 @@ HELP_DESCRIPTION = """
 • !!투표 [선택지1] [선택지2] ..., 프틸 투표 [...], pt poll [...] - 여러 선택지 중 하나를 선택
 • !!골라줘 [선택지1] [선택지2] ..., 프틸 골라줘 [...], pt choice [...] - 무작위 선택
 
-AI 명령어:
-• !!대화 [메시지], 프틸 대화 [메시지], pt chat [메시지] - Gemini AI와 대화하기
+AI 명령어 (Powered by Google Gemini):
+• !!대화 [메시지], 프틸 대화 [메시지], pt chat [메시지] - AI와 대화하기
+※ AI 응답은 Google의 Gemini API를 사용하여 생성됩니다.
 
 정보 명령어:
 • !!스팀 [게임이름], 프틸 스팀 [게임이름], pt steam [게임이름] - 스팀 게임 정보와 현재 플레이어 수 확인
@@ -99,22 +100,44 @@ class DiscordBot(commands.Bot):
         return self._api_service
 
     async def setup_hook(self) -> None:
-        """Set up the bot's internal state"""
+        """Initialize bot services and register commands"""
         try:
             # Initialize memory database
             self.memory_db = MemoryDB()
-            
-            # Initialize API service first
+
+            # Initialize API service if not provided
             if not self._api_service:
-                self._api_service = APIService(self._config, None)  # Initialize without notification channel
-            await self._api_service.initialize()
-            
-            # Register commands after API service is initialized
+                self._api_service = APIService(self._config)
+
+            # Register commands
             await self._register_commands()
-            
+
+            # Register help command
+            self.remove_command('help')  # Remove default help command
+            self.add_command(
+                commands.Command(
+                    self.help_prefix,
+                    name='pthelp',
+                    help='봇의 도움말을 보여줍니다',
+                    brief='도움말 보기',
+                    aliases=['도움말', '도움', '명령어']
+                )
+            )
+
+            # Register slash commands
+            self.tree.add_command(
+                app_commands.Command(
+                    name='pthelp',
+                    description='봇의 도움말을 보여줍니다',
+                    callback=self.help_slash
+                )
+            )
+            await self.tree.sync()
+
+            logger.info("Bot setup completed successfully")
         except Exception as e:
-            logger.error(f"Failed to set up bot: {e}")
-            raise ValueError("봇 설정에 실패했습니다") from e
+            logger.error(f"Error in setup_hook: {e}")
+            raise
 
     async def _register_commands(self) -> None:
         """Register all command classes"""

@@ -22,18 +22,23 @@ class AICommands(BaseCommands):
 
     @commands.command(
         name="대화",
-        help="Gemini AI와 대화를 나눕니다",
-        brief="AI와 대화하기",
+        help="프틸롭시스와 대화를 나눕니다",
+        brief="프틸롭시스와 대화하기",
         aliases=["chat", "채팅"],
-        description="Gemini AI와 대화를 나누는 명령어입니다.\n"
+        description="프틸롭시스와 대화를 나누는 명령어입니다.\n"
+        "대화는 30분간 지속되며, 이전 대화 내용을 기억합니다.\n\n"
         "사용법:\n"
-        "- !!대화 [메시지]\n"
-        "- 프틸 대화 [메시지]\n"
-        "- pt 대화 [메시지]\n"
+        "• !!대화 [메시지] - 프틸롭시스와 대화를 시작합니다\n"
+        "• !!대화종료 - 현재 진행 중인 대화를 종료합니다\n"
+        "• !!사용량 - 시스템 상태를 확인합니다\n\n"
+        "제한사항:\n"
+        "• 분당 최대 4회 요청 가능\n"
+        "• 요청 간 5초 대기 시간\n"
+        "• 대화는 30분 후 자동 종료\n\n"
         "예시:\n"
-        "- !!대화 안녕하세요\n"
-        "- 프틸 대화 오늘 날씨 어때요?\n"
-        "- pt 대화 지금 기분이 어때?",
+        "• !!대화 안녕하세요\n"
+        "• !!대화 로도스 아일랜드에 대해 설명해줘\n"
+        "• !!대화 오리지늄이 뭐야?"
     )
     async def chat(self, ctx: commands.Context, *, message: str) -> None:
         """Chat with Gemini AI
@@ -50,11 +55,9 @@ class AICommands(BaseCommands):
                 
                 # Create embed for response
                 embed = discord.Embed(
-                    title="Gemini AI 응답",
                     description=response,
                     color=INFO_COLOR
                 )
-                embed.set_footer(text="Powered by Google Gemini")
                 
                 await ctx.send(embed=embed)
                 
@@ -107,11 +110,9 @@ class AICommands(BaseCommands):
             
             # Create embed for response
             embed = discord.Embed(
-                title="Gemini AI 응답",
                 description=response,
                 color=INFO_COLOR
             )
-            embed.set_footer(text="Powered by Google Gemini")
             
             if isinstance(ctx_or_interaction, discord.Interaction):
                 await ctx_or_interaction.response.send_message(embed=embed)
@@ -135,14 +136,20 @@ class AICommands(BaseCommands):
 
     @commands.command(
         name="사용량",
-        help="Gemini AI 사용량을 보여줍니다",
-        brief="AI 사용량 확인",
-        aliases=["usage"],
-        description="Gemini AI의 현재 사용량과 상태를 보여줍니다.\n"
+        help="시스템 상태와 사용량을 확인합니다",
+        brief="시스템 상태 확인",
+        aliases=["usage", "상태"],
+        description="프틸롭시스의 현재 시스템 상태와 사용량을 보여줍니다.\n"
+        "토큰 사용량, CPU/메모리 사용량, 오류 상태 등을 확인할 수 있습니다.\n\n"
         "사용법:\n"
-        "• !!사용량\n"
+        "• !!사용량 - 전체 시스템 상태 확인\n"
         "• 프틸 사용량\n"
-        "• pt usage"
+        "• pt usage\n\n"
+        "표시 정보:\n"
+        "• 현재 분당 요청 수\n"
+        "• 일간 토큰 사용량\n"
+        "• CPU/메모리 사용량\n"
+        "• 시스템 상태 및 오류"
     )
     async def usage_prefix(self, ctx: commands.Context) -> None:
         """Show Gemini AI usage statistics"""
@@ -172,7 +179,7 @@ class AICommands(BaseCommands):
             
             # Create embed
             embed = discord.Embed(
-                title="🤖 Gemini AI 사용량 및 상태",
+                title="🤖 시스템 상태",
                 description=report,
                 color=INFO_COLOR
             )
@@ -212,4 +219,39 @@ class AICommands(BaseCommands):
             
         except Exception as e:
             logger.error(f"Error getting usage statistics: {e}")
-            raise ValueError("사용량 정보를 가져오는데 실패했습니다") from e 
+            raise ValueError("사용량 정보를 가져오는데 실패했습니다") from e
+
+    @commands.command(
+        name="대화종료",
+        help="현재 진행 중인 대화 세션을 종료합니다",
+        brief="대화 세션 종료하기",
+        aliases=["endchat", "세션종료"],
+        description="현재 진행 중인 프틸롭시스와의 대화를 종료합니다.\n"
+        "대화가 종료되면 이전 대화 내용은 더 이상 기억되지 않습니다.\n\n"
+        "사용법:\n"
+        "• !!대화종료 - 현재 대화 세션을 즉시 종료\n"
+        "• 프틸 대화종료\n"
+        "• pt endchat\n\n"
+        "참고:\n"
+        "• 대화는 30분 동안 활동이 없으면 자동으로 종료됩니다\n"
+        "• 새로운 대화는 !!대화 명령어로 언제든 시작할 수 있습니다"
+    )
+    async def end_chat(self, ctx: commands.Context) -> None:
+        """End current chat session"""
+        try:
+            if self.bot.api_service.gemini.end_chat_session(ctx.author.id):
+                embed = discord.Embed(
+                    title="✅ 대화 세션 종료",
+                    description="대화 세션이 종료되었습니다.\n새로운 대화를 시작하실 수 있습니다.",
+                    color=INFO_COLOR
+                )
+            else:
+                embed = discord.Embed(
+                    title="ℹ️ 알림",
+                    description="진행 중인 대화 세션이 없습니다.",
+                    color=INFO_COLOR
+                )
+            await ctx.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Error in end_chat command: {e}")
+            raise ValueError("대화 세션 종료에 실패했습니다") from e 
