@@ -9,6 +9,7 @@ from src.utils.decorators import command_handler
 from .base_commands import BaseCommands
 from src.utils.types import CommandContext
 from src.utils.constants import ERROR_COLOR, INFO_COLOR
+from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,21 @@ class AICommands(BaseCommands):
     def __init__(self) -> None:
         """Initialize AI commands"""
         super().__init__()
+        self._api_service = None
+
+    @property
+    def api_service(self) -> APIService:
+        """Get API service instance
+        
+        Returns:
+            APIService: API service instance
+            
+        Raises:
+            ValueError: If API service is not initialized
+        """
+        if not self.bot or not self.bot.api_service:
+            raise ValueError("Gemini API not initialized")
+        return self.bot.api_service
 
     @commands.command(
         name="대화",
@@ -51,7 +67,7 @@ class AICommands(BaseCommands):
             # Send typing indicator while processing
             async with ctx.typing():
                 # Get response from Gemini
-                response = await self.bot.api_service.gemini.chat(message, ctx.author.id)
+                response = await self.api_service.gemini.chat(message, ctx.author.id)
                 
                 # Create embed for response
                 embed = discord.Embed(
@@ -70,7 +86,7 @@ class AICommands(BaseCommands):
             )
             await ctx.send(embed=error_embed)
         except Exception as e:
-            logger.error(f"Error in chat command: {e}")
+            logger.error(f"Error in chat command: {e}", exc_info=True)
             raise ValueError("대화 처리에 실패했습니다") from e
 
     @app_commands.command(
@@ -106,7 +122,7 @@ class AICommands(BaseCommands):
             )
             
             # Get response from Gemini
-            response = await self.bot.api_service.gemini.chat(message, user_id)
+            response = await self.api_service.gemini.chat(message, user_id)
             
             # Create embed for response
             embed = discord.Embed(
@@ -131,7 +147,7 @@ class AICommands(BaseCommands):
             else:
                 await ctx_or_interaction.send(embed=error_embed)
         except Exception as e:
-            logger.error(f"Error in chat command: {e}")
+            logger.error(f"Error in chat command: {e}", exc_info=True)
             raise ValueError("대화 처리에 실패했습니다") from e
 
     @commands.command(
@@ -172,10 +188,10 @@ class AICommands(BaseCommands):
         """
         try:
             # Get formatted report
-            report = self.bot.api_service.gemini.get_formatted_report()
+            report = self.api_service.gemini.get_formatted_report()
             
             # Get health status
-            health = self.bot.api_service.gemini.health_status
+            health = self.api_service.gemini.health_status
             
             # Create embed
             embed = discord.Embed(
@@ -239,7 +255,7 @@ class AICommands(BaseCommands):
     async def end_chat(self, ctx: commands.Context) -> None:
         """End current chat session"""
         try:
-            if self.bot.api_service.gemini.end_chat_session(ctx.author.id):
+            if self.api_service.gemini.end_chat_session(ctx.author.id):
                 embed = discord.Embed(
                     title="✅ 대화 세션 종료",
                     description="대화 세션이 종료되었습니다.\n새로운 대화를 시작하실 수 있습니다.",
