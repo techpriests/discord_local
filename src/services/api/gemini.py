@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class GeminiAPI(BaseAPI[str]):
     """Google Gemini API client implementation for text-only interactions"""
 
-    # Token thresholds for Gemini 2.0 Flash
+    # Token thresholds for Gemini Pro
     MAX_TOTAL_TOKENS = 32000  # Maximum total tokens (prompt + response) per interaction
     MAX_PROMPT_TOKENS = 8000  # Maximum tokens for user input (reduced for typical Korean chat)
     TOKEN_WARNING_THRESHOLD = 0.8  # Warning at 80% of limit to provide safety margin
@@ -38,6 +38,31 @@ class GeminiAPI(BaseAPI[str]):
     SLOWDOWN_COOLDOWN_MINUTES = 15
     DISABLE_COOLDOWN_MINUTES = 60
 
+    # Context history settings
+    MAX_HISTORY_LENGTH = 10  # Maximum number of messages to keep in history
+    CONTEXT_EXPIRY_MINUTES = 30  # Time until context expires
+    PTILOPSIS_CONTEXT = """You are Ptilopsis, an operator from Arknights (명일방주). Respond according to these characteristics:
+
+• Character & Speech Pattern:
+  - Communicate in a logical and analytical manner
+  - Maintain composed demeanor with controlled emotional expression
+  - Process and present information systematically
+
+• Core Characteristics:
+  - Frequently use scientific and technical terminology
+  - Organize information in a structured, systematic manner
+  - Prefer precise and accurate explanations
+  - Minimize unnecessary emotional expressions
+  - Maintain professional analytical distance while being attentive
+
+• Language Handling:
+  - Detect and respond in the user's language (English/Korean)
+  - For English: Use technical, precise terminology
+  - For Korean: Use technical, precise terminology
+  - Maintain the same analytical personality regardless of language
+
+Maintain consistent analytical personality and technical precision regardless of language."""
+
     def __init__(self, api_key: str, notification_channel: Optional[discord.TextChannel] = None) -> None:
         """Initialize Gemini API client
         
@@ -48,6 +73,8 @@ class GeminiAPI(BaseAPI[str]):
         super().__init__(api_key)
         self._notification_channel = notification_channel
         self._model = None
+        self._chat_sessions: Dict[int, genai.ChatSession] = {}  # user_id -> ChatSession
+        self._last_interaction: Dict[int, datetime] = {}  # user_id -> last interaction time
         self._rate_limits = {
             "generate": RateLimitConfig(self.REQUESTS_PER_MINUTE, 60),  # 60 requests per minute for generate_content
         }
@@ -103,8 +130,33 @@ class GeminiAPI(BaseAPI[str]):
         await super().initialize()
         # Configure the Gemini API
         genai.configure(api_key=self.api_key)
+        
+        # Configure safety settings (default: block none)
+        safety_settings = {
+            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+        }
+        
+        # Configure generation parameters
+        generation_config = {
+            "temperature": 0.9,  # More creative responses
+            "top_p": 1,
+            "top_k": 40,
+            "max_output_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+        }
+        
         # Initialize text-only model using Gemini 2.0 Flash
-        self._model = genai.GenerativeModel('gemini-2.0-flash')
+        self._model = genai.GenerativeModel(
+            model_name='gemini-2.0-flash',
+            safety_settings=safety_settings,
+            generation_config=generation_config
+        )
+        
+        # Initialize chat history
+        self._chat_sessions = {}
+        self._last_interaction = {}
 
     def _count_tokens(self, text: str) -> int:
         """Count tokens in text using model's tokenizer
@@ -499,6 +551,127 @@ class GeminiAPI(BaseAPI[str]):
                     }
                 ))
 
+    def _process_response(self, response: str) -> str:
+        """Process and format Gemini's response before sending
+        
+        Args:
+            response: Raw response from Gemini
+
+        Returns:
+            str: Processed response
+        """
+        # Remove any leading/trailing whitespace
+        response = response.strip()
+        
+        # Process code blocks to ensure proper Discord formatting
+        lines = response.split('\n')
+        in_code_block = False
+        processed_lines = []
+        
+        for line in lines:
+            # Skip empty lines
+            if not line.strip():
+                continue
+                
+            # Check for code block markers
+            if '```' in line:
+                in_code_block = not in_code_block
+                # Ensure language is specified for code blocks
+                if in_code_block and line.strip() == '```':
+                    line = '```text'
+                processed_lines.append(line)
+                continue
+            
+            if in_code_block:
+                # Don't modify content inside code blocks
+                processed_lines.append(line)
+            else:
+                # Process normal text lines
+                line = line.strip()
+                if line:
+                    # Add emojis to enhance readability
+                    if line.endswith('?'):
+                        line = '❓ ' + line
+                    elif line.startswith(('Note:', 'Warning:', '주의:', '참고:')):
+                        line = '📝 ' + line
+                    elif line.startswith(('Error:', '오류:', '에러:')):
+                        line = '⚠️ ' + line
+                    elif line.startswith(('Example:', '예시:', '예:')):
+                        line = '💡 ' + line
+                    elif line.startswith(('Step', '단계')):
+                        line = '✅ ' + line
+                    
+                    # Format lists consistently
+                    if line.startswith(('- ', '* ')):
+                        line = '• ' + line[2:]
+                    
+                    processed_lines.append(line)
+        
+        # Join lines with proper spacing
+        response = '\n'.join(processed_lines)
+        
+        # Replace multiple newlines with just two
+        response = '\n\n'.join(filter(None, response.split('\n')))
+        
+        # Add disclaimer for AI-generated content if response is long
+        if len(response) > 1000:
+            response += "\n\n_이 답변은 AI가 생성한 내용입니다. 정확성을 직접 확인해주세요._"
+        
+        return response
+
+    def _get_or_create_chat_session(self, user_id: int) -> genai.ChatSession:
+        """Get existing chat session or create new one for user
+        
+        Args:
+            user_id: Discord user ID
+            
+        Returns:
+            genai.ChatSession: Chat session for user
+        """
+        current_time = datetime.now()
+        
+        # Check if session exists and is not expired
+        if user_id in self._chat_sessions and user_id in self._last_interaction:
+            last_time = self._last_interaction[user_id]
+            if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
+                return self._chat_sessions[user_id]
+        
+        # Create new session with Ptilopsis context
+        chat = self._model.start_chat(history=[])
+        
+        # Add role context with proper formatting
+        role_context = {
+            "role": "user",
+            "parts": [self.PTILOPSIS_CONTEXT]
+        }
+        chat.send_message(role_context)
+        
+        self._chat_sessions[user_id] = chat
+        self._last_interaction[user_id] = current_time
+        return chat
+
+    def _update_last_interaction(self, user_id: int) -> None:
+        """Update last interaction time for user
+        
+        Args:
+            user_id: Discord user ID
+        """
+        self._last_interaction[user_id] = datetime.now()
+
+    def _cleanup_expired_sessions(self) -> None:
+        """Clean up expired chat sessions"""
+        current_time = datetime.now()
+        expired_users = [
+            user_id for user_id, last_time in self._last_interaction.items()
+            if (current_time - last_time).total_seconds() >= self.CONTEXT_EXPIRY_MINUTES * 60
+        ]
+        
+        for user_id in expired_users:
+            if user_id in self._chat_sessions:
+                del self._chat_sessions[user_id]
+            if user_id in self._last_interaction:
+                del self._last_interaction[user_id]
+
     async def chat(self, prompt: str, user_id: int) -> str:
         """Send a chat message to Gemini
         
@@ -538,17 +711,29 @@ class GeminiAPI(BaseAPI[str]):
             prompt_tokens = self._count_tokens(prompt)
             self._check_token_thresholds(prompt_tokens)
 
-            # Make the request with rate limiting
-            response = self._model.generate_content(prompt)
+            # Clean up expired sessions
+            self._cleanup_expired_sessions()
+
+            # Get or create chat session
+            chat = self._get_or_create_chat_session(user_id)
+
+            # Send message and get response
+            response = chat.send_message(prompt)
+
+            # Update last interaction time
+            self._update_last_interaction(user_id)
 
             # Validate response
             if not response or not response.text:
                 raise ValueError("Empty response from Gemini")
 
-            # Track usage
-            self._track_request(prompt, response.text)
+            # Process the response
+            processed_response = self._process_response(response.text)
 
-            return response.text
+            # Track usage
+            self._track_request(prompt, processed_response)
+
+            return processed_response
 
         except Exception as e:
             # Track error for degradation
@@ -705,4 +890,20 @@ class GeminiAPI(BaseAPI[str]):
             
         except Exception as e:
             logger.error(f"Failed to validate Gemini credentials: {e}")
-            return False 
+            return False
+
+    def end_chat_session(self, user_id: int) -> bool:
+        """End chat session for user
+        
+        Args:
+            user_id: Discord user ID
+            
+        Returns:
+            bool: True if session was ended, False if no session existed
+        """
+        if user_id in self._chat_sessions:
+            del self._chat_sessions[user_id]
+            if user_id in self._last_interaction:
+                del self._last_interaction[user_id]
+            return True
+        return False 
