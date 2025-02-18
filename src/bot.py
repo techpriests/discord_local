@@ -17,6 +17,7 @@ from src.commands.information import InformationCommands
 from src.commands.entertainment import EntertainmentCommands
 from src.commands.system import SystemCommands
 from src.commands.arknights import ArknightsCommands
+from src.commands.ai import AICommands
 from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,8 @@ class DiscordBot(commands.Bot):
             InformationCommands,
             EntertainmentCommands,
             SystemCommands,
-            ArknightsCommands
+            ArknightsCommands,
+            AICommands
         ]
         self.memory_db: Optional[MemoryDB] = None
         self.version_info: VersionInfo = get_git_info()
@@ -96,54 +98,47 @@ class DiscordBot(commands.Bot):
     async def setup_hook(self) -> None:
         """Set up the bot's internal state"""
         try:
-            # Initialize API service
-            self._api_service = APIService(self._config)
-            
             # Initialize memory database
             self.memory_db = {}
             
             # Register commands
             await self._register_commands()
             
-            # Initialize API service after bot is ready to access channels
-            self.loop.create_task(self._initialize_services())
+            # Initialize API service synchronously
+            await self.wait_until_ready()
+            
+            # Get or create notification channel for each guild
+            notification_channels = []
+            for guild in self.guilds:
+                channel = discord.utils.get(guild.text_channels, name="bot-notifications")
+                if channel:
+                    notification_channels.append(channel)
+                    logger.info(f"Found existing notification channel in {guild.name}")
+                    continue
+                
+                try:
+                    # Create channel if it doesn't exist
+                    channel = await guild.create_text_channel(
+                        "bot-notifications",
+                        topic="AI Service Status Notifications",
+                        reason="Required for bot status notifications"
+                    )
+                    notification_channels.append(channel)
+                    logger.info(f"Created notification channel in {guild.name}")
+                except discord.Forbidden:
+                    logger.warning(f"Missing permissions to create notification channel in {guild.name}")
+                except Exception as e:
+                    logger.error(f"Failed to create notification channel in {guild.name}: {e}")
+            
+            # Initialize API service with the first available notification channel if not already provided
+            if not self._api_service:
+                notification_channel = notification_channels[0] if notification_channels else None
+                self._api_service = APIService(self._config, notification_channel)
+            await self._api_service.initialize()
             
         except Exception as e:
             logger.error(f"Failed to set up bot: {e}")
             raise ValueError("봇 설정에 실패했습니다") from e
-
-    async def _initialize_services(self) -> None:
-        """Initialize services after bot is ready"""
-        # Wait until bot is ready to access channels
-        await self.wait_until_ready()
-        
-        try:
-            # Get or create notification channel
-            notification_channel = None
-            for guild in self.guilds:
-                channel = discord.utils.get(guild.text_channels, name="bot-notifications")
-                if channel:
-                    notification_channel = channel
-                    break
-                else:
-                    try:
-                        # Create channel if it doesn't exist
-                        notification_channel = await guild.create_text_channel(
-                            "bot-notifications",
-                            topic="AI Service Status Notifications"
-                        )
-                        break
-                    except discord.Forbidden:
-                        continue
-            
-            # Re-initialize API service with notification channel
-            self._api_service = APIService(self._config, notification_channel)
-            await self._api_service.initialize()
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize services: {e}")
-            # Continue without notifications if setup fails
-            await self._api_service.initialize()
 
     async def _register_commands(self) -> None:
         """Register all command classes"""
@@ -153,6 +148,11 @@ class DiscordBot(commands.Bot):
                     await self.add_cog(command_class(self.api_service))
                 elif command_class == SystemCommands:
                     await self.add_cog(command_class(self))
+                elif command_class == AICommands:
+                    await self.add_cog(command_class())
+                    cog = self.get_cog(command_class.__name__)
+                    if cog:
+                        cog.bot = self
                 else:
                     await self.add_cog(command_class())
             await self.tree.sync()
@@ -172,7 +172,7 @@ class DiscordBot(commands.Bot):
         )
         await cast(discord.Client, self).change_presence(
             activity=discord.Game(
-                name=f"!!help | /help | {self.version_info.commit}"
+                name=f"프틸 도움말 | /help | {self.version_info.commit}"
             )
         )
 

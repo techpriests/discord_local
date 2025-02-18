@@ -197,7 +197,7 @@ class InformationCommands(BaseCommands):
         processing_msg = None
         user_name = self.get_user_name(ctx_or_interaction)
         try:
-            # Show processing message (ephemeral)
+            # Show processing message
             processing_msg = await self.send_response(
                 ctx_or_interaction,
                 f"{user_name}님, 게임 정보를 가져오는 중...",
@@ -211,6 +211,15 @@ class InformationCommands(BaseCommands):
                 return
 
             embed = await self._create_game_embed(game, similar_games, user_name)
+            
+            # Delete processing message before sending response
+            if processing_msg:
+                try:
+                    await processing_msg.delete()
+                except Exception as e:
+                    logger.error(f"Error deleting processing message: {e}")
+                processing_msg = None  # Set to None so we don't try to delete again in finally
+            
             await self.send_response(ctx_or_interaction, embed=embed)
 
         except Exception as e:
