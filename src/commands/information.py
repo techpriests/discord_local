@@ -207,6 +207,11 @@ class InformationCommands(BaseCommands):
             game, similarity, similar_games = await self.api.steam.find_game(game_name)
 
             if not game:
+                if processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except Exception as e:
+                        logger.error(f"Error deleting processing message: {e}")
                 await self._send_game_not_found_embed(ctx_or_interaction, user_name)
                 return
 
@@ -218,19 +223,17 @@ class InformationCommands(BaseCommands):
                     await processing_msg.delete()
                 except Exception as e:
                     logger.error(f"Error deleting processing message: {e}")
-                processing_msg = None  # Set to None so we don't try to delete again in finally
             
             await self.send_response(ctx_or_interaction, embed=embed)
 
         except Exception as e:
             logger.error(f"Error in steam command: {e}")
-            await self._send_steam_error_embed(ctx_or_interaction, user_name)
-        finally:
             if processing_msg:
                 try:
                     await processing_msg.delete()
                 except Exception as e:
                     logger.error(f"Error deleting processing message: {e}")
+            await self._send_steam_error_embed(ctx_or_interaction, user_name)
 
     async def _send_game_not_found_embed(self, ctx_or_interaction, user_name: str):
         """Send embed for game not found error
@@ -332,7 +335,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"{user_name}님, 필수 입력값이 누락되었습니다. `!!help {ctx.command}` 로 사용법을 확인해주세요.",
+            f"{user_name}님, 필수 입력값이 누락되었습니다. `!!pthelp {ctx.command}` 로 사용법을 확인해주세요.",
             ephemeral=True
         )
 
@@ -349,7 +352,7 @@ class InformationCommands(BaseCommands):
             f"{user_name}님, 예상치 못한 오류가 발생했습니다.",
             "가능한 해결 방법:",
             "• 잠시 후 다시 시도",
-            "• 명령어 사용법 확인 (`!!help` 명령어 사용)",
+            "• 명령어 사용법 확인 (`!!pthelp` 명령어 사용)",
             "• 봇 관리자에게 문의",
         ]
         await self.send_response(

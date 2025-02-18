@@ -28,7 +28,7 @@ class TestBotBasic:
         # Test command system initialization
         assert isinstance(bot.tree, MagicMock)
         assert 'InformationCommands' in bot._BotBase__cogs
-        assert 'help' in bot.all_commands
+        assert 'pthelp' in bot.all_commands
     
     async def test_bot_startup(self, bot):
         """Test bot startup sequence"""
@@ -42,7 +42,7 @@ class TestBotBasic:
         
         # Check that status contains help commands and commit SHA
         status_name = kwargs['activity'].name
-        assert "프틸 도움말 | /help |" in status_name  # Should contain help commands
+        assert "프틸 도움말 | /pthelp |" in status_name  # Should contain help commands
         assert len(status_name.split(" | ")) == 3  # Should have three parts
         
         # Verify prefix system
@@ -54,9 +54,9 @@ class TestBotBasic:
 
     async def test_bot_help_command(self, bot, mock_context):
         """Test help command"""
-        help_command = bot.get_command('help')
+        help_command = bot.get_command('pthelp')
         assert help_command is not None
-        assert help_command.name == 'help'
+        assert help_command.name == 'pthelp'
         assert help_command.help == '도움말을 보여줍니다'
         assert help_command.brief == '도움말'
         

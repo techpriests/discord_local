@@ -96,8 +96,28 @@ class SystemCommands(BaseCommands):
         Args:
             ctx: Command context
         """
-        await self.bot.close()
-        print("Bot Closed")
+        try:
+            await ctx.send("봇을 종료합니다...")
+            await self.bot.close()
+        except Exception as e:
+            logger.error(f"Error during bot shutdown: {e}")
+            await ctx.send("봇 종료 중 오류가 발생했습니다.")
+
+    @commands.command(aliases=["restart"])
+    @commands.has_permissions(administrator=True)
+    async def reboot(self, ctx: commands.Context) -> None:
+        """Restart the bot (admin only)
+
+        Args:
+            ctx: Command context
+        """
+        try:
+            await ctx.send("봇을 재시작합니다...")
+            await self.bot.close()
+            # The Docker container's restart policy will handle the actual restart
+        except Exception as e:
+            logger.error(f"Error during bot restart: {e}")
+            await ctx.send("봇 재시작 중 오류가 발생했습니다.")
 
     @commands.command(name="동기화", help="슬래시 명령어를 동기화합니다")
     @commands.has_permissions(administrator=True)

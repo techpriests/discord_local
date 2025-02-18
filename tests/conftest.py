@@ -132,12 +132,12 @@ async def bot(mock_config, mock_api_service, mock_command_tree) -> AsyncGenerato
         # Add command registration
         help_command = commands.Command(
             mock_help_command,
-            name='help',
+            name='pthelp',
             help='도움말을 보여줍니다',
             brief='도움말'
         )
-        bot.all_commands['help'] = help_command
-        bot._BotBase__commands['help'] = help_command
+        bot.all_commands['pthelp'] = help_command
+        bot._BotBase__commands['pthelp'] = help_command
         
         # Register ping command for prefix tests
         async def ping_command(self, ctx):
