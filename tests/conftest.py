@@ -46,6 +46,18 @@ def mock_api_service() -> MagicMock:
     service.gemini = MagicMock()
     service.gemini.chat = AsyncMock()
     service.validate_credentials = AsyncMock(return_value=True)
+    
+    # Add new API state tracking
+    service.api_states = {
+        'steam': True,
+        'population': True,
+        'exchange': True,
+        'gemini': True
+    }
+    service.initialized = True
+    service._cleanup_apis = AsyncMock()
+    service.close = AsyncMock()
+    
     return service
 
 @pytest.fixture
@@ -109,7 +121,12 @@ async def bot(mock_config, mock_api_service, mock_command_tree) -> AsyncGenerato
         
         # Initialize services
         bot._api_service = mock_api_service
-        bot.memory_db = MagicMock()
+        memory_db = MagicMock()
+        memory_db.close = AsyncMock()  # Make close an async mock
+        memory_db.store = AsyncMock()  # Add store method
+        memory_db.recall = AsyncMock(return_value={})  # Add recall method
+        memory_db.forget = AsyncMock(return_value=True)  # Add forget method
+        bot.memory_db = memory_db
         
         # Set up command prefix
         bot.command_prefix = ["!!", "프틸 ", "pt "]

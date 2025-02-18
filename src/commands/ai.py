@@ -33,8 +33,21 @@ class AICommands(BaseCommands):
             ValueError: If API service is not initialized
         """
         if not self.bot or not self.bot.api_service:
-            raise ValueError("Gemini API not initialized")
+            raise ValueError("API 서비스가 초기화되지 않았습니다")
         return self.bot.api_service
+
+    def _check_gemini_state(self) -> None:
+        """Check if Gemini API is initialized
+        
+        Raises:
+            ValueError: If Gemini API is not initialized
+        """
+        if not self.api_service.initialized:
+            raise ValueError("API 서비스가 초기화되지 않았습니다")
+            
+        api_states = self.api_service.api_states
+        if not api_states.get('gemini', False):
+            raise ValueError("Gemini API가 초기화되지 않았습니다")
 
     @commands.command(
         name="대화",
@@ -114,6 +127,8 @@ class AICommands(BaseCommands):
             message: Message to send to Gemini
         """
         try:
+            self._check_gemini_state()
+            
             # Get user ID based on context type
             user_id = (
                 ctx_or_interaction.author.id 
@@ -187,6 +202,8 @@ class AICommands(BaseCommands):
             ctx_or_interaction: Command context or interaction
         """
         try:
+            self._check_gemini_state()
+            
             # Get formatted report
             report = self.api_service.gemini.get_formatted_report()
             

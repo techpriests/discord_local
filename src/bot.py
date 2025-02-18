@@ -2,6 +2,8 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Type, cast, NoReturn, Union
 import asyncio
+import os
+import time
 
 import discord
 from discord.app_commands import AppCommandError
@@ -129,39 +131,93 @@ class DiscordBot(commands.Bot):
                 try:
                     self._api_service = APIService(self._config)
                     if not await self._api_service.initialize():
-                        raise ValueError("API service credentials validation failed")
+                        raise ValueError("API service initialization failed - credential validation error")
+                        
+                    # Log API states
+                    api_states = self._api_service.api_states
+                    logger.info("API initialization states:")
+                    for api_name, state in api_states.items():
+                        logger.info(f"- {api_name}: {'✓' if state else '✗'}")
+                        
                 except Exception as e:
-                    logger.error(f"API service initialization failed: {e}", exc_info=True)
+                    logger.error(f"API service initialization failed: {str(e)}", exc_info=True)
                     raise ValueError(f"Failed to initialize API service: {str(e)}")
                 logger.info("API service initialized successfully")
             
             # Initialize memory database
             logger.info("Initializing memory database...")
-            self.memory_db = MemoryDB()
-            logger.info("Memory database initialized")
+            await self._initialize_memory_db()
 
             # Register commands
             logger.info("Registering commands...")
             await self._register_commands()
-            logger.info("Commands registered")
+            logger.info("Commands registered successfully")
 
             # Sync all commands once at the end
             logger.info("Syncing slash commands...")
             await self.tree.sync()
-            logger.info("Slash commands synced")
+            logger.info("Slash commands synced successfully")
 
             logger.info("Bot setup completed successfully")
         except Exception as e:
-            logger.error(f"Error in setup_hook: {e}", exc_info=True)
+            logger.error(f"Error in setup_hook: {str(e)}", exc_info=True)
+            # Clean up on failure
+            await self._cleanup_on_setup_failure()
             raise
+
+    async def _cleanup_on_setup_failure(self) -> None:
+        """Clean up resources if setup fails"""
+        cleanup_errors = []
+        
+        try:
+            # Clean up API service
+            if self._api_service:
+                logger.info("Cleaning up API service...")
+                try:
+                    await self._api_service.close()
+                except Exception as e:
+                    cleanup_errors.append(f"API service cleanup error: {e}")
+                finally:
+                    self._api_service = None
+            
+            # Clean up memory database
+            if self.memory_db:
+                logger.info("Cleaning up memory database...")
+                try:
+                    await self.memory_db.close()
+                except Exception as e:
+                    cleanup_errors.append(f"Memory DB cleanup error: {e}")
+                finally:
+                    self.memory_db = None
+
+            # Clean up any pending tasks
+            try:
+                tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+                if tasks:
+                    logger.info(f"Cleaning up {len(tasks)} pending tasks...")
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                cleanup_errors.append(f"Task cleanup error: {e}")
+                
+        except Exception as e:
+            cleanup_errors.append(f"General cleanup error: {e}")
+            logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
+        finally:
+            # Ensure services are set to None even if cleanup fails
+            self._api_service = None
+            self.memory_db = None
+            
+            # Log all cleanup errors if any occurred
+            if cleanup_errors:
+                logger.error("Multiple cleanup errors occurred:\n" + "\n".join(cleanup_errors))
 
     async def _register_commands(self) -> None:
         """Register all command classes"""
         try:
             logger.info("Starting command registration...")
             
-            # Validate API service is initialized
-            if not self._api_service:
+            # Ensure API service is initialized
+            if not self._api_service or not self._api_service.initialized:
                 raise ValueError("API service must be initialized before registering commands")
                 
             for command_class in self._command_classes:
@@ -187,12 +243,12 @@ class DiscordBot(commands.Bot):
                         
                     logger.info(f"Successfully registered {command_class.__name__}")
                 except Exception as e:
-                    logger.error(f"Failed to register command class {command_class.__name__}: {e}", exc_info=True)
+                    logger.error(f"Failed to register command class {command_class.__name__}: {str(e)}")
                     raise  # Re-raise to handle in setup_hook
             
             logger.info("Command registration complete")
         except Exception as e:
-            logger.error(f"Failed to register commands: {e}", exc_info=True)
+            logger.error(f"Failed to register commands: {str(e)}")
             raise
 
     async def on_ready(self) -> None:
@@ -235,6 +291,12 @@ class DiscordBot(commands.Bot):
             if notification_channels and self._api_service:
                 logger.info("Updating API service with notification channel")
                 self._api_service.update_notification_channel(notification_channels[0])
+                
+                # Log final API states after notification channel setup
+                api_states = self._api_service.api_states
+                logger.info("Final API states after notification setup:")
+                for api_name, state in api_states.items():
+                    logger.info(f"- {api_name}: {'✓' if state else '✗'}")
 
             # Set bot presence
             logger.info("Setting bot presence...")
@@ -334,30 +396,64 @@ class DiscordBot(commands.Bot):
 
     async def _cleanup(self) -> None:
         """Clean up bot resources"""
+        cleanup_errors = []
+        
         try:
             # Clean up API service
             if self._api_service:
-                await self._api_service.close()
+                try:
+                    await self._api_service.close()
+                except Exception as e:
+                    cleanup_errors.append(f"API service cleanup error: {e}")
             
             # Clean up memory database
             if self.memory_db:
-                await self.memory_db.close()
+                try:
+                    await self.memory_db.close()
+                except Exception as e:
+                    cleanup_errors.append(f"Memory DB cleanup error: {e}")
             
             # Clean up any remaining tasks
-            tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+                if tasks:
+                    await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception as e:
+                cleanup_errors.append(f"Task cleanup error: {e}")
             
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            cleanup_errors.append(f"General cleanup error: {e}")
+            logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
+            
+        # Log all cleanup errors if any occurred
+        if cleanup_errors:
+            logger.error("Multiple cleanup errors occurred:\n" + "\n".join(cleanup_errors))
 
     async def close(self) -> None:
         """Close the bot connection and clean up resources"""
         try:
             logger.info("Bot shutting down, cleaning up resources...")
-            await self._cleanup()
+            
+            # Clean up API service first
+            if self._api_service:
+                logger.info("Closing API service...")
+                await self._api_service.close()
+                self._api_service = None
+
+            # Clean up memory database
+            if self.memory_db:
+                logger.info("Closing memory database...")
+                await self.memory_db.close()
+                self.memory_db = None
+
+            # Clean up any remaining tasks
+            tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            if tasks:
+                logger.info(f"Cleaning up {len(tasks)} remaining tasks...")
+                await asyncio.gather(*tasks, return_exceptions=True)
+            
         except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
+            logger.error(f"Error during cleanup: {str(e)}", exc_info=True)
         finally:
             await super().close()
             logger.info("Bot shutdown complete")
@@ -816,9 +912,30 @@ class DiscordBot(commands.Bot):
         )
 
     async def _initialize_memory_db(self) -> None:
-        """Initialize memory database if not already initialized"""
-        if not self.memory_db:
+        """Initialize memory database"""
+        try:
+            logger.info("Initializing memory database...")
+            # Ensure data directory exists
+            os.makedirs("data", exist_ok=True)
+            
+            # Create and test database
             self.memory_db = MemoryDB()
+            
+            # Validate database access with test operations
+            test_key = f"test_{int(time.time())}"
+            await self.memory_db.store(test_key, "Initialization test", "system")
+            test_data = await self.memory_db.recall(test_key)
+            if not test_data:
+                raise ValueError("Failed to verify database read/write access")
+            await self.memory_db.forget(test_key)
+            
+            logger.info("Memory database initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize memory database: {e}")
+            if hasattr(self, 'memory_db') and self.memory_db:
+                await self.memory_db.close()
+            self.memory_db = None
+            raise ValueError(f"Memory database initialization failed: {str(e)}")
 
     async def _list_memories(self, ctx_or_interaction: CommandContext) -> None:
         """List memories for user"""

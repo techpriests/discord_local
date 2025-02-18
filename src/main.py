@@ -65,12 +65,22 @@ async def start_bot(config: Dict[str, str], attempt: int = 1) -> NoReturn:
         raise SystemExit("Discord 로그인에 실패했습니다") from e
     except Exception as e:
         if attempt >= MAX_RETRY_ATTEMPTS:
-            logger.error(f"Bot failed to start after {MAX_RETRY_ATTEMPTS} attempts. Last error: {e}", exc_info=True)
-            raise SystemExit(f"봇이 {MAX_RETRY_ATTEMPTS}회 시도 후에도 시작하지 못했습니다") from e
+            logger.error(
+                f"Bot failed to start after {MAX_RETRY_ATTEMPTS} attempts. "
+                f"Last error: {e}",
+                exc_info=True
+            )
+            raise SystemExit(
+                f"봇이 {MAX_RETRY_ATTEMPTS}회 시도 후에도 시작하지 못했습니다.\n"
+                f"마지막 오류: {str(e)}"
+            ) from e
         
         # Calculate delay with exponential backoff
         delay = min(BASE_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
-        logger.warning(f"Bot crashed (attempt {attempt}/{MAX_RETRY_ATTEMPTS}). Retrying in {delay} seconds...")
+        logger.warning(
+            f"Bot crashed (attempt {attempt}/{MAX_RETRY_ATTEMPTS}). "
+            f"Retrying in {delay} seconds..."
+        )
         
         await asyncio.sleep(delay)
         await start_bot(config, attempt + 1)
@@ -89,7 +99,10 @@ async def main() -> NoReturn:
         # Validate config
         if not all(config.values()):
             missing_vars = [k for k, v in config.items() if not v]
-            error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+            error_msg = (
+                f"Missing required environment variables: {', '.join(missing_vars)}\n"
+                "Please ensure all required environment variables are set."
+            )
             logger.error(error_msg)
             raise ValueError(error_msg)
             
