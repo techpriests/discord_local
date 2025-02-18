@@ -15,36 +15,49 @@ class TestBotBasic:
         assert bot._config == mock_config
         assert bot.user.name == "Test Bot"
         
+        # Test version info
+        assert hasattr(bot, 'version_info')
+        assert bot.version_info.commit == "test_commit"
+        assert bot.version_info.branch == "test_branch"
+        assert bot.version_info.version == "1.0.0"
+        
         # Test service initialization
         assert bot._api_service is not None
         assert bot.memory_db is not None
         
         # Test command system initialization
         assert isinstance(bot.tree, MagicMock)
-        assert bot._BotBase__cogs == {}
+        assert 'InformationCommands' in bot._BotBase__cogs
         assert 'help' in bot.all_commands
     
     async def test_bot_startup(self, bot):
         """Test bot startup sequence"""
-        # Remove sync check if it's not needed
         await bot.on_ready()
         
-        # Just verify presence
+        # Verify presence
         presence_call = bot.ws.change_presence.await_args
         assert presence_call is not None
         kwargs = presence_call.kwargs
         assert isinstance(kwargs.get('activity'), discord.Game)
+        
         # Check that status contains help commands and commit SHA
         status_name = kwargs['activity'].name
-        assert status_name.startswith("!!help | /help | ")  # Should start with help commands
-        assert len(status_name.split(" | ")) == 3  # Should have three parts separated by |
-    
+        assert "!!help | /help |" in status_name  # Should contain help commands
+        assert len(status_name.split(" | ")) == 3  # Should have three parts
+        
+        # Verify prefix system
+        prefixes = await bot._get_prefix(bot, None)
+        assert isinstance(prefixes, list)
+        assert "!!" in prefixes
+        assert "프틸 " in prefixes
+        assert "pt " in prefixes
+
     async def test_bot_help_command(self, bot, mock_context):
         """Test help command"""
         help_command = bot.get_command('help')
         assert help_command is not None
         assert help_command.name == 'help'
-        assert help_command.help == '도움말을 보여줍니다.'
+        assert help_command.help == '도움말을 보여줍니다'
         assert help_command.brief == '도움말'
         
         # Execute help command
@@ -56,7 +69,15 @@ class TestBotBasic:
         embed = args.kwargs.get('embed')
         assert isinstance(embed, discord.Embed)
         assert "도움말" in embed.title
-        assert "명령어" in embed.description
+        
+        # Verify help content includes all prefixes
+        description = embed.description
+        assert "!!" in description
+        assert "프틸" in description
+        assert "pt" in description
+        assert "AI 명령어" in description  # Verify AI section exists
+        assert "대화" in description  # Verify chat command exists
+        assert "날씨" not in description  # Verify weather command is removed
     
     async def test_bot_error_handling(self, bot, mock_context):
         """Test bot error handling"""
