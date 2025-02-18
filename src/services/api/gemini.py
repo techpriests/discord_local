@@ -997,14 +997,12 @@ Maintain consistent analytical personality and technical precision regardless of
             # Try to initialize the model
             model = genai.GenerativeModel('gemini-2.0-flash')
             
-            # Try a simple test request
-            response = await self._make_request(
-                "",
-                endpoint="generate",
-                custom_request=lambda: model.generate_content("test")
+            # Try a simple test request using async wrapper
+            response = await asyncio.to_thread(
+                lambda: model.generate_content("test").text
             )
             
-            return bool(response and response.text)
+            return bool(response)
             
         except Exception as e:
             logger.error(f"Failed to validate Gemini credentials: {e}")

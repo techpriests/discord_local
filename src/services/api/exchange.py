@@ -40,7 +40,17 @@ class ExchangeAPI(BaseAPI[Dict[str, float]]):
 
     async def initialize(self) -> None:
         """Initialize Exchange API resources"""
-        pass
+        try:
+            # Test API access during initialization
+            data = await self._make_request(
+                self.EXCHANGE_URL,
+                endpoint="exchange"
+            )
+            if not isinstance(data, dict) or 'rates' not in data:
+                raise ValueError("Invalid response format")
+        except Exception as e:
+            logger.error(f"Failed to initialize Exchange API: {e}")
+            raise ValueError("Failed to initialize Exchange API") from e
 
     async def validate_credentials(self) -> bool:
         """Validate API access (no credentials needed)
@@ -49,8 +59,12 @@ class ExchangeAPI(BaseAPI[Dict[str, float]]):
             bool: True if API is accessible
         """
         try:
-            rates = await self.get_exchange_rates()
-            return bool(rates and isinstance(rates, dict))
+            # Simple validation - just check if we can access the API
+            data = await self._make_request(
+                self.EXCHANGE_URL,
+                endpoint="exchange"
+            )
+            return bool(data and isinstance(data, dict) and 'rates' in data)
         except Exception as e:
             logger.error(f"Exchange API validation failed: {e}")
             return False
