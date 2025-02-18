@@ -4,6 +4,9 @@ from datetime import datetime, timedelta
 
 import google.generativeai as genai
 from .base import BaseAPI, RateLimitConfig
+import psutil
+import asyncio
+import discord
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +25,25 @@ class GeminiAPI(BaseAPI[str]):
     USER_REQUESTS_PER_MINUTE = 4  # Maximum requests per minute per user (every 15 seconds)
     USER_COOLDOWN_SECONDS = 5  # Cooldown period between requests for a user
 
-    def __init__(self, api_key: str) -> None:
+    # Add degradation thresholds
+    ERROR_WINDOW_MINUTES = 5
+    MAX_ERRORS_BEFORE_SLOWDOWN = 5
+    MAX_ERRORS_BEFORE_DISABLE = 10
+    
+    # Add load thresholds
+    CPU_THRESHOLD_PERCENT = 80
+    MEMORY_THRESHOLD_PERCENT = 80
+    
+    # Add cooldown settings
+    SLOWDOWN_COOLDOWN_MINUTES = 15
+    DISABLE_COOLDOWN_MINUTES = 60
+
+    def __init__(self, api_key: str, notification_channel: Optional[discord.TextChannel] = None) -> None:
         """Initialize Gemini API client
         
         Args:
             api_key: Google API key for Gemini
+            notification_channel: Optional Discord channel for notifications
         """
         super().__init__(api_key)
         self._model = None
@@ -53,6 +70,25 @@ class GeminiAPI(BaseAPI[str]):
         self._max_prompt_tokens = 0
         self._max_response_tokens = 0
         self._token_usage_history: List[Tuple[int, int]] = []  # (prompt_tokens, response_tokens)
+
+        # Add degradation state
+        self._is_enabled = True
+        self._is_slowed_down = False
+        self._last_slowdown = None
+        self._last_disable = None
+        
+        # Add error tracking
+        self._recent_errors: List[datetime] = []
+        self._error_count = 0
+        
+        # Add performance tracking
+        self._cpu_usage = 0
+        self._memory_usage = 0
+        self._last_performance_check = datetime.now()
+
+        # Add notification channel and cooldown tracking
+        self._notification_channel = notification_channel
+        self._last_notification_time: Dict[str, datetime] = {}  # Track last notification time per type
 
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""
@@ -251,6 +287,210 @@ class GeminiAPI(BaseAPI[str]):
         # Add current request to history
         self._user_requests[user_id].append(current_time)
 
+    async def _send_notification(
+        self, 
+        title: str, 
+        description: str,
+        notification_type: str,
+        color: int = 0xFF0000,  # Red by default
+        cooldown_minutes: int = 15
+    ) -> None:
+        """Send notification to Discord channel
+        
+        Args:
+            title: Notification title
+            description: Notification description
+            notification_type: Type of notification for cooldown tracking
+            color: Embed color (default: red)
+            cooldown_minutes: Cooldown period for this notification type
+        """
+        if not self._notification_channel:
+            return
+
+        # Check cooldown
+        current_time = datetime.now()
+        last_notification = self._last_notification_time.get(notification_type)
+        if last_notification:
+            time_since_last = (current_time - last_notification).total_seconds() / 60
+            if time_since_last < cooldown_minutes:
+                return
+
+        try:
+            embed = discord.Embed(
+                title=title,
+                description=description,
+                color=discord.Color(color),
+                timestamp=current_time
+            )
+
+            await self._notification_channel.send(embed=embed)
+            self._last_notification_time[notification_type] = current_time
+
+        except Exception as e:
+            logger.error(f"Error sending Discord notification: {e}")
+
+    async def _notify_state_change(
+        self, 
+        state: str, 
+        reason: str, 
+        metrics: Optional[Dict[str, Any]] = None
+    ) -> None:
+        """Send state change notification
+        
+        Args:
+            state: New state (e.g., "slowdown", "disabled")
+            reason: Reason for state change
+            metrics: Optional metrics to include
+        """
+        title = f"🤖 Gemini AI Service {state.title()}"
+        
+        description = [f"**Reason:** {reason}"]
+        
+        if metrics:
+            description.append("\n**Current Metrics:**")
+            for key, value in metrics.items():
+                if isinstance(value, float):
+                    description.append(f"• {key}: {value:.1f}")
+                else:
+                    description.append(f"• {key}: {value}")
+
+        color = 0xFFA500 if state == "slowdown" else 0xFF0000  # Orange for slowdown, Red for disabled
+        
+        await self._send_notification(
+            title=title,
+            description="\n".join(description),
+            notification_type=f"state_{state}",
+            color=color,
+            cooldown_minutes=30  # Longer cooldown for state changes
+        )
+
+    async def _check_system_health(self) -> None:
+        """Check system health and update degradation state"""
+        current_time = datetime.now()
+        
+        # Only check every minute
+        if (current_time - self._last_performance_check).total_seconds() < 60:
+            return
+            
+        try:
+            # Get system metrics
+            cpu_percent = psutil.cpu_percent()
+            memory_percent = psutil.virtual_memory().percent
+            
+            self._cpu_usage = cpu_percent
+            self._memory_usage = memory_percent
+            self._last_performance_check = current_time
+            
+            # Check if we should exit slowdown
+            if self._is_slowed_down and self._last_slowdown:
+                if (current_time - self._last_slowdown).total_seconds() > self.SLOWDOWN_COOLDOWN_MINUTES * 60:
+                    if cpu_percent < self.CPU_THRESHOLD_PERCENT and memory_percent < self.MEMORY_THRESHOLD_PERCENT:
+                        self._is_slowed_down = False
+                        self._last_slowdown = None
+                        logger.info("Exiting slowdown mode - system resources normalized")
+                        await self._notify_state_change(
+                            "recovered",
+                            "System resources have normalized",
+                            {"CPU Usage": cpu_percent, "Memory Usage": memory_percent}
+                        )
+            
+            # Check if we should exit disabled state
+            if not self._is_enabled and self._last_disable:
+                if (current_time - self._last_disable).total_seconds() > self.DISABLE_COOLDOWN_MINUTES * 60:
+                    if cpu_percent < self.CPU_THRESHOLD_PERCENT and memory_percent < self.MEMORY_THRESHOLD_PERCENT:
+                        self._is_enabled = True
+                        self._last_disable = None
+                        logger.info("Re-enabling Gemini API - system resources normalized")
+                        await self._notify_state_change(
+                            "enabled",
+                            "Service has been re-enabled after recovery",
+                            {"CPU Usage": cpu_percent, "Memory Usage": memory_percent}
+                        )
+            
+            # Check if we need to degrade
+            if cpu_percent > self.CPU_THRESHOLD_PERCENT or memory_percent > self.MEMORY_THRESHOLD_PERCENT:
+                if not self._is_slowed_down:
+                    self._is_slowed_down = True
+                    self._last_slowdown = current_time
+                    logger.warning(
+                        f"Entering slowdown mode - CPU: {cpu_percent}%, Memory: {memory_percent}%"
+                    )
+                    await self._notify_state_change(
+                        "slowdown",
+                        "High system resource usage detected",
+                        {
+                            "CPU Usage": cpu_percent,
+                            "Memory Usage": memory_percent,
+                            "Duration": f"{self.SLOWDOWN_COOLDOWN_MINUTES} minutes"
+                        }
+                    )
+                elif not self._last_disable:
+                    self._is_enabled = False
+                    self._last_disable = current_time
+                    logger.error(
+                        f"Disabling Gemini API - CPU: {cpu_percent}%, Memory: {memory_percent}%"
+                    )
+                    await self._notify_state_change(
+                        "disabled",
+                        "Critical system resource usage",
+                        {
+                            "CPU Usage": cpu_percent,
+                            "Memory Usage": memory_percent,
+                            "Duration": f"{self.DISABLE_COOLDOWN_MINUTES} minutes"
+                        }
+                    )
+        
+        except Exception as e:
+            logger.error(f"Error checking system health: {e}")
+
+    def _track_error(self) -> None:
+        """Track API errors and update degradation state"""
+        current_time = datetime.now()
+        
+        # Clean up old errors
+        self._recent_errors = [
+            timestamp for timestamp in self._recent_errors
+            if (current_time - timestamp).total_seconds() < self.ERROR_WINDOW_MINUTES * 60
+        ]
+        
+        # Add new error
+        self._recent_errors.append(current_time)
+        self._error_count = len(self._recent_errors)
+        
+        # Check if we need to degrade
+        if self._error_count >= self.MAX_ERRORS_BEFORE_DISABLE:
+            if self._is_enabled:
+                self._is_enabled = False
+                self._last_disable = current_time
+                logger.error(
+                    f"Disabling Gemini API - {self._error_count} errors in {self.ERROR_WINDOW_MINUTES} minutes"
+                )
+                asyncio.create_task(self._notify_state_change(
+                    "disabled",
+                    f"Too many errors ({self._error_count} in {self.ERROR_WINDOW_MINUTES} minutes)",
+                    {
+                        "Error Count": self._error_count,
+                        "Window": f"{self.ERROR_WINDOW_MINUTES} minutes",
+                        "Duration": f"{self.DISABLE_COOLDOWN_MINUTES} minutes"
+                    }
+                ))
+        elif self._error_count >= self.MAX_ERRORS_BEFORE_SLOWDOWN:
+            if not self._is_slowed_down:
+                self._is_slowed_down = True
+                self._last_slowdown = current_time
+                logger.warning(
+                    f"Entering slowdown mode - {self._error_count} errors in {self.ERROR_WINDOW_MINUTES} minutes"
+                )
+                asyncio.create_task(self._notify_state_change(
+                    "slowdown",
+                    f"High error rate ({self._error_count} in {self.ERROR_WINDOW_MINUTES} minutes)",
+                    {
+                        "Error Count": self._error_count,
+                        "Window": f"{self.ERROR_WINDOW_MINUTES} minutes",
+                        "Duration": f"{self.SLOWDOWN_COOLDOWN_MINUTES} minutes"
+                    }
+                ))
+
     async def chat(self, prompt: str, user_id: int) -> str:
         """Send a chat message to Gemini
         
@@ -265,24 +505,39 @@ class GeminiAPI(BaseAPI[str]):
             ValueError: If the request fails or limits are exceeded
         """
         try:
+            # Check system health
+            await self._check_system_health()
+            
+            # Check if service is enabled
+            if not self._is_enabled:
+                raise ValueError(
+                    "AI 서비스가 일시적으로 비활성화되었습니다. "
+                    f"약 {self.DISABLE_COOLDOWN_MINUTES}분 후에 다시 시도해주세요."
+                )
+            
+            # Apply slowdown if needed
+            if self._is_slowed_down:
+                await asyncio.sleep(5)  # Add 5 second delay
+            
+            # Existing validation
             if not self._model:
                 raise ValueError("Gemini API not initialized")
 
             # Check user rate limits
             self._check_user_rate_limit(user_id)
 
-            # Check token limits before making request
+            # Check token limits
             prompt_tokens = self._count_tokens(prompt)
             self._check_token_thresholds(prompt_tokens)
 
-            # Make the text-only request with rate limiting
+            # Make the request with rate limiting
             response = await self._make_request(
-                "",  # URL not needed as we're using the SDK
-                endpoint="generate",  # Match the rate limit key
+                "",
+                endpoint="generate",
                 custom_request=lambda: self._model.generate_content(prompt)
             )
 
-            # Extract the text from the response
+            # Validate response
             if not response or not response.text:
                 raise ValueError("Empty response from Gemini")
 
@@ -291,10 +546,13 @@ class GeminiAPI(BaseAPI[str]):
 
             return response.text
 
-        except ValueError:
-            # Re-raise ValueError (including token limit errors)
-            raise
         except Exception as e:
+            # Track error for degradation
+            self._track_error()
+            
+            # Re-raise with appropriate message
+            if isinstance(e, ValueError):
+                raise
             logger.error(f"Error in Gemini chat: {e}")
             raise ValueError(f"Gemini API 요청에 실패했습니다: {str(e)}") from e
 
@@ -384,7 +642,63 @@ class GeminiAPI(BaseAPI[str]):
             
         return "\n".join(report)
 
+    @property
+    def health_status(self) -> Dict[str, Any]:
+        """Get current health status
+        
+        Returns:
+            Dict[str, Any]: Health status information
+        """
+        current_time = datetime.now()
+        
+        return {
+            "is_enabled": self._is_enabled,
+            "is_slowed_down": self._is_slowed_down,
+            "error_count": self._error_count,
+            "cpu_usage": self._cpu_usage,
+            "memory_usage": self._memory_usage,
+            "time_until_slowdown_reset": (
+                None if not self._last_slowdown else
+                max(0, self.SLOWDOWN_COOLDOWN_MINUTES * 60 - 
+                    (current_time - self._last_slowdown).total_seconds())
+            ),
+            "time_until_enable": (
+                None if not self._last_disable else
+                max(0, self.DISABLE_COOLDOWN_MINUTES * 60 - 
+                    (current_time - self._last_disable).total_seconds())
+            )
+        }
+
     async def close(self) -> None:
         """Cleanup resources"""
         self._model = None
-        await super().close() 
+        await super().close()
+
+    async def validate_credentials(self) -> bool:
+        """Validate Gemini API credentials
+        
+        Returns:
+            bool: True if credentials are valid
+        """
+        try:
+            if not self.api_key:
+                return False
+                
+            # Configure the API
+            genai.configure(api_key=self.api_key)
+            
+            # Try to initialize the model
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            
+            # Try a simple test request
+            response = await self._make_request(
+                "",
+                endpoint="generate",
+                custom_request=lambda: model.generate_content("test")
+            )
+            
+            return bool(response and response.text)
+            
+        except Exception as e:
+            logger.error(f"Failed to validate Gemini credentials: {e}")
+            return False 

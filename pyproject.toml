@@ -20,6 +20,7 @@ numpy = "^1.26.3"  # Added for optimized gacha calculations
 pytz = "^2023.3"
 matplotlib = "^3.10.0"  # For generating player count charts
 google-generativeai = "^0.8.4"  # For Gemini AI integration
+psutil = "^5.9.8"  # For system resource monitoring
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"
@@ -31,6 +32,7 @@ black = "^23.0.0"
 isort = "^5.12.0"
 docstr-coverage = "^2.3.0"
 types-pytz = "^2024.2.0.20241221"
+types-psutil = "^5.9.5.20240106"  # Type stubs for psutil
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -3,6 +3,7 @@ import logging
 import sys
 import os
 from typing import NoReturn, Dict
+from datetime import datetime, timedelta
 
 import discord
 from src.services.api.service import APIService
@@ -11,6 +12,11 @@ from src.bot import DiscordBot
 from src.commands import EntertainmentCommands, InformationCommands, SystemCommands
 
 logger = logging.getLogger(__name__)
+
+# Add constants for retry logic
+MAX_RETRY_ATTEMPTS = 3  # Maximum number of restart attempts
+BASE_RETRY_DELAY = 5  # Base delay in seconds
+MAX_RETRY_DELAY = 300  # Maximum delay (5 minutes)
 
 def setup_logging() -> None:
     """Configure logging settings"""
@@ -31,14 +37,15 @@ def get_config() -> Dict[str, str]:
         "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY", ""),
     }
 
-async def start_bot(config: Dict[str, str]) -> NoReturn:
-    """Start the Discord bot
+async def start_bot(config: Dict[str, str], attempt: int = 1) -> NoReturn:
+    """Start the Discord bot with retry logic
     
     Args:
         config: Application configuration
+        attempt: Current attempt number
 
     Raises:
-        SystemExit: If bot fails to start
+        SystemExit: If bot fails to start after maximum retries
     """
     try:
         bot = DiscordBot(config)
@@ -48,8 +55,16 @@ async def start_bot(config: Dict[str, str]) -> NoReturn:
         logger.error(f"Failed to login: {e}")
         raise SystemExit("Discord 로그인에 실패했습니다") from e
     except Exception as e:
-        logger.error(f"Bot crashed: {e}")
-        raise SystemExit("봇 실행 중 오류가 발생했습니다") from e
+        if attempt >= MAX_RETRY_ATTEMPTS:
+            logger.error(f"Bot failed to start after {MAX_RETRY_ATTEMPTS} attempts. Last error: {e}")
+            raise SystemExit(f"봇이 {MAX_RETRY_ATTEMPTS}회 시도 후에도 시작하지 못했습니다") from e
+        
+        # Calculate delay with exponential backoff
+        delay = min(BASE_RETRY_DELAY * (2 ** (attempt - 1)), MAX_RETRY_DELAY)
+        logger.warning(f"Bot crashed (attempt {attempt}/{MAX_RETRY_ATTEMPTS}). Retrying in {delay} seconds...")
+        
+        await asyncio.sleep(delay)
+        await start_bot(config, attempt + 1)
 
 async def main() -> NoReturn:
     """Main entry point
@@ -65,7 +80,7 @@ async def main() -> NoReturn:
         if not all(config.values()):
             raise ValueError("Missing required environment variables")
             
-        # Start bot
+        # Start bot with retry logic
         await start_bot(config)
 
     except SystemExit as e:
