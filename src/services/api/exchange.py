@@ -31,7 +31,7 @@ class ExchangeAPI(BaseAPI[Dict[str, float]]):
 
     def __init__(self) -> None:
         """Initialize Exchange API client"""
-        super().__init__()
+        super().__init__("")  # Exchange API doesn't need an API key
         self._rate_limits = {
             "exchange": RateLimitConfig(60, 60),  # 60 requests per minute
         }
@@ -41,6 +41,9 @@ class ExchangeAPI(BaseAPI[Dict[str, float]]):
     async def initialize(self) -> None:
         """Initialize Exchange API resources"""
         try:
+            # Initialize base class first
+            await super().initialize()
+            
             # Test API access during initialization
             data = await self._make_request(
                 self.EXCHANGE_URL,
@@ -48,6 +51,9 @@ class ExchangeAPI(BaseAPI[Dict[str, float]]):
             )
             if not isinstance(data, dict) or 'rates' not in data:
                 raise ValueError("Invalid response format")
+                
+            logger.info("Exchange API initialized successfully")
+            
         except Exception as e:
             logger.error(f"Failed to initialize Exchange API: {e}")
             raise ValueError("Failed to initialize Exchange API") from e
