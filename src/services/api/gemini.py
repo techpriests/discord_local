@@ -539,11 +539,7 @@ class GeminiAPI(BaseAPI[str]):
             self._check_token_thresholds(prompt_tokens)
 
             # Make the request with rate limiting
-            response = await self._make_request(
-                "",
-                endpoint="generate",
-                custom_request=lambda: self._model.generate_content(prompt)
-            )
+            response = self._model.generate_content(prompt)
 
             # Validate response
             if not response or not response.text:
