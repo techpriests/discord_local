@@ -3,6 +3,7 @@ from typing import Union, Optional
 
 import discord
 from discord.ext import commands
+from discord import app_commands
 
 from src.utils.decorators import command_handler
 from src.utils.types import CommandContext
@@ -167,3 +168,124 @@ class SystemCommands(BaseCommands):
             color=INFO_COLOR
         )
         await self.send_response(ctx_or_interaction, embed=embed)
+
+    @commands.command(
+        name="help",
+        help="봇의 도움말을 보여줍니다",
+        brief="도움말 보기",
+        aliases=["pthelp", "도움말", "도움", "명령어"],
+        description="봇의 모든 명령어와 사용법을 보여줍니다.\n"
+        "사용법:\n"
+        "• !!help\n"
+        "• 프틸 help\n"
+        "• pt help"
+    )
+    async def help_prefix(self, ctx: commands.Context) -> None:
+        """Show help information"""
+        await self._handle_help(ctx)
+
+    @app_commands.command(name="help", description="봇의 도움말을 보여줍니다")
+    async def help_slash(self, interaction: discord.Interaction) -> None:
+        """Show help information"""
+        await self._handle_help(interaction)
+
+    async def _handle_help(self, ctx_or_interaction: CommandContext) -> None:
+        """Handle help command for both prefix and slash commands
+        
+        Args:
+            ctx_or_interaction: Command context or interaction
+        """
+        try:
+            # Create help embed
+            embed = discord.Embed(
+                title="🤖 프틸롭시스 도움말",
+                description=(
+                    "프틸롭시스는 다양한 기능을 제공하는 디스코드 봇입니다.\n"
+                    "모든 명령어는 다음 세 가지 방식으로 사용할 수 있습니다:\n\n"
+                    "1. !!명령어 - 기본 접두사\n"
+                    "2. 프틸 명령어 - 한글 접두사\n"
+                    "3. pt command - 영문 접두사\n"
+                    "4. /command - 슬래시 명령어"
+                ),
+                color=discord.Color.blue()
+            )
+
+            # Add command categories
+            embed.add_field(
+                name="🎮 엔터테인먼트",
+                value=(
+                    "• !!안녕 - 봇과 인사하기\n"
+                    "• !!주사위 [XdY] - 주사위 굴리기 (예: 2d6)\n"
+                    "• !!투표 [선택지1] [선택지2] ... - 투표 생성\n"
+                    "• !!골라줘 [선택지1] [선택지2] ... - 무작위 선택"
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="🤖 AI 명령어",
+                value=(
+                    "• !!대화 [메시지] - AI와 대화하기\n"
+                    "• !!대화종료 - 대화 세션 종료\n"
+                    "• !!사용량 - AI 시스템 상태 확인"
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="📊 정보 명령어",
+                value=(
+                    "• !!스팀 [게임이름] - 스팀 게임 정보 확인\n"
+                    "• !!시간 [지역] - 세계 시간 확인\n"
+                    "• !!인구 [국가] - 국가 인구 정보 확인\n"
+                    "• !!환율 [통화코드] - 환율 정보 확인"
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="⚙️ 시스템 명령어",
+                value=(
+                    "• !!핑 - 봇 지연시간 확인\n"
+                    "• !!복사 [메시지] - 메시지 복사\n"
+                    "• !!동기화 - 슬래시 명령어 동기화 (관리자 전용)"
+                ),
+                inline=False
+            )
+
+            embed.add_field(
+                name="💾 메모리 명령어",
+                value=(
+                    "• !!기억 [텍스트] [별명] - 정보 저장\n"
+                    "• !!알려 [별명] - 정보 확인\n"
+                    "• !!잊어 [별명] - 정보 삭제"
+                ),
+                inline=False
+            )
+
+            # Add footer with version info
+            embed.set_footer(text=f"버전: {self.bot.version_info.version} | {self.bot.version_info.commit[:7]}")
+
+            # Send help message
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                if ctx_or_interaction.response.is_done():
+                    await ctx_or_interaction.followup.send(embed=embed)
+                else:
+                    await ctx_or_interaction.response.send_message(embed=embed)
+            else:
+                await ctx_or_interaction.send(embed=embed)
+
+        except Exception as e:
+            logger.error(f"Error in help command: {e}", exc_info=True)
+            error_embed = discord.Embed(
+                title="❌ 오류",
+                description="도움말을 표시하는 중 오류가 발생했습니다.",
+                color=discord.Color.red()
+            )
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                if ctx_or_interaction.response.is_done():
+                    await ctx_or_interaction.followup.send(embed=error_embed)
+                else:
+                    await ctx_or_interaction.response.send_message(embed=error_embed)
+            else:
+                await ctx_or_interaction.send(embed=error_embed)
