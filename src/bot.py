@@ -25,21 +25,28 @@ HELP_DESCRIPTION = """
 디스코드 봇 도움말
 
 기본 명령어:
-!!안녕 - 봇과 인사하기
-!!주사위 [XdY] - 주사위 굴리기 (예: !주사위 2d6)
-!!투표 [선택지1] [선택지2] ... - 여러 선택지 중 하나를 무작위로 선택
-!!골라줘 [선택지1] [선택지2] ... - 여러 선택지 중 하나를 무작위로 선택
+• !!안녕, 프틸 안녕, pt hello - 봇과 인사하기
+• !!주사위 [XdY], 프틸 주사위 [XdY], pt roll [XdY] - 주사위 굴리기 (예: 2d6)
+• !!투표 [선택지1] [선택지2] ..., 프틸 투표 [...], pt poll [...] - 여러 선택지 중 하나를 선택
+• !!골라줘 [선택지1] [선택지2] ..., 프틸 골라줘 [...], pt choice [...] - 무작위 선택
+
+AI 명령어:
+• !!대화 [메시지], 프틸 대화 [메시지], pt chat [메시지] - Gemini AI와 대화하기
 
 정보 명령어:
-!!스팀 [게임이름] - 스팀 게임 정보와 현재 플레이어 수 확인
-!!날씨 - 현재 날씨 정보 확인
-!!시간 [지역] - 특정 지역의 현재 시간 확인
-!!인구 [국가] - 국가의 인구 정보 확인
-!!환율 - 현재 환율 정보 확인
+• !!스팀 [게임이름], 프틸 스팀 [게임이름], pt steam [게임이름] - 스팀 게임 정보와 현재 플레이어 수 확인
+• !!시간 [지역], 프틸 시간 [지역], pt time [지역] - 특정 지역의 현재 시간 확인
+• !!인구 [국가], 프틸 인구 [국가], pt population [국가] - 국가의 인구 정보 확인
+• !!환율 [통화코드], 프틸 환율 [통화코드], pt exchange [통화코드] - 현재 환율 정보 확인
 
 시스템 명령어:
-!!핑 - 봇의 지연시간 확인
-!!복사 [메시지] - 봇이 메시지를 복사해서 보냄
+• !!핑, 프틸 핑, pt ping - 봇의 지연시간 확인
+• !!복사 [메시지], 프틸 복사 [메시지], pt copy [메시지] - 봇이 메시지를 복사해서 보냄
+
+모든 명령어는 다음 세 가지 방식으로 사용할 수 있습니다:
+1. !!명령어 - 기본 접두사
+2. 프틸 명령어 - 한글 접두사
+3. pt command - 영문 접두사
 """
 
 
@@ -56,7 +63,7 @@ class DiscordBot(commands.Bot):
         intents = discord.Intents.default()
         intents.message_content = True
         super().__init__(
-            command_prefix="!!",
+            command_prefix=self._get_prefix,
             intents=intents,
             help_command=None  # Disable default help
         )
@@ -792,3 +799,16 @@ class DiscordBot(commands.Bot):
         await self._send_response(ctx_or_interaction, message)
         if processing_msg:
             await processing_msg.delete()
+
+    async def _get_prefix(self, bot: commands.Bot, message: discord.Message) -> List[str]:
+        """Get command prefixes for the bot
+        
+        Args:
+            bot: Bot instance
+            message: Message to check
+            
+        Returns:
+            List[str]: List of valid prefixes
+        """
+        # Return multiple prefix options
+        return ['!!', '프틸 ', 'pt ']  # Note the space after 프틸 and pt

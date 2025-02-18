@@ -3,18 +3,16 @@ from discord import Interaction, Embed, Message
 from discord.ext.commands import Context
 
 from src.utils.types import CommandContext
-from src.utils.api_types import GameInfo, CountryInfo, WeatherInfo
+from src.utils.api_types import GameInfo, CountryInfo
 from src.utils.discord_types import Messageable, InteractionResponse, InteractionFollowup
 
 class APIServiceProtocol(Protocol):
     """Protocol for API service dependencies"""
     steam: Any  # Add missing attributes
-    weather: Any
     exchange: Any
     population: Any
     
     async def get_country_info(self, country_name: str) -> CountryInfo: ...
-    async def get_weather(self, city: str) -> WeatherInfo: ...
     async def find_game(self, name: str) -> Tuple[Optional[GameInfo], float, Optional[List[GameInfo]]]: ...
     async def get_exchange_rates(self) -> Dict[str, float]: ...
 

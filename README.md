@@ -3,7 +3,6 @@
 A Discord bot with various utility commands including:
 - Exchange rate conversion
 - Steam game information
-- Weather updates
 - Population statistics
 - Memory system for user information
 
@@ -12,14 +11,16 @@ A Discord bot with various utility commands including:
 ### Slash Commands
 - `/exchange [currency] [amount]` - Convert currencies
 - `/steam [game]` - Get Steam game info
-- `/weather` - Get Seoul weather
 - `/population [country]` - Get country population
 - `/remember [text] [nickname]` - Store information
 - `/recall [nickname]` - Recall stored information
 - `/forget [nickname]` - Delete stored information
 
-### Prefix Commands (using !!)
-Same functionality as slash commands with prefix `!!`
+### Prefix Commands (using !!, 프틸, pt)
+Same functionality as slash commands with prefixes:
+- `!!command`
+- `프틸 command`
+- `pt command`
 
 ## Development
 
@@ -28,7 +29,6 @@ Same functionality as slash commands with prefix `!!`
 - Docker
 - Discord Bot Token
 - Steam API Key
-- Weather API Key
 
 ### Setup
 1. Clone repository
@@ -37,7 +37,6 @@ Same functionality as slash commands with prefix `!!`
    # Required API keys
    DISCORD_TOKEN=your_token_here
    STEAM_API_KEY=your_key_here
-   WEATHER_API_KEY=your_key_here
    
    # For local development, run these commands:
    # echo "GIT_COMMIT=$(git rev-parse --short HEAD)" >> .env

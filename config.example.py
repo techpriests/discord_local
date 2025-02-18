@@ -4,8 +4,8 @@ TOKEN = "your-discord-token-here"
 # Steam API Key
 STEAM_KEY = "your-steam-api-key-here"
 
-# Weather API Key
-WEATHER_API_KEY = "your-weather-api-key-here"
+# Gemini API Key
+GEMINI_API_KEY = "your-gemini-api-key-here"
 
 # Docker Hub Credentials
 DOCKER_USERNAME = "your-docker-username"

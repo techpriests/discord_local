@@ -14,7 +14,7 @@ from src.utils.decorators import command_handler
 from src.utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
 from src.commands.base_commands import BaseCommands
 from src.utils.types import CommandContext
-from src.utils.api_types import GameInfo, CountryInfo, WeatherInfo
+from src.utils.api_types import GameInfo, CountryInfo
 from src.utils.command_types import APIServiceProtocol
 
 logger = logging.getLogger(__name__)
@@ -43,8 +43,15 @@ class InformationCommands(BaseCommands):
         aliases=["population"],
         description=(
             "국가의 인구, 수도, 지역 정보를 보여줍니다.\n"
-            "사용법: !!인구 [국가명]\n"
-            "예시: !!인구 South Korea"
+            "사용법:\n"
+            "• !!인구 [국가명]\n"
+            "• 프틸 인구 [국가명]\n"
+            "• pt population [국가명]\n"
+            "예시:\n"
+            "• !!인구 South Korea - 대한민국 정보\n"
+            "• 프틸 인구 Japan - 일본 정보\n"
+            "• pt population United States - 미국 정보\n"
+            "※ 영어로 국가명을 입력하면 더 정확한 결과를 얻을 수 있습니다."
         ),
     )
     async def population_prefix(self, ctx: commands.Context, *, country_name: str = None):
@@ -153,10 +160,14 @@ class InformationCommands(BaseCommands):
         aliases=["steam", "game"],
         description=(
             "스팀 게임의 현재 플레이어 수와 정보를 보여줍니다.\n"
-            "사용법: !!스팀 [게임명]\n"
+            "사용법:\n"
+            "• !!스팀 [게임명]\n"
+            "• 프틸 스팀 [게임명]\n"
+            "• pt steam [게임명]\n"
             "예시:\n"
             "• !!스팀 Lost Ark\n"
-            "• !!스팀 PUBG\n"
+            "• 프틸 스팀 PUBG\n"
+            "• pt steam Dota 2\n"
             "※ 정확한 게임명을 입력하면 더 좋은 결과를 얻을 수 있습니다."
         ),
     )
@@ -345,9 +356,13 @@ class InformationCommands(BaseCommands):
         aliases=["time"],
         description="한국 시간과 세계 각국의 시간을 변환합니다.\n"
         "사용법:\n"
-        "!!시간  -> 주요 도시 시간 표시\n"
-        "!!시간 US/Pacific  -> 특정 지역 시간 변환\n"
-        "!!시간 US/Pacific 09:00  -> 특정 시간 변환",
+        "• !!시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
+        "• 프틸 시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
+        "• pt time [지역] [시간]  -> 특정 지역/시간 변환\n"
+        "예시:\n"
+        "• !!시간  -> 주요 도시 시간 표시\n"
+        "• 프틸 시간 US/Pacific  -> 특정 지역 시간 변환\n"
+        "• pt time US/Pacific 09:00  -> 특정 시간 변환",
     )
     async def time_prefix(self, ctx, timezone: str = None, time_str: str = None):
         """Convert time between timezones
@@ -435,102 +450,9 @@ class InformationCommands(BaseCommands):
             ephemeral=True
         )
 
-    @discord.app_commands.command(name="weather", description="도시의 날씨를 알려드립니다")
-    async def weather_slash(self, interaction: discord.Interaction, city_name: str) -> None:
-        """Slash command for weather"""
-        await self._handle_weather(interaction, city_name)
-
-    @command_handler()
-    async def _handle_weather(
-        self, 
-        ctx_or_interaction: CommandContext, 
-        city_name: Optional[str] = None
-    ) -> None:
-        """Handle weather information request"""
-        processing_msg = None
-        try:
-            # Check if weather API is available
-            try:
-                weather_api = self.api.weather
-            except ValueError:
-                await self.send_response(
-                    ctx_or_interaction,
-                    "날씨 기능은 현재 사용할 수 없습니다. 관리자에게 문의해주세요.",
-                    ephemeral=True
-                )
-                return
-
-            if not self._validate_city_name(city_name):
-                return await self.send_response(
-                    ctx_or_interaction, 
-                    "도시 이름을 2글자 이상 입력해주세요...",
-                    ephemeral=True
-                )
-
-            # Get user's name first
-            user_name = self.get_user_name(ctx_or_interaction)
-
-            # Show processing message
-            processing_msg = await self.send_response(
-                ctx_or_interaction,
-                f"{user_name}님, 날씨 정보를 가져오는 중...",
-                ephemeral=True
-            )
-
-            weather_info = await weather_api.get_weather(city_name)
-            await self._send_weather_embed(ctx_or_interaction, weather_info)
-
-        except Exception as e:
-            await self._handle_weather_error(ctx_or_interaction, city_name, str(e))
-        finally:
-            if processing_msg:
-                try:
-                    await processing_msg.delete()
-                except Exception as e:
-                    logger.error(f"Error deleting processing message: {e}")
-
-    def _validate_city_name(self, city_name: Optional[str]) -> bool:
-        """Validate city name input"""
-        return bool(city_name and len(city_name.strip()) >= 2)
-
-    async def _send_weather_embed(
-        self, 
-        ctx_or_interaction: CommandContext, 
-        weather: WeatherInfo
-    ) -> None:
-        """Send embed with weather information"""
-        user_name = self.get_user_name(ctx_or_interaction)
-        embed = discord.Embed(
-            title=f"🌤️ {weather.city}의 날씨",
-            description=f"{user_name}님이 요청하신 날씨 정보입니다.",
-            color=INFO_COLOR
-        )
-        temp = weather['main'].get('temp', 0)
-        feels_like = weather['main'].get('feels_like', 0)
-        humidity = weather['main'].get('humidity', 0)
-        description = weather['weather'][0].get('description', '') if weather['weather'] else ''
-
-        embed.add_field(name="온도", value=f"{temp}°C", inline=True)
-        embed.add_field(name="체감 온도", value=f"{feels_like}°C", inline=True)
-        embed.add_field(name="습도", value=f"{humidity}%", inline=True)
-        embed.add_field(name="날씨", value=description, inline=False)
-
-        await self.send_response(ctx_or_interaction, embed=embed)
-
-    async def _handle_weather_error(
-        self, 
-        ctx_or_interaction: CommandContext, 
-        city_name: str, 
-        error_msg: str
-    ) -> None:
-        """Handle errors in weather command"""
-        logger.error(f"Error getting weather for {city_name}: {error_msg}")
-        user_name = self.get_user_name(ctx_or_interaction)
-        await self.send_response(
-            ctx_or_interaction,
-            f"{user_name}님, 날씨 정보를 가져오는데 실패했습니다: {city_name}",
-            ephemeral=True
-        )
+    # Weather commands have been removed
+    # If you need to re-enable weather functionality in the future,
+    # please check the git history for the implementation
 
     @discord.app_commands.command(name="exchange", description="환율 정보를 보여줍니다")
     async def exchange_slash(
@@ -548,7 +470,14 @@ class InformationCommands(BaseCommands):
         aliases=["exchange"],
         description="주요 통화의 현재 환율 정보를 보여줍니다.\n"
         "특정 통화를 지정하면 해당 통화의 환율만 보여줍니다.\n"
-        "사용법: !!환율 [통화코드]",
+        "사용법:\n"
+        "• !!환율 [통화코드]\n"
+        "• 프틸 환율 [통화코드]\n"
+        "• pt exchange [통화코드]\n"
+        "예시:\n"
+        "• !!환율\n"
+        "• 프틸 환율 USD\n"
+        "• pt exchange EUR",
     )
     async def exchange_prefix(
         self, 
