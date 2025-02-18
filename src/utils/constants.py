@@ -9,7 +9,6 @@ INFO_COLOR = discord.Color.blue()
 
 # Command cooldowns (in seconds)
 DEFAULT_COOLDOWN = 3
-WEATHER_COOLDOWN = 60
 STEAM_COOLDOWN = 3
 POPULATION_COOLDOWN = 3
 

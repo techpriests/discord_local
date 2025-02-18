@@ -2,6 +2,6 @@ from .exchange import ExchangeAPI
 from .population import PopulationAPI
 from .service import APIService
 from .steam import SteamAPI
-from .weather import WeatherAPI
+from .gemini import GeminiAPI
 
-__all__ = ["APIService", "SteamAPI", "WeatherAPI", "PopulationAPI", "ExchangeAPI"]
+__all__ = ["APIService", "SteamAPI", "PopulationAPI", "ExchangeAPI", "GeminiAPI"]

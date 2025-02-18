@@ -13,11 +13,6 @@ class CountryInfo(TypedDict):
     region: str
     flags: Dict[str, str]
 
-class WeatherInfo(TypedDict):
-    main: Dict[str, float]
-    weather: List[Dict[str, Any]]
-    name: str
-
 class ExchangeRates(TypedDict):
     rates: Dict[str, float]
     base: str
