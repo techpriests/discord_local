@@ -99,6 +99,15 @@ class DiscordBot(commands.Bot):
             raise ValueError("API service not initialized")
         return self._api_service
 
+    async def _handle_help(self, ctx_or_interaction: CommandContext) -> None:
+        """Handle help command"""
+        embed = discord.Embed(
+            title="도움말",
+            description=HELP_DESCRIPTION,
+            color=INFO_COLOR
+        )
+        await self._send_response(ctx_or_interaction, embed=embed)
+
     async def setup_hook(self) -> None:
         """Initialize bot services and register commands"""
         try:
@@ -112,21 +121,8 @@ class DiscordBot(commands.Bot):
             # Register commands
             await self._register_commands()
 
-            # Register help command
-            self.remove_command('help')  # Remove default help command
-            
-            async def help_callback(ctx: commands.Context) -> None:
-                await self._handle_help(ctx)
-            
-            self.add_command(
-                commands.Command(
-                    help_callback,
-                    name='pthelp',
-                    help='봇의 도움말을 보여줍니다',
-                    brief='도움말 보기',
-                    aliases=['도움말', '도움', '명령어']
-                )
-            )
+            # Remove default help command
+            self.remove_command('help')
 
             # Register slash commands
             self.tree.add_command(
@@ -723,15 +719,6 @@ class DiscordBot(commands.Bot):
     async def help_slash(self, interaction: discord.Interaction) -> None:
         """Show help information"""
         await self._handle_help(interaction)
-
-    async def _handle_help(self, ctx_or_interaction: CommandContext) -> None:
-        """Handle help command"""
-        embed = discord.Embed(
-            title="도움말",
-            description=HELP_DESCRIPTION,
-            color=INFO_COLOR
-        )
-        await self._send_response(ctx_or_interaction, embed=embed)
 
     @app_commands.command(name="memory", description="메모리 관리")
     async def memory_slash(
