@@ -42,7 +42,7 @@ class TestBotBasic:
         
         # Check that status contains help commands and commit SHA
         status_name = kwargs['activity'].name
-        assert "!!help | /help |" in status_name  # Should contain help commands
+        assert "프틸 도움말 | /help |" in status_name  # Should contain help commands
         assert len(status_name.split(" | ")) == 3  # Should have three parts
         
         # Verify prefix system

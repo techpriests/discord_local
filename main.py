@@ -7,26 +7,23 @@ import os
 import asyncio
 
 async def main():
-    # Initialize services
+    # Initialize configuration
     config = {
         "STEAM_API_KEY": os.getenv("STEAM_API_KEY"),
         "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY")
     }
     
-    api_service = APIService(config)
-    await api_service.initialize()  # Initialize API service first
-    
-    # Initialize bot with API service
-    bot = DiscordBot(config, api_service)
+    # Initialize bot (API service will be initialized in setup_hook)
+    bot = DiscordBot(config)
     
     try:
         # Run bot
         await bot.start(os.getenv("DISCORD_TOKEN"))
     except KeyboardInterrupt:
-        await api_service.close()
+        await bot.close()
     except Exception as e:
         print(f"Error: {e}")
-        await api_service.close()
+        await bot.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
