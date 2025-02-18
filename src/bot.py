@@ -113,35 +113,35 @@ class DiscordBot(commands.Bot):
             description=HELP_DESCRIPTION,
             color=INFO_COLOR
         )
-        await self._send_response(ctx_or_interaction, embed=embed)
+        if isinstance(ctx_or_interaction, discord.Interaction):
+            await ctx_or_interaction.response.send_message(embed=embed)
+        else:
+            await ctx_or_interaction.send(embed=embed)
 
     async def setup_hook(self) -> None:
         """Initialize bot services and register commands"""
         try:
             logger.info("Starting setup_hook...")
             
+            # Initialize API service first since commands depend on it
+            if not self._api_service:
+                logger.info("Initializing API service...")
+                self._api_service = APIService(self._config)
+                if not await self._api_service.initialize():  # Check initialization success
+                    raise ValueError("Failed to initialize API service")
+                logger.info("API service initialized successfully")
+            
             # Initialize memory database
             logger.info("Initializing memory database...")
             self.memory_db = MemoryDB()
             logger.info("Memory database initialized")
-
-            # Initialize API service if not provided
-            if not self._api_service:
-                logger.info("Initializing API service...")
-                self._api_service = APIService(self._config)
-                logger.info("API service initialized")
 
             # Register commands
             logger.info("Registering commands...")
             await self._register_commands()
             logger.info("Commands registered")
 
-            # Remove default help command
-            logger.info("Setting up help command...")
-            self.remove_command('help')
-            logger.info("Help command setup complete")
-
-            # Sync slash commands
+            # Sync all commands once at the end
             logger.info("Syncing slash commands...")
             await self.tree.sync()
             logger.info("Slash commands synced")
@@ -155,24 +155,38 @@ class DiscordBot(commands.Bot):
         """Register all command classes"""
         try:
             logger.info("Starting command registration...")
-            for command_class in self._command_classes:
-                logger.info(f"Registering command class: {command_class.__name__}")
-                if command_class == InformationCommands:
-                    await self.add_cog(command_class(self.api_service))
-                elif command_class == SystemCommands:
-                    await self.add_cog(command_class(self))
-                elif command_class == AICommands:
-                    await self.add_cog(command_class())
-                    cog = self.get_cog(command_class.__name__)
-                    if cog:
-                        cog.bot = self
-                else:
-                    await self.add_cog(command_class())
-                logger.info(f"Successfully registered {command_class.__name__}")
             
-            logger.info("Syncing command tree...")
-            await self.tree.sync()
-            logger.info("Commands registered successfully")
+            # Validate API service is initialized
+            if not self._api_service:
+                raise ValueError("API service must be initialized before registering commands")
+                
+            for command_class in self._command_classes:
+                try:
+                    logger.info(f"Registering command class: {command_class.__name__}")
+                    
+                    # Initialize cog based on its requirements
+                    cog = None
+                    if command_class == InformationCommands:
+                        cog = command_class(self.api_service)
+                    elif command_class == SystemCommands:
+                        cog = command_class(self)
+                    elif command_class == AICommands:
+                        cog = command_class()
+                        cog.bot = self  # Set bot instance for API access
+                    else:
+                        cog = command_class()
+                    
+                    # Add cog and verify it was added successfully
+                    await self.add_cog(cog)
+                    if not self.get_cog(command_class.__name__):
+                        raise ValueError(f"Failed to add cog: {command_class.__name__}")
+                        
+                    logger.info(f"Successfully registered {command_class.__name__}")
+                except Exception as e:
+                    logger.error(f"Failed to register command class {command_class.__name__}: {e}", exc_info=True)
+                    raise  # Re-raise to handle in setup_hook
+            
+            logger.info("Command registration complete")
         except Exception as e:
             logger.error(f"Failed to register commands: {e}", exc_info=True)
             raise
@@ -720,21 +734,21 @@ class DiscordBot(commands.Bot):
             await processing_msg.delete()
 
     @commands.command(
-        name="pthelp",
+        name="help",
         help="봇의 도움말을 보여줍니다",
         brief="도움말 보기",
-        aliases=["도움말", "도움", "명령어"],
+        aliases=["pthelp", "도움말", "도움", "명령어"],
         description="봇의 모든 명령어와 사용법을 보여줍니다.\n"
         "사용법:\n"
-        "• !!pthelp\n"
-        "• 프틸 pthelp\n"
-        "• pt pthelp"
+        "• !!help\n"
+        "• 프틸 help\n"
+        "• pt help"
     )
     async def help_prefix(self, ctx: commands.Context) -> None:
         """Show help information"""
         await self._handle_help(ctx)
 
-    @app_commands.command(name="pthelp", description="봇의 도움말을 보여줍니다")
+    @app_commands.command(name="help", description="봇의 도움말을 보여줍니다")
     async def help_slash(self, interaction: discord.Interaction) -> None:
         """Show help information"""
         await self._handle_help(interaction)
@@ -866,23 +880,27 @@ class DiscordBot(commands.Bot):
     ) -> None:
         """Send response to user"""
         try:
+            # Don't create empty embed if none provided
+            if not content and not embed:
+                raise ValueError("Either content or embed must be provided")
+
             if isinstance(ctx_or_interaction, discord.Interaction):
                 if ctx_or_interaction.response.is_done():
                     await ctx_or_interaction.followup.send(
-                        content=content or "",
-                        embed=embed or discord.Embed(),
+                        content=content,
+                        embed=embed,
                         ephemeral=ephemeral
                     )
                 else:
                     await ctx_or_interaction.response.send_message(
-                        content=content or "",
-                        embed=embed or discord.Embed(),
+                        content=content,
+                        embed=embed,
                         ephemeral=ephemeral
                     )
             else:
                 await ctx_or_interaction.send(
-                    content=content or "",
-                    embed=embed or discord.Embed()
+                    content=content,
+                    embed=embed
                 )
         except Exception as e:
             logger.error(f"Failed to send response: {e}")

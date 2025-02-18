@@ -1,6 +1,8 @@
 import logging
 from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
+import os
+import json
 
 import google.generativeai as genai
 from .base import BaseAPI, RateLimitConfig
@@ -73,17 +75,29 @@ Maintain consistent analytical personality and technical precision regardless of
         super().__init__(api_key)
         self._notification_channel = notification_channel
         self._model = None
-        self._chat_sessions: Dict[int, genai.ChatSession] = {}  # user_id -> ChatSession
-        self._last_interaction: Dict[int, datetime] = {}  # user_id -> last interaction time
+        self._chat_sessions: Dict[int, genai.ChatSession] = {}
+        self._last_interaction: Dict[int, datetime] = {}
         self._rate_limits = {
-            "generate": RateLimitConfig(self.REQUESTS_PER_MINUTE, 60),  # 60 requests per minute for generate_content
+            "generate": RateLimitConfig(self.REQUESTS_PER_MINUTE, 60),
         }
+        
+        # Load saved usage data if exists
+        self._usage_file = "data/memory.json"
+        self._load_usage_data()
+        
         # Usage tracking
-        self._daily_requests = 0
-        self._last_reset = datetime.now()
-        self._request_sizes: List[int] = []  # Track request sizes
-        self._hourly_token_count = 0  # Track token usage per hour (for monitoring only)
-        self._last_token_reset = datetime.now()
+        self._daily_requests = self._saved_usage.get("daily_requests", 0)
+        self._last_reset = datetime.fromisoformat(self._saved_usage.get("last_reset", datetime.now().isoformat()))
+        self._request_sizes = self._saved_usage.get("request_sizes", [])
+        self._hourly_token_count = self._saved_usage.get("hourly_token_count", 0)
+        self._last_token_reset = datetime.fromisoformat(self._saved_usage.get("last_token_reset", datetime.now().isoformat()))
+        
+        # Token tracking
+        self._total_prompt_tokens = self._saved_usage.get("total_prompt_tokens", 0)
+        self._total_response_tokens = self._saved_usage.get("total_response_tokens", 0)
+        self._max_prompt_tokens = self._saved_usage.get("max_prompt_tokens", 0)
+        self._max_response_tokens = self._saved_usage.get("max_response_tokens", 0)
+        self._token_usage_history = self._saved_usage.get("token_usage_history", [])
         
         # Per-minute request tracking
         self._minute_requests = 0
@@ -92,13 +106,6 @@ Maintain consistent analytical personality and technical precision regardless of
         # User request tracking
         self._user_requests: Dict[int, List[datetime]] = {}  # user_id -> list of request timestamps
         
-        # Detailed token tracking
-        self._total_prompt_tokens = 0
-        self._total_response_tokens = 0
-        self._max_prompt_tokens = 0
-        self._max_response_tokens = 0
-        self._token_usage_history: List[Tuple[int, int]] = []  # (prompt_tokens, response_tokens)
-
         # Add degradation state
         self._is_enabled = True
         self._is_slowed_down = False
@@ -109,13 +116,78 @@ Maintain consistent analytical personality and technical precision regardless of
         self._recent_errors: List[datetime] = []
         self._error_count = 0
         
-        # Add performance tracking
+        # Add performance tracking with non-blocking CPU check
         self._cpu_usage = 0
         self._memory_usage = 0
         self._last_performance_check = datetime.now()
+        self._cpu_check_task = None
+        self._is_cpu_check_running = False
 
         # Add notification channel and cooldown tracking
         self._last_notification_time: Dict[str, datetime] = {}  # Track last notification time per type
+
+        # Add save debouncing
+        self._last_save = datetime.now()
+        self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
+        self._pending_save = False
+        self._save_lock = asyncio.Lock()
+
+    def _load_usage_data(self) -> None:
+        """Load saved usage data from file"""
+        try:
+            os.makedirs(os.path.dirname(self._usage_file), exist_ok=True)
+            if os.path.exists(self._usage_file):
+                with open(self._usage_file, 'r') as f:
+                    self._saved_usage = json.load(f)
+            else:
+                self._saved_usage = {}
+        except Exception as e:
+            logger.error(f"Failed to load usage data: {e}")
+            self._saved_usage = {}
+            
+    async def _save_usage_data(self) -> None:
+        """Save current usage data to file with debouncing"""
+        try:
+            async with self._save_lock:
+                current_time = datetime.now()
+                
+                # If a save is already pending or it hasn't been long enough since last save, skip
+                if self._pending_save or (current_time - self._last_save) < self._save_interval:
+                    self._pending_save = True
+                    return
+                    
+                self._pending_save = False
+                self._last_save = current_time
+                
+                usage_data = {
+                    "daily_requests": self._daily_requests,
+                    "last_reset": self._last_reset.isoformat(),
+                    "request_sizes": self._request_sizes,
+                    "hourly_token_count": self._hourly_token_count,
+                    "last_token_reset": self._last_token_reset.isoformat(),
+                    "total_prompt_tokens": self._total_prompt_tokens,
+                    "total_response_tokens": self._total_response_tokens,
+                    "max_prompt_tokens": self._max_prompt_tokens,
+                    "max_response_tokens": self._max_response_tokens,
+                    "token_usage_history": self._token_usage_history
+                }
+                
+                temp_file = f"{self._usage_file}.tmp"
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(usage_data, f, ensure_ascii=False, indent=2)
+                os.replace(temp_file, self._usage_file)
+                
+        except Exception as e:
+            logger.error(f"Failed to save usage data: {e}")
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+
+    async def _schedule_save(self) -> None:
+        """Schedule a save operation"""
+        if not self._pending_save:
+            self._pending_save = True
+            await asyncio.sleep(self._save_interval.total_seconds())
+            await self._save_usage_data()
 
     def update_notification_channel(self, channel: discord.TextChannel) -> None:
         """Update notification channel
@@ -258,6 +330,9 @@ Maintain consistent analytical personality and technical precision regardless of
             self._max_response_tokens = 0
             self._token_usage_history = []
             self._last_reset = current_time
+            # Force immediate save on daily reset
+            asyncio.create_task(self._save_usage_data())
+            return
 
         # Reset per-minute request counter if it's been a minute
         if current_time - self._last_minute_reset > timedelta(minutes=1):
@@ -288,6 +363,9 @@ Maintain consistent analytical personality and technical precision regardless of
         self._max_prompt_tokens = max(self._max_prompt_tokens, prompt_tokens)
         self._max_response_tokens = max(self._max_response_tokens, response_tokens)
         self._token_usage_history.append((prompt_tokens, response_tokens))
+
+        # Schedule a save operation
+        asyncio.create_task(self._schedule_save())
 
         # Log token details at debug level
         logger.debug(
@@ -424,6 +502,19 @@ Maintain consistent analytical personality and technical precision regardless of
             cooldown_minutes=30  # Longer cooldown for state changes
         )
 
+    async def _update_cpu_usage(self) -> None:
+        """Update CPU usage in a non-blocking way"""
+        if self._is_cpu_check_running:
+            return
+            
+        try:
+            self._is_cpu_check_running = True
+            self._cpu_usage = await asyncio.to_thread(psutil.cpu_percent, interval=1)
+        except Exception as e:
+            logger.error(f"Error updating CPU usage: {e}")
+        finally:
+            self._is_cpu_check_running = False
+
     async def _check_system_health(self) -> None:
         """Check system health and update degradation state"""
         current_time = datetime.now()
@@ -433,53 +524,71 @@ Maintain consistent analytical personality and technical precision regardless of
             return
             
         try:
-            # Get system metrics
-            cpu_percent = psutil.cpu_percent()
-            memory_percent = psutil.virtual_memory().percent
+            # Start CPU check in background if not already running
+            if not self._is_cpu_check_running:
+                asyncio.create_task(self._update_cpu_usage())
             
-            self._cpu_usage = cpu_percent
+            # Get memory metrics (fast, non-blocking call)
+            memory = psutil.virtual_memory()
+            memory_percent = memory.percent
+            
             self._memory_usage = memory_percent
             self._last_performance_check = current_time
+            
+            # Log system metrics at debug level with more detail
+            logger.debug(
+                f"System metrics:\n"
+                f"- CPU Usage: {self._cpu_usage:.1f}%\n"
+                f"- Memory Usage: {memory_percent:.1f}% ({memory.used / 1024 / 1024:.0f}MB / {memory.total / 1024 / 1024:.0f}MB)\n"
+                f"- Available Memory: {memory.available / 1024 / 1024:.0f}MB\n"
+                f"- Cached Memory: {memory.cached / 1024 / 1024:.0f}MB"
+            )
+            
+            # Add warning if memory is getting low
+            if memory.available < 1024 * 1024 * 1024:  # Less than 1GB available
+                logger.warning(
+                    f"Low memory warning: Only {memory.available / 1024 / 1024:.0f}MB available"
+                )
             
             # Check if we should exit slowdown
             if self._is_slowed_down and self._last_slowdown:
                 if (current_time - self._last_slowdown).total_seconds() > self.SLOWDOWN_COOLDOWN_MINUTES * 60:
-                    if cpu_percent < self.CPU_THRESHOLD_PERCENT and memory_percent < self.MEMORY_THRESHOLD_PERCENT:
+                    if self._cpu_usage < self.CPU_THRESHOLD_PERCENT and memory_percent < self.MEMORY_THRESHOLD_PERCENT:
                         self._is_slowed_down = False
                         self._last_slowdown = None
                         logger.info("Exiting slowdown mode - system resources normalized")
                         await self._notify_state_change(
                             "recovered",
                             "System resources have normalized",
-                            {"CPU Usage": cpu_percent, "Memory Usage": memory_percent}
+                            {"CPU Usage": self._cpu_usage, "Memory Usage": memory_percent}
                         )
             
             # Check if we should exit disabled state
             if not self._is_enabled and self._last_disable:
                 if (current_time - self._last_disable).total_seconds() > self.DISABLE_COOLDOWN_MINUTES * 60:
-                    if cpu_percent < self.CPU_THRESHOLD_PERCENT and memory_percent < self.MEMORY_THRESHOLD_PERCENT:
+                    if self._cpu_usage < self.CPU_THRESHOLD_PERCENT and memory_percent < self.MEMORY_THRESHOLD_PERCENT:
                         self._is_enabled = True
                         self._last_disable = None
                         logger.info("Re-enabling Gemini API - system resources normalized")
                         await self._notify_state_change(
                             "enabled",
                             "Service has been re-enabled after recovery",
-                            {"CPU Usage": cpu_percent, "Memory Usage": memory_percent}
+                            {"CPU Usage": self._cpu_usage, "Memory Usage": memory_percent}
                         )
             
             # Check if we need to degrade
-            if cpu_percent > self.CPU_THRESHOLD_PERCENT or memory_percent > self.MEMORY_THRESHOLD_PERCENT:
+            if self._cpu_usage > self.CPU_THRESHOLD_PERCENT or memory_percent > self.MEMORY_THRESHOLD_PERCENT:
                 if not self._is_slowed_down:
                     self._is_slowed_down = True
                     self._last_slowdown = current_time
                     logger.warning(
-                        f"Entering slowdown mode - CPU: {cpu_percent}%, Memory: {memory_percent}%"
+                        f"Entering slowdown mode - CPU: {self._cpu_usage}%, Memory: {memory_percent}%"
                     )
                     await self._notify_state_change(
                         "slowdown",
                         "High system resource usage detected",
                         {
-                            "CPU Usage": cpu_percent,
+                            "CPU Usage": self._cpu_usage,
                             "Memory Usage": memory_percent,
                             "Duration": f"{self.SLOWDOWN_COOLDOWN_MINUTES} minutes"
                         }
@@ -488,13 +597,13 @@ Maintain consistent analytical personality and technical precision regardless of
                     self._is_enabled = False
                     self._last_disable = current_time
                     logger.error(
-                        f"Disabling Gemini API - CPU: {cpu_percent}%, Memory: {memory_percent}%"
+                        f"Disabling Gemini API - CPU: {self._cpu_usage}%, Memory: {memory_percent}%"
                     )
                     await self._notify_state_change(
                         "disabled",
                         "Critical system resource usage",
                         {
-                            "CPU Usage": cpu_percent,
+                            "CPU Usage": self._cpu_usage,
                             "Memory Usage": memory_percent,
                             "Duration": f"{self.DISABLE_COOLDOWN_MINUTES} minutes"
                         }
@@ -784,9 +893,12 @@ Maintain consistent analytical personality and technical precision regardless of
         stats = self.usage_stats
         current_time = datetime.now()
         
-        # Calculate time until resets
-        seconds_until_minute = 60 - (current_time - stats["last_minute_reset"]).seconds
-        hours_until_daily = 24 - (current_time - stats["last_reset"]).seconds // 3600
+        # Calculate time until resets - Fix the calculation
+        time_since_last_minute = current_time - stats["last_minute_reset"]
+        seconds_until_minute = 60 - (time_since_last_minute.total_seconds() % 60)
+        
+        time_since_last_reset = current_time - stats["last_reset"]
+        hours_until_daily = 24 - (time_since_last_reset.total_seconds() // 3600)
         
         # Calculate daily totals and percentages
         daily_tokens = stats['total_prompt_tokens'] + stats['total_response_tokens']
@@ -798,14 +910,14 @@ Maintain consistent analytical personality and technical precision regardless of
             "",
             "🕒 현재 사용량:",
             f"  • 현재 분당 요청 수: {stats['minute_requests']:,}/{self.REQUESTS_PER_MINUTE}",
-            f"  • 다음 분까지: {seconds_until_minute}초",
+            f"  • 다음 분까지: {int(seconds_until_minute)}초",
             f"  • 시간당 토큰: {stats['hourly_tokens']:,}",
             "",
             "📅 일간 사용량:",
             f"  • 총 요청 수: {stats['daily_requests']:,}회",
             f"  • 총 토큰: {daily_tokens:,}/{self.DAILY_TOKEN_LIMIT:,} ({daily_token_percent:.1f}%)",
             f"  • 남은 토큰: {self.DAILY_TOKEN_LIMIT - daily_tokens:,}",
-            f"  • 다음 리셋까지: {hours_until_daily}시간",
+            f"  • 다음 리셋까지: {int(hours_until_daily)}시간",
             "",
             "📈 평균 통계:",
             f"  • 평균 요청당 토큰: {(stats['avg_prompt_tokens'] + stats['avg_response_tokens']):.1f}",
@@ -860,8 +972,14 @@ Maintain consistent analytical personality and technical precision regardless of
 
     async def close(self) -> None:
         """Cleanup resources"""
-        self._model = None
-        await super().close()
+        try:
+            # Save final usage data
+            await self._save_usage_data()
+            
+            self._model = None
+            await super().close()
+        except Exception as e:
+            logger.error(f"Error during Gemini API cleanup: {e}")
 
     async def validate_credentials(self) -> bool:
         """Validate Gemini API credentials
