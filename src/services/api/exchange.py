@@ -1,5 +1,6 @@
 import logging
 from typing import Dict, Optional, List, cast
+import asyncio
 
 from .base import BaseAPI, RateLimitConfig
 from src.utils.api_types import ExchangeRates
@@ -41,22 +42,62 @@ class ExchangeAPI(BaseAPI[Dict[str, float]]):
     async def initialize(self) -> None:
         """Initialize Exchange API resources"""
         try:
+            logger.info("Initializing Exchange API...")
+            
             # Initialize base class first
             await super().initialize()
             
-            # Test API access during initialization
-            data = await self._make_request(
-                self.EXCHANGE_URL,
-                endpoint="exchange"
-            )
-            if not isinstance(data, dict) or 'rates' not in data:
-                raise ValueError("Invalid response format")
+            if not self._session:
+                raise ValueError("Session not initialized")
                 
-            logger.info("Exchange API initialized successfully")
+            # Test API access during initialization with retry
+            max_retries = 3
+            retry_delay = 1.0
+            last_error = None
+            
+            for attempt in range(max_retries):
+                try:
+                    logger.debug(f"Exchange API initialization attempt {attempt + 1}/{max_retries}")
+                    data = await self._make_request(
+                        self.EXCHANGE_URL,
+                        endpoint="exchange"
+                    )
+                    
+                    if not isinstance(data, dict) or 'rates' not in data:
+                        raise ValueError("Invalid API response format")
+                    
+                    # Cache initial rates
+                    self._cached_rates = {
+                        curr: rate for curr, rate in data['rates'].items()
+                        if curr in self._supported_currencies
+                    }
+                    
+                    if not self._cached_rates:
+                        raise ValueError("No supported currencies found in API response")
+                    
+                    logger.info(f"Exchange API initialized successfully with {len(self._cached_rates)} currencies")
+                    return
+                    
+                except Exception as e:
+                    last_error = e
+                    if attempt == max_retries - 1:
+                        break
+                    logger.warning(f"Exchange API initialization attempt {attempt + 1} failed: {str(e)}")
+                    await asyncio.sleep(retry_delay)
+                    retry_delay *= 2
+            
+            # If we get here, all retries failed
+            error_msg = f"Failed to initialize Exchange API after {max_retries} attempts"
+            if last_error:
+                error_msg += f": {str(last_error)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
             
         except Exception as e:
-            logger.error(f"Failed to initialize Exchange API: {e}")
-            raise ValueError("Failed to initialize Exchange API") from e
+            logger.error(f"Exchange API initialization failed: {str(e)}")
+            # Clean up session if initialization fails
+            await self.close()
+            raise ValueError(f"Exchange API initialization failed: {str(e)}") from e
 
     async def validate_credentials(self) -> bool:
         """Validate API access (no credentials needed)
@@ -65,14 +106,17 @@ class ExchangeAPI(BaseAPI[Dict[str, float]]):
             bool: True if API is accessible
         """
         try:
-            # Simple validation - just check if we can access the API
-            data = await self._make_request(
-                self.EXCHANGE_URL,
-                endpoint="exchange"
-            )
-            return bool(data and isinstance(data, dict) and 'rates' in data)
+            # If we have cached rates from initialization, we're already validated
+            if self._cached_rates:
+                logger.debug("Exchange API validated using cached rates")
+                return True
+                
+            # If we get here, initialization didn't complete successfully
+            logger.warning("Exchange API validation called without successful initialization")
+            return False
+            
         except Exception as e:
-            logger.error(f"Exchange API validation failed: {e}")
+            logger.error(f"Exchange API validation failed: {str(e)}")
             return False
 
     async def get_exchange_rates(self) -> Dict[str, float]:

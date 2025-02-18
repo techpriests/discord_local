@@ -61,14 +61,35 @@ class BaseAPI(ABC, Generic[T]):
 
     async def initialize(self) -> None:
         """Initialize API client"""
-        if not self._session:
+        try:
+            if self._session:
+                if not self._session.closed:
+                    return  # Session already initialized and active
+                else:
+                    await self._session.close()  # Clean up closed session
+                    self._session = None
+            
+            # Create new session
             self._session = aiohttp.ClientSession()
+            logger.debug(f"{self.__class__.__name__} session initialized")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize {self.__class__.__name__} session: {e}")
+            if self._session:
+                await self._session.close()
+                self._session = None
+            raise ValueError(f"Failed to initialize API session: {str(e)}") from e
 
     async def close(self) -> None:
         """Close API client"""
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
+        if self._session:
+            try:
+                if not self._session.closed:
+                    await self._session.close()
+            except Exception as e:
+                logger.error(f"Error closing {self.__class__.__name__} session: {e}")
+            finally:
+                self._session = None
 
     @abstractmethod
     async def validate_credentials(self) -> bool:

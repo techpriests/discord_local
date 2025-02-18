@@ -25,6 +25,13 @@ class TestBotBasic:
         assert bot._api_service is not None
         assert bot.memory_db is not None
         
+        # Test API service state
+        assert bot._api_service.initialized is True
+        api_states = bot._api_service.api_states
+        assert isinstance(api_states, dict)
+        assert all(api_states.values()), "All APIs should be initialized"
+        assert set(api_states.keys()) == {'steam', 'population', 'exchange', 'gemini'}
+        
         # Test command system initialization
         assert isinstance(bot.tree, MagicMock)
         assert 'InformationCommands' in bot._BotBase__cogs
@@ -141,3 +148,37 @@ class TestBotBasic:
         for cmd in tree_commands:
             assert isinstance(cmd, MagicMock)  # Changed to check for MagicMock
             assert cmd.name is not None 
+
+    async def test_bot_cleanup(self, bot):
+        """Test bot cleanup process"""
+        # Store references to mocks before cleanup
+        api_service = bot._api_service
+        memory_db = bot.memory_db
+        
+        # Call cleanup
+        await bot._cleanup()
+        
+        # Verify API service cleanup
+        api_service.close.assert_called_once()
+        
+        # Verify memory DB cleanup
+        memory_db.close.assert_called_once()
+        
+        # Verify bot still has references (not cleared by _cleanup)
+        assert bot._api_service is not None
+        assert bot.memory_db is not None
+        
+        # Reset mock call counts
+        api_service.close.reset_mock()
+        memory_db.close.reset_mock()
+        
+        # Test cleanup on setup failure
+        await bot._cleanup_on_setup_failure()
+        
+        # Verify second cleanup calls
+        api_service.close.assert_called_once()
+        memory_db.close.assert_called_once()
+        
+        # Verify services are set to None after setup failure cleanup
+        assert bot._api_service is None
+        assert bot.memory_db is None 

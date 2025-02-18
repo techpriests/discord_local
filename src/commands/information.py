@@ -31,6 +31,22 @@ class InformationCommands(BaseCommands):
         super().__init__()
         self.api = api_service
 
+    def _check_api_state(self, api_name: str) -> None:
+        """Check if API is initialized
+        
+        Args:
+            api_name: Name of API to check
+            
+        Raises:
+            ValueError: If API is not initialized
+        """
+        if not self.api.initialized:
+            raise ValueError("API 서비스가 초기화되지 않았습니다")
+            
+        api_states = self.api.api_states
+        if not api_states.get(api_name.lower(), False):
+            raise ValueError(f"{api_name} API가 초기화되지 않았습니다")
+
     @discord.app_commands.command(name="population", description="국가의 인구수를 알려드립니다")
     async def population_slash(self, interaction: discord.Interaction, country_name: str) -> None:
         """Slash command version"""
@@ -65,30 +81,35 @@ class InformationCommands(BaseCommands):
         country_name: Optional[str] = None
     ) -> None:
         """Handle population information request"""
-        if not self._validate_country_name(country_name):
-            return await self.send_response(
-                ctx_or_interaction, 
-                "국가 이름을 2글자 이상 입력해주세요...",
-                ephemeral=True
-            )
-
-        processing_msg = None
         try:
-            processing_msg = await self.send_response(
-                ctx_or_interaction, 
-                "국가 정보를 검색중입니다...",
-                ephemeral=True
-            )
-            country = await self._get_country_info(country_name)
-            await self._send_country_embed(ctx_or_interaction, country, processing_msg)
+            self._check_api_state('population')
+            
+            if not self._validate_country_name(country_name):
+                return await self.send_response(
+                    ctx_or_interaction, 
+                    "국가 이름을 2글자 이상 입력해주세요...",
+                    ephemeral=True
+                )
+
+            processing_msg = None
+            try:
+                processing_msg = await self.send_response(
+                    ctx_or_interaction, 
+                    "국가 정보를 검색중입니다...",
+                    ephemeral=True
+                )
+                country = await self._get_country_info(country_name)
+                await self._send_country_embed(ctx_or_interaction, country, processing_msg)
+            except Exception as e:
+                await self._handle_population_error(ctx_or_interaction, country_name, str(e))
+            finally:
+                if processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except Exception as e:
+                        logger.error(f"Error deleting processing message: {e}")
         except Exception as e:
             await self._handle_population_error(ctx_or_interaction, country_name, str(e))
-        finally:
-            if processing_msg:
-                try:
-                    await processing_msg.delete()
-                except Exception as e:
-                    logger.error(f"Error deleting processing message: {e}")
 
     def _validate_country_name(self, country_name: Optional[str]) -> bool:
         """Validate country name input"""
@@ -186,54 +207,59 @@ class InformationCommands(BaseCommands):
         Raises:
             ValueError: If game not found or API error
         """
-        if not game_name:
-            await self.send_response(
-                ctx_or_interaction,
-                "게임 이름을 입력해주세요...",
-                ephemeral=True
-            )
-            return
-
-        processing_msg = None
-        user_name = self.get_user_name(ctx_or_interaction)
         try:
-            # Show processing message
-            processing_msg = await self.send_response(
-                ctx_or_interaction,
-                f"{user_name}님, 게임 정보를 가져오는 중...",
-                ephemeral=True
-            )
+            self._check_api_state('steam')
+            
+            if not game_name:
+                await self.send_response(
+                    ctx_or_interaction,
+                    "게임 이름을 입력해주세요...",
+                    ephemeral=True
+                )
+                return
 
-            game, similarity, similar_games = await self.api.steam.find_game(game_name)
+            processing_msg = None
+            user_name = self.get_user_name(ctx_or_interaction)
+            try:
+                # Show processing message
+                processing_msg = await self.send_response(
+                    ctx_or_interaction,
+                    f"{user_name}님, 게임 정보를 가져오는 중...",
+                    ephemeral=True
+                )
 
-            if not game:
+                game, similarity, similar_games = await self.api.steam.find_game(game_name)
+
+                if not game:
+                    if processing_msg:
+                        try:
+                            await processing_msg.delete()
+                        except Exception as e:
+                            logger.error(f"Error deleting processing message: {e}")
+                    await self._send_game_not_found_embed(ctx_or_interaction, user_name)
+                    return
+
+                embed = await self._create_game_embed(game, similar_games, user_name)
+                
+                # Delete processing message before sending response
                 if processing_msg:
                     try:
                         await processing_msg.delete()
                     except Exception as e:
                         logger.error(f"Error deleting processing message: {e}")
-                await self._send_game_not_found_embed(ctx_or_interaction, user_name)
-                return
+                
+                await self.send_response(ctx_or_interaction, embed=embed)
 
-            embed = await self._create_game_embed(game, similar_games, user_name)
-            
-            # Delete processing message before sending response
-            if processing_msg:
-                try:
-                    await processing_msg.delete()
-                except Exception as e:
-                    logger.error(f"Error deleting processing message: {e}")
-            
-            await self.send_response(ctx_or_interaction, embed=embed)
-
+            except Exception as e:
+                logger.error(f"Error in steam command: {e}")
+                if processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except Exception as e:
+                        logger.error(f"Error deleting processing message: {e}")
+                await self._send_steam_error_embed(ctx_or_interaction, user_name)
         except Exception as e:
-            logger.error(f"Error in steam command: {e}")
-            if processing_msg:
-                try:
-                    await processing_msg.delete()
-                except Exception as e:
-                    logger.error(f"Error deleting processing message: {e}")
-            await self._send_steam_error_embed(ctx_or_interaction, user_name)
+            await self._handle_steam_error(ctx_or_interaction, game_name, str(e))
 
     async def _send_game_not_found_embed(self, ctx_or_interaction, user_name: str):
         """Send embed for game not found error
@@ -506,28 +532,33 @@ class InformationCommands(BaseCommands):
         currency: Optional[str] = None
     ) -> None:
         """Handle exchange rate request"""
-        processing_msg = None
         try:
-            # Show processing message
-            processing_msg = await self.send_response(
-                ctx_or_interaction,
-                "환율 정보를 가져오는 중...",
-                ephemeral=True
-            )
+            self._check_api_state('exchange')
+            
+            processing_msg = None
+            try:
+                # Show processing message
+                processing_msg = await self.send_response(
+                    ctx_or_interaction,
+                    "환율 정보를 가져오는 중...",
+                    ephemeral=True
+                )
 
-            rates = await self.api.exchange.get_exchange_rates()
-            if currency:
-                await self._send_single_rate(ctx_or_interaction, currency.upper(), rates)
-            else:
-                await self._send_all_rates(ctx_or_interaction, rates)
+                rates = await self.api.exchange.get_exchange_rates()
+                if currency:
+                    await self._send_single_rate(ctx_or_interaction, currency.upper(), rates)
+                else:
+                    await self._send_all_rates(ctx_or_interaction, rates)
+            except Exception as e:
+                await self._handle_exchange_error(ctx_or_interaction, currency, str(e))
+            finally:
+                if processing_msg:
+                    try:
+                        await processing_msg.delete()
+                    except Exception as e:
+                        logger.error(f"Error deleting processing message: {e}")
         except Exception as e:
             await self._handle_exchange_error(ctx_or_interaction, currency, str(e))
-        finally:
-            if processing_msg:
-                try:
-                    await processing_msg.delete()
-                except Exception as e:
-                    logger.error(f"Error deleting processing message: {e}")
 
     async def _send_single_rate(
         self, 
