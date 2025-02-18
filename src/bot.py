@@ -114,9 +114,13 @@ class DiscordBot(commands.Bot):
 
             # Register help command
             self.remove_command('help')  # Remove default help command
+            
+            async def help_callback(ctx: commands.Context) -> None:
+                await self._handle_help(ctx)
+            
             self.add_command(
                 commands.Command(
-                    self.help_prefix,
+                    help_callback,
                     name='pthelp',
                     help='봇의 도움말을 보여줍니다',
                     brief='도움말 보기',
