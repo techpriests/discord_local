@@ -12,6 +12,12 @@ mock_genai.GenerativeModel = MagicMock()
 sys.modules['google'] = MagicMock()
 sys.modules['google.generativeai'] = mock_genai
 
+# Mock psutil module
+mock_psutil = MagicMock()
+mock_psutil.cpu_percent.return_value = 50.0
+mock_psutil.virtual_memory.return_value = MagicMock(percent=60.0)
+sys.modules['psutil'] = mock_psutil
+
 import discord
 from discord.ext import commands
 from discord import app_commands

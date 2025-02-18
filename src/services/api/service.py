@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from typing import Dict, Optional
+import discord
 
 from src.services.api.exchange import ExchangeAPI
 from src.services.api.population import PopulationAPI
@@ -12,11 +13,16 @@ logger = logging.getLogger(__name__)
 class APIService:
     """Service for managing various API clients"""
 
-    def __init__(self, config: Dict[str, str]):
+    def __init__(
+        self, 
+        config: Dict[str, str], 
+        notification_channel: Optional[discord.TextChannel] = None
+    ) -> None:
         """Initialize API service with configuration
 
         Args:
             config: Dictionary containing API keys and settings
+            notification_channel: Optional Discord channel for notifications
 
         Raises:
             ValueError: If required API keys are missing
@@ -26,7 +32,10 @@ class APIService:
             self._steam_api = SteamAPI(self._get_required_key(config, "STEAM_API_KEY"))
             self._population_api = PopulationAPI()
             self._exchange_api = ExchangeAPI()
-            self._gemini_api = GeminiAPI(config.get("GEMINI_API_KEY", "")) if config.get("GEMINI_API_KEY") else None
+            self._gemini_api = GeminiAPI(
+                config.get("GEMINI_API_KEY", ""),
+                notification_channel=notification_channel
+            ) if config.get("GEMINI_API_KEY") else None
         except KeyError as e:
             raise ValueError(f"Missing required API key: {e}") from e
         except Exception as e:

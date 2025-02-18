@@ -94,17 +94,56 @@ class DiscordBot(commands.Bot):
         return self._api_service
 
     async def setup_hook(self) -> None:
-        """Set up bot hooks and initialize services"""
+        """Set up the bot's internal state"""
         try:
-            self.memory_db = MemoryDB()
-            if not self._api_service:
-                self._api_service = APIService(self._config)
-                await self._api_service.initialize()
+            # Initialize API service
+            self._api_service = APIService(self._config)
+            
+            # Initialize memory database
+            self.memory_db = {}
+            
+            # Register commands
             await self._register_commands()
+            
+            # Initialize API service after bot is ready to access channels
+            self.loop.create_task(self._initialize_services())
+            
         except Exception as e:
-            logger.error(f"Failed to setup bot: {e}")
-            await self._cleanup()
-            raise ValueError("봇 초기화에 실패했습니다") from e
+            logger.error(f"Failed to set up bot: {e}")
+            raise ValueError("봇 설정에 실패했습니다") from e
+
+    async def _initialize_services(self) -> None:
+        """Initialize services after bot is ready"""
+        # Wait until bot is ready to access channels
+        await self.wait_until_ready()
+        
+        try:
+            # Get or create notification channel
+            notification_channel = None
+            for guild in self.guilds:
+                channel = discord.utils.get(guild.text_channels, name="bot-notifications")
+                if channel:
+                    notification_channel = channel
+                    break
+                else:
+                    try:
+                        # Create channel if it doesn't exist
+                        notification_channel = await guild.create_text_channel(
+                            "bot-notifications",
+                            topic="AI Service Status Notifications"
+                        )
+                        break
+                    except discord.Forbidden:
+                        continue
+            
+            # Re-initialize API service with notification channel
+            self._api_service = APIService(self._config, notification_channel)
+            await self._api_service.initialize()
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize services: {e}")
+            # Continue without notifications if setup fails
+            await self._api_service.initialize()
 
     async def _register_commands(self) -> None:
         """Register all command classes"""
@@ -121,16 +160,6 @@ class DiscordBot(commands.Bot):
         except Exception as e:
             logger.error(f"Failed to register commands: {e}")
             raise
-
-    async def _cleanup(self) -> None:
-        """Clean up resources"""
-        if self._api_service:
-            try:
-                await self._api_service.close()
-            except Exception as e:
-                logger.error(f"Error during API service cleanup: {e}")
-        self._api_service = None
-        self.memory_db = None
 
     async def on_ready(self) -> None:
         """Handle bot ready event"""
