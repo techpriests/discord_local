@@ -212,14 +212,28 @@ class AICommands(BaseCommands):
             
             # Create embed
             embed = discord.Embed(
-                title="🤖 시스템 상태",
+                title="시스템 상태",
                 description=report,
                 color=INFO_COLOR
             )
             
-            # Add health status section
+            # Add API status section
+            api_states = self.api_service.api_states
             status_text = []
             
+            # API status icons
+            status_icons = {
+                True: "✅",
+                False: "❌"
+            }
+            
+            # Add API status information
+            status_text.append("**API 상태:**")
+            for api_name, is_active in api_states.items():
+                icon = status_icons[is_active]
+                status_text.append(f"{icon} {api_name.capitalize()}")
+            
+            status_text.append("\n**서비스 상태:**")
             # Service status
             if not health["is_enabled"]:
                 status_text.append("❌ 서비스 비활성화됨")
@@ -235,12 +249,13 @@ class AICommands(BaseCommands):
                 status_text.append("✅ 서비스 정상")
             
             # System metrics
+            status_text.append(f"\n**시스템 리소스:**")
             status_text.append(f"🔄 CPU 사용량: {health['cpu_usage']:.1f}%")
             status_text.append(f"💾 메모리 사용량: {health['memory_usage']:.1f}%")
             
             # Error count
             if health["error_count"] > 0:
-                status_text.append(f"⚠️ 최근 오류: {health['error_count']}회")
+                status_text.append(f"\n⚠️ 최근 오류: {health['error_count']}회")
             
             embed.add_field(
                 name="시스템 상태",
