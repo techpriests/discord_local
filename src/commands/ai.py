@@ -137,7 +137,7 @@ class AICommands(BaseCommands):
         name="사용량",
         help="Gemini AI 사용량을 보여줍니다",
         brief="AI 사용량 확인",
-        aliases=["usage", "사용량"],
+        aliases=["usage"],
         description="Gemini AI의 현재 사용량과 상태를 보여줍니다.\n"
         "사용법:\n"
         "• !!사용량\n"
