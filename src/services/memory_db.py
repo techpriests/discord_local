@@ -158,3 +158,10 @@ class MemoryDB:
             str: Temporary filename
         """
         return f"{self.db_file}.tmp"
+
+    async def close(self) -> None:
+        """Close database connection and cleanup resources"""
+        try:
+            await self._save_db()
+        except Exception as e:
+            logger.error(f"Error during database cleanup: {e}")
