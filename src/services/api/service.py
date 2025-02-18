@@ -116,21 +116,33 @@ class APIService:
             raise ValueError("Gemini API is not available - API key not provided")
         return self._gemini_api
 
-    async def initialize(self) -> None:
+    async def initialize(self) -> bool:
         """Initialize all API clients
+
+        Returns:
+            bool: True if initialization was successful
 
         Raises:
             ValueError: If any API client fails to initialize
         """
         try:
+            # Initialize each API service
             await self._steam_api.initialize()
             await self._population_api.initialize()
             await self._exchange_api.initialize()
             if self._gemini_api:
                 await self._gemini_api.initialize()
+            
+            # Validate credentials after initialization
+            if not await self.validate_credentials():
+                logger.error("API credentials validation failed")
+                return False
+                
+            return True
+            
         except Exception as e:
-            logger.error(f"Failed to initialize APIs: {e}")
-            raise ValueError("API 초기화에 실패했습니다") from e
+            logger.error(f"Failed to initialize APIs: {e}", exc_info=True)
+            raise ValueError(f"API 초기화에 실패했습니다: {str(e)}") from e
 
     async def validate_credentials(self) -> bool:
         """Validate all API credentials

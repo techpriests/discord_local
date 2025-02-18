@@ -126,9 +126,13 @@ class DiscordBot(commands.Bot):
             # Initialize API service first since commands depend on it
             if not self._api_service:
                 logger.info("Initializing API service...")
-                self._api_service = APIService(self._config)
-                if not await self._api_service.initialize():  # Check initialization success
-                    raise ValueError("Failed to initialize API service")
+                try:
+                    self._api_service = APIService(self._config)
+                    if not await self._api_service.initialize():
+                        raise ValueError("API service credentials validation failed")
+                except Exception as e:
+                    logger.error(f"API service initialization failed: {e}", exc_info=True)
+                    raise ValueError(f"Failed to initialize API service: {str(e)}")
                 logger.info("API service initialized successfully")
             
             # Initialize memory database
