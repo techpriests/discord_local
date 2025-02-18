@@ -46,6 +46,7 @@ class GeminiAPI(BaseAPI[str]):
             notification_channel: Optional Discord channel for notifications
         """
         super().__init__(api_key)
+        self._notification_channel = notification_channel
         self._model = None
         self._rate_limits = {
             "generate": RateLimitConfig(self.REQUESTS_PER_MINUTE, 60),  # 60 requests per minute for generate_content
@@ -87,8 +88,15 @@ class GeminiAPI(BaseAPI[str]):
         self._last_performance_check = datetime.now()
 
         # Add notification channel and cooldown tracking
-        self._notification_channel = notification_channel
         self._last_notification_time: Dict[str, datetime] = {}  # Track last notification time per type
+
+    def update_notification_channel(self, channel: discord.TextChannel) -> None:
+        """Update notification channel
+        
+        Args:
+            channel: New notification channel to use
+        """
+        self._notification_channel = channel
 
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""

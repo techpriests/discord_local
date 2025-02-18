@@ -192,3 +192,12 @@ class APIService:
     async def get_exchange_rates(self) -> Dict[str, float]:
         """Get current exchange rates"""
         return await self.exchange.get_exchange_rates()
+
+    def update_notification_channel(self, channel: discord.TextChannel) -> None:
+        """Update notification channel for API services
+        
+        Args:
+            channel: New notification channel to use
+        """
+        if self._gemini_api:
+            self._gemini_api.update_notification_channel(channel)
