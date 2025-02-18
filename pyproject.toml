@@ -19,6 +19,7 @@ python-dotenv = "^1.0.0"
 numpy = "^1.26.3"  # Added for optimized gacha calculations
 pytz = "^2023.3"
 matplotlib = "^3.10.0"  # For generating player count charts
+google-generativeai = "^0.8.4"  # For Gemini AI integration
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"

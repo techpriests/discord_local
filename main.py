@@ -10,7 +10,7 @@ async def main():
     # Initialize services
     config = {
         "STEAM_API_KEY": os.getenv("STEAM_API_KEY"),
-        "WEATHER_API_KEY": os.getenv("WEATHER_API_KEY")
+        "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY")
     }
     
     api_service = APIService(config)

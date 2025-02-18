@@ -9,8 +9,8 @@ services:
     container_name: discord_bot
     environment:
       - DISCORD_TOKEN=${DISCORD_TOKEN}
-      - WEATHER_API_KEY=${WEATHER_API_KEY}
       - STEAM_API_KEY=${STEAM_API_KEY}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
       - GIT_COMMIT=${GIT_COMMIT:-unknown}
       - GIT_BRANCH=${GIT_BRANCH:-unknown}
     volumes:
