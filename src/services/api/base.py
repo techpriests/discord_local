@@ -85,7 +85,8 @@ class BaseAPI(ABC, Generic[T]):
         method: str = "GET", 
         params: Optional[Dict[str, Any]] = None,
         headers: Optional[Dict[str, str]] = None,
-        endpoint: Optional[str] = None
+        endpoint: Optional[str] = None,
+        custom_request: Optional[callable] = None
     ) -> JsonDict:
         """Make HTTP request
         
@@ -95,6 +96,7 @@ class BaseAPI(ABC, Generic[T]):
             params: Query parameters
             headers: Request headers
             endpoint: API endpoint for rate limiting
+            custom_request: Optional callable for custom request handling
 
         Returns:
             JsonDict: Response data
@@ -102,13 +104,19 @@ class BaseAPI(ABC, Generic[T]):
         Raises:
             ValueError: If request fails
         """
-        if not self._session:
+        if not self._session and not custom_request:
             raise ValueError("API client not initialized")
 
         if endpoint:
             await self._check_rate_limit(endpoint)
 
         try:
+            if custom_request:
+                response = await custom_request()
+                if endpoint:
+                    self._record_request(endpoint)
+                return response
+
             async with self._session.request(
                 method, 
                 url, 

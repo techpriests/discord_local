@@ -1,6 +1,7 @@
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Type, cast, NoReturn, Union
+import asyncio
 
 import discord
 from discord.app_commands import AppCommandError
@@ -48,6 +49,8 @@ AI 명령어:
 1. !!명령어 - 기본 접두사
 2. 프틸 명령어 - 한글 접두사
 3. pt command - 영문 접두사
+
+도움말 보기: !!pthelp, 프틸 pthelp, pt pthelp, /pthelp
 """
 
 
@@ -175,7 +178,7 @@ class DiscordBot(commands.Bot):
             # Set bot presence
             await cast(discord.Client, self).change_presence(
                 activity=discord.Game(
-                    name=f"프틸 도움말 | /help | {self.version_info.commit}"
+                    name=f"프틸 도움말 | /pthelp | {self.version_info.commit}"
                 )
             )
         except Exception as e:
@@ -269,19 +272,32 @@ class DiscordBot(commands.Bot):
     async def _cleanup(self) -> None:
         """Clean up bot resources"""
         try:
+            # Clean up API service
             if self._api_service:
                 await self._api_service.close()
+            
+            # Clean up memory database
+            if self.memory_db:
+                await self.memory_db.close()
+            
+            # Clean up any remaining tasks
+            tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
 
     async def close(self) -> None:
         """Close the bot connection and clean up resources"""
         try:
+            logger.info("Bot shutting down, cleaning up resources...")
             await self._cleanup()
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
         finally:
             await super().close()
+            logger.info("Bot shutdown complete")
 
     @commands.command(name="환율")
     async def exchange_prefix(
@@ -658,15 +674,28 @@ class DiscordBot(commands.Bot):
         if processing_msg:
             await processing_msg.delete()
 
-    @app_commands.command(name="help", description="도움말을 보여줍니다")
-    async def help_slash(self, interaction: discord.Interaction) -> None:
-        """Show help information"""
-        await self._handle_help(interaction)
-
-    @commands.command(name="도움말", aliases=["help"])
+    @commands.command(
+        name="pthelp",
+        help="봇의 도움말을 보여줍니다",
+        brief="도움말 보기",
+        aliases=["도움말", "도움", "명령어"],
+        description="봇의 모든 명령어와 사용법을 보여줍니다.\n"
+        "사용법:\n"
+        "• !!pthelp\n"
+        "• 프틸 pthelp\n"
+        "• pt pthelp"
+    )
     async def help_prefix(self, ctx: commands.Context) -> None:
         """Show help information"""
         await self._handle_help(ctx)
+
+    @app_commands.command(
+        name="pthelp",
+        description="봇의 도움말을 보여줍니다"
+    )
+    async def help_slash(self, interaction: discord.Interaction) -> None:
+        """Show help information"""
+        await self._handle_help(interaction)
 
     async def _handle_help(self, ctx_or_interaction: CommandContext) -> None:
         """Handle help command"""
@@ -837,7 +866,7 @@ class DiscordBot(commands.Bot):
             ctx_or_interaction: Command context or interaction
             processing_msg: Optional processing message to delete
         """
-        message = "올바른 형식이 아닙니다. '!!help'를 참고해주세요."
+        message = "올바른 형식이 아닙니다. '!!pthelp'를 참고해주세요."
         await self._send_response(ctx_or_interaction, message)
         if processing_msg:
             await processing_msg.delete()

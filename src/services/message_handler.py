@@ -115,7 +115,7 @@ class MessageHandler(commands.Cog):
         """
         try:
             if command.lower() == "help":
-                return "사용 가능한 명령어: help, 안녕"
+                return "사용 가능한 명령어: pthelp, 안녕"
             return None
         except Exception as e:
             logger.error(f"Error processing command: {e}")
@@ -140,7 +140,7 @@ class MessageHandler(commands.Cog):
             "네, 부르셨나요?",
             "안녕하세요!",
             "무엇을 도와드릴까요?",
-            "명령어 목록은 !!help 를 입력해주세요!",
+            "명령어 목록은 !!pthelp 를 입력해주세요!",
         ]
         await message.channel.send(random.choice(responses))
 
