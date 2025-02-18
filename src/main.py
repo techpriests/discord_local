@@ -48,15 +48,24 @@ async def start_bot(config: Dict[str, str], attempt: int = 1) -> NoReturn:
         SystemExit: If bot fails to start after maximum retries
     """
     try:
+        logger.info("Creating bot instance...")
         bot = DiscordBot(config)
+        logger.info("Bot instance created successfully")
+        
+        logger.info("Starting bot with token...")
         async with bot:
-            await bot.start(config["DISCORD_TOKEN"])
+            logger.info("Entering bot context manager")
+            try:
+                await bot.start(config["DISCORD_TOKEN"])
+            except Exception as e:
+                logger.error(f"Error during bot.start(): {e}", exc_info=True)
+                raise
     except discord.LoginFailure as e:
-        logger.error(f"Failed to login: {e}")
+        logger.error(f"Failed to login: {e}", exc_info=True)
         raise SystemExit("Discord 로그인에 실패했습니다") from e
     except Exception as e:
         if attempt >= MAX_RETRY_ATTEMPTS:
-            logger.error(f"Bot failed to start after {MAX_RETRY_ATTEMPTS} attempts. Last error: {e}")
+            logger.error(f"Bot failed to start after {MAX_RETRY_ATTEMPTS} attempts. Last error: {e}", exc_info=True)
             raise SystemExit(f"봇이 {MAX_RETRY_ATTEMPTS}회 시도 후에도 시작하지 못했습니다") from e
         
         # Calculate delay with exponential backoff
@@ -74,13 +83,17 @@ async def main() -> NoReturn:
     """
     try:
         # Load configuration from environment
+        logger.info("Loading configuration from environment...")
         config = get_config()
         
         # Validate config
         if not all(config.values()):
-            raise ValueError("Missing required environment variables")
+            missing_vars = [k for k, v in config.items() if not v]
+            error_msg = f"Missing required environment variables: {', '.join(missing_vars)}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
             
-        # Start bot with retry logic
+        logger.info("Starting bot with retry logic...")
         await start_bot(config)
 
     except SystemExit as e:
@@ -90,12 +103,13 @@ async def main() -> NoReturn:
         logger.info("Bot stopped by user")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Unexpected error: {e}")
+        logger.error(f"Unexpected error: {e}", exc_info=True)
         sys.exit(1)
 
 if __name__ == "__main__":
     # Set up logging
     setup_logging()
+    logger.info("Starting bot application...")
     
     # Run bot
     try:
@@ -103,5 +117,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Bot stopped by user")
     except Exception as e:
-        logger.error(f"Fatal error: {e}")
+        logger.error(f"Fatal error: {e}", exc_info=True)
         sys.exit(1)

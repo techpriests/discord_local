@@ -65,8 +65,14 @@ class DiscordBot(commands.Bot):
             config: Configuration dictionary containing API keys
             api_service: Optional APIService instance. If not provided, one will be created.
         """
+        # Set up intents
         intents = discord.Intents.default()
         intents.message_content = True
+        intents.members = True  # Required for member-related operations
+        intents.guilds = True   # Required for guild operations
+        intents.messages = True # Required for message operations
+        logger.info("Initialized bot intents: %s", intents.value)
+
         super().__init__(
             command_prefix=self._get_prefix,
             intents=intents,
@@ -84,6 +90,7 @@ class DiscordBot(commands.Bot):
         ]
         self.memory_db: Optional[MemoryDB] = None
         self.version_info: VersionInfo = get_git_info()
+        logger.info("Bot initialization completed")
 
     @property
     def api_service(self) -> APIService:
@@ -111,38 +118,45 @@ class DiscordBot(commands.Bot):
     async def setup_hook(self) -> None:
         """Initialize bot services and register commands"""
         try:
+            logger.info("Starting setup_hook...")
+            
             # Initialize memory database
+            logger.info("Initializing memory database...")
             self.memory_db = MemoryDB()
+            logger.info("Memory database initialized")
 
             # Initialize API service if not provided
             if not self._api_service:
+                logger.info("Initializing API service...")
                 self._api_service = APIService(self._config)
+                logger.info("API service initialized")
 
             # Register commands
+            logger.info("Registering commands...")
             await self._register_commands()
+            logger.info("Commands registered")
 
             # Remove default help command
+            logger.info("Setting up help command...")
             self.remove_command('help')
+            logger.info("Help command setup complete")
 
-            # Register slash commands
-            self.tree.add_command(
-                app_commands.Command(
-                    name='pthelp',
-                    description='봇의 도움말을 보여줍니다',
-                    callback=self.help_slash
-                )
-            )
+            # Sync slash commands
+            logger.info("Syncing slash commands...")
             await self.tree.sync()
+            logger.info("Slash commands synced")
 
             logger.info("Bot setup completed successfully")
         except Exception as e:
-            logger.error(f"Error in setup_hook: {e}")
+            logger.error(f"Error in setup_hook: {e}", exc_info=True)
             raise
 
     async def _register_commands(self) -> None:
         """Register all command classes"""
         try:
+            logger.info("Starting command registration...")
             for command_class in self._command_classes:
+                logger.info(f"Registering command class: {command_class.__name__}")
                 if command_class == InformationCommands:
                     await self.add_cog(command_class(self.api_service))
                 elif command_class == SystemCommands:
@@ -154,15 +168,19 @@ class DiscordBot(commands.Bot):
                         cog.bot = self
                 else:
                     await self.add_cog(command_class())
+                logger.info(f"Successfully registered {command_class.__name__}")
+            
+            logger.info("Syncing command tree...")
             await self.tree.sync()
             logger.info("Commands registered successfully")
         except Exception as e:
-            logger.error(f"Failed to register commands: {e}")
+            logger.error(f"Failed to register commands: {e}", exc_info=True)
             raise
 
     async def on_ready(self) -> None:
         """Handle bot ready event"""
         try:
+            logger.info("Bot on_ready event triggered")
             user = cast(discord.ClientUser, self.user)
             logger.info(
                 f"Logged in as {user.name} "
@@ -172,6 +190,7 @@ class DiscordBot(commands.Bot):
             )
 
             # Set up notification channels after bot is ready
+            logger.info("Setting up notification channels...")
             notification_channels = []
             for guild in self.guilds:
                 channel = discord.utils.get(guild.text_channels, name="bot-notifications")
@@ -196,16 +215,19 @@ class DiscordBot(commands.Bot):
 
             # Update API service with notification channel if available
             if notification_channels and self._api_service:
+                logger.info("Updating API service with notification channel")
                 self._api_service.update_notification_channel(notification_channels[0])
 
             # Set bot presence
+            logger.info("Setting bot presence...")
             await cast(discord.Client, self).change_presence(
                 activity=discord.Game(
                     name=f"프틸 도움말 | /pthelp | {self.version_info.commit}"
                 )
             )
+            logger.info("Bot initialization complete")
         except Exception as e:
-            logger.error(f"Error in on_ready: {e}")
+            logger.error(f"Error in on_ready: {e}", exc_info=True)
 
     async def on_command_error(
         self, 
@@ -712,10 +734,7 @@ class DiscordBot(commands.Bot):
         """Show help information"""
         await self._handle_help(ctx)
 
-    @app_commands.command(
-        name="pthelp",
-        description="봇의 도움말을 보여줍니다"
-    )
+    @app_commands.command(name="pthelp", description="봇의 도움말을 보여줍니다")
     async def help_slash(self, interaction: discord.Interaction) -> None:
         """Show help information"""
         await self._handle_help(interaction)
