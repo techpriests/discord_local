@@ -99,10 +99,7 @@ class DiscordBot(commands.Bot):
         """Set up the bot's internal state"""
         try:
             # Initialize memory database
-            self.memory_db = {}
-            
-            # Register commands
-            await self._register_commands()
+            self.memory_db = MemoryDB()
             
             # Initialize API service synchronously
             await self.wait_until_ready()
@@ -135,6 +132,9 @@ class DiscordBot(commands.Bot):
                 notification_channel = notification_channels[0] if notification_channels else None
                 self._api_service = APIService(self._config, notification_channel)
             await self._api_service.initialize()
+            
+            # Register commands after API service is initialized
+            await self._register_commands()
             
         except Exception as e:
             logger.error(f"Failed to set up bot: {e}")
@@ -261,14 +261,22 @@ class DiscordBot(commands.Bot):
         except Exception as e:
             logger.error(f"Failed to send error message: {e}")
 
-    async def close(self) -> None:
-        """Clean up resources before closing"""
+    async def _cleanup(self) -> None:
+        """Clean up bot resources"""
         try:
-            await self._cleanup()
-            await super().close()
+            if self._api_service:
+                await self._api_service.close()
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
-            raise
+
+    async def close(self) -> None:
+        """Close the bot connection and clean up resources"""
+        try:
+            await self._cleanup()
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+        finally:
+            await super().close()
 
     @commands.command(name="환율")
     async def exchange_prefix(
