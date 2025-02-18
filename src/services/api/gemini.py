@@ -58,10 +58,8 @@ class GeminiAPI(BaseAPI[str]):
   - Maintain professional analytical distance while being attentive
 
 • Language Handling:
-  - Detect and respond in the user's language (English/Korean)
-  - For English: Use technical, precise terminology
-  - For Korean: Use technical, precise terminology
-  - Maintain the same analytical personality regardless of language
+  - Detect and respond in the user's language. Answer in the language the user used in the prompt. If the user uses English, answer in English. If the user uses Korean, answer in Korean.
+  - Maintain the same analytical personality regardless of language.
 
 Maintain consistent analytical personality and technical precision regardless of language."""
 
