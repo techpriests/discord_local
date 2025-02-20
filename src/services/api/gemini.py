@@ -10,7 +10,6 @@ from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
 import discord
-from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 
 logger = logging.getLogger(__name__)
 
