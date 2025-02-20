@@ -252,20 +252,24 @@ class TestGeminiInitialization:
         mock_genai_fixture.GenerativeModel.assert_called_once_with('gemini-2.0-flash')
         
         # 4. Verify safety settings format
-        safety_settings = gemini_api._safety_settings
-        assert isinstance(safety_settings, list)
-        assert len(safety_settings) == 4  # Should have all 4 safety categories
-        
-        # Check specific safety settings
-        expected_categories = {
-            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT
-        }
-        
-        actual_categories = {setting["category"] for setting in safety_settings}
-        assert actual_categories == expected_categories
+        gemini_api._safety_settings == [
+            {
+                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+            },
+            {
+                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+            },
+            {
+                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+            },
+            {
+                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
+                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+            }
+        ]
         
         # 5. Verify generation config
         gen_config = gemini_api._generation_config
