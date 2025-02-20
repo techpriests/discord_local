@@ -43,8 +43,22 @@ def mock_api_service() -> MagicMock:
     service.steam = MagicMock()
     service.population = MagicMock()
     service.exchange = MagicMock()
-    service.gemini = MagicMock()
-    service.gemini.chat = AsyncMock()
+    
+    # Create a proper mock for Gemini API
+    gemini = MagicMock()
+    gemini.chat = AsyncMock()
+    gemini._load_usage_data = AsyncMock()
+    gemini._saved_usage = {}
+    gemini._daily_requests = 0
+    gemini._total_prompt_tokens = 0
+    gemini._request_sizes = []
+    gemini._hourly_token_count = 0
+    
+    # Set up the property mock for gemini_api
+    gemini_api = PropertyMock(return_value=gemini)
+    type(service).gemini_api = gemini_api
+    service.gemini = gemini
+    
     service.validate_credentials = AsyncMock(return_value=True)
     
     # Add new API state tracking
