@@ -198,19 +198,19 @@ Maintain consistent analytical personality and technical precision regardless of
             # Configure safety settings
             self._safety_settings = [
                 {
-                    "category": genai.types.HarmCategory.HARASSMENT,
+                    "category": genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
                     "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
                 },
                 {
-                    "category": genai.types.HarmCategory.HATE_SPEECH,
+                    "category": genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
                     "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
                 },
                 {
-                    "category": genai.types.HarmCategory.SEXUALLY_EXPLICIT,
+                    "category": genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
                     "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
                 },
                 {
-                    "category": genai.types.HarmCategory.DANGEROUS_CONTENT,
+                    "category": genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
                     "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
                 }
             ]
@@ -1274,7 +1274,7 @@ Maintain consistent analytical personality and technical precision regardless of
                     ),
                     safety_settings=[
                         genai.types.SafetySetting(
-                            category=genai.types.HarmCategory.HARASSMENT,
+                            category=genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
                             threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
                         )
                     ]

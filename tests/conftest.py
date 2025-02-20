@@ -8,10 +8,10 @@ import asyncio
 
 # Set up mocks before any imports
 class MockHarmCategory:
-    HARASSMENT = "HARASSMENT"
-    HATE_SPEECH = "HATE_SPEECH"
-    SEXUALLY_EXPLICIT = "SEXUALLY_EXPLICIT"
-    DANGEROUS_CONTENT = "DANGEROUS_CONTENT"
+    HARM_CATEGORY_HARASSMENT = "HARM_CATEGORY_HARASSMENT"
+    HARM_CATEGORY_HATE_SPEECH = "HARM_CATEGORY_HATE_SPEECH"
+    HARM_CATEGORY_SEXUALLY_EXPLICIT = "HARM_CATEGORY_SEXUALLY_EXPLICIT"
+    HARM_CATEGORY_DANGEROUS_CONTENT = "HARM_CATEGORY_DANGEROUS_CONTENT"
 
 class MockHarmBlockThreshold:
     BLOCK_NONE = "BLOCK_NONE"
@@ -136,19 +136,19 @@ def mock_api_service(mock_genai_fixture) -> MagicMock:
     # Add required attributes for test verification
     gemini._safety_settings = [
         {
-            "category": mock_genai_fixture.types.HarmCategory.HARASSMENT,
+            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
             "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
         },
         {
-            "category": mock_genai_fixture.types.HarmCategory.HATE_SPEECH,
+            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
             "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
         },
         {
-            "category": mock_genai_fixture.types.HarmCategory.SEXUALLY_EXPLICIT,
+            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
             "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
         },
         {
-            "category": mock_genai_fixture.types.HarmCategory.DANGEROUS_CONTENT,
+            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
             "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
         }
     ]
