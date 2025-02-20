@@ -617,3 +617,75 @@ class InformationCommands(BaseCommands):
             f"{user_name}님, 환율 정보를 가져오는데 실패했습니다",
             ephemeral=True
         )
+
+    @commands.hybrid_command(
+        name="던담",
+        aliases=["dundam", "df"],
+        help="던전앤파이터 캐릭터의 스탯을 검색합니다",
+        brief="던파 캐릭터 검색",
+        description="dundam.xyz에서 던전앤파이터 캐릭터의 스탯을 검색합니다"
+    )
+    async def search_dundam(self, ctx: commands.Context, *, name: str):
+        """Search for character information from dundam.xyz
+        
+        Args:
+            ctx: Command context
+            name: Character name to search for
+        """
+        # Send initial response
+        processing_embed = discord.Embed(
+            title="🔍 캐릭터 검색 중...",
+            description=f"`{name}` 캐릭터를 검색하고 있습니다.",
+            color=discord.Color.blue()
+        )
+        message = await ctx.send(embed=processing_embed)
+        
+        try:
+            # Search for character
+            character_info = await self.api.dundam.search_character(name)
+            
+            if not character_info:
+                error_embed = discord.Embed(
+                    title="❌ 캐릭터를 찾을 수 없습니다",
+                    description=f"`{name}` 캐릭터를 찾을 수 없습니다.\n올바른 이름인지 확인해주세요.",
+                    color=discord.Color.red()
+                )
+                await message.edit(embed=error_embed)
+                return
+            
+            # Create embed with character information
+            embed = discord.Embed(
+                title=f"📋 {character_info['name']} 정보",
+                url=character_info['url'],
+                color=discord.Color.gold()
+            )
+            
+            # Add basic info
+            embed.add_field(
+                name="기본 정보",
+                value=f"**서버:** {character_info['server']}\n**레벨:** {character_info['level']}",
+                inline=False
+            )
+            
+            # Add damage stats if available
+            if character_info['damage_stats']:
+                stats_text = "\n".join(f"**{k}:** {v}" for k, v in character_info['damage_stats'].items())
+                embed.add_field(
+                    name="데미지 스탯",
+                    value=stats_text or "정보 없음",
+                    inline=False
+                )
+            
+            # Add footer with source
+            embed.set_footer(text="Data from dundam.xyz")
+            
+            await message.edit(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Error searching for character {name}: {e}")
+            error_embed = discord.Embed(
+                title="❌ 오류 발생",
+                description="캐릭터 정보를 가져오는 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.",
+                color=discord.Color.red()
+            )
+            await message.edit(embed=error_embed)

@@ -3,23 +3,14 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import os
 import json
-import random
 
 import google.generativeai as genai
-from google.generativeai import types, Tool, GenerateContentConfig, GoogleSearch
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
 import discord
 
 logger = logging.getLogger(__name__)
-
-class GeminiAPIError(Exception):
-    """Custom exception for Gemini API errors"""
-    def __init__(self, message: str, error_type: str, is_retryable: bool = True):
-        super().__init__(message)
-        self.error_type = error_type
-        self.is_retryable = is_retryable
 
 class GeminiAPI(BaseAPI[str]):
     """Google Gemini API client implementation for text-only interactions"""
@@ -32,10 +23,6 @@ class GeminiAPI(BaseAPI[str]):
     REQUESTS_PER_MINUTE = 60  # Standard API rate limit
     DAILY_TOKEN_LIMIT = 1_000_000  # Local limit: 1M tokens per day
     
-    # Search grounding limits
-    SEARCH_REQUESTS_PER_MINUTE = 10  # Maximum search requests per minute
-    SEARCH_COOLDOWN_MINUTES = 1  # Cooldown period when limit is exceeded
-
     # User-specific rate limits
     USER_REQUESTS_PER_MINUTE = 4  # Maximum requests per minute per user (every 15 seconds)
     USER_COOLDOWN_SECONDS = 5  # Cooldown period between requests for a user
@@ -76,20 +63,6 @@ class GeminiAPI(BaseAPI[str]):
 
 Maintain consistent analytical personality and technical precision regardless of language."""
 
-    # Add error type constants
-    ERROR_RATE_LIMIT = "rate_limit"
-    ERROR_INVALID_REQUEST = "invalid_request"
-    ERROR_MODEL_OVERLOADED = "model_overloaded"
-    ERROR_CONTEXT_LENGTH = "context_length"
-    ERROR_SAFETY = "safety"
-    ERROR_SERVER = "server_error"
-    ERROR_UNKNOWN = "unknown"
-
-    # Add retry settings
-    MAX_RETRIES = 3
-    RETRY_DELAY_BASE = 1  # Base delay in seconds
-    RETRY_DELAY_MAX = 10  # Maximum delay in seconds
-
     def __init__(self, api_key: str, notification_channel: Optional[discord.TextChannel] = None) -> None:
         """Initialize Gemini API client
         
@@ -106,44 +79,33 @@ Maintain consistent analytical personality and technical precision regardless of
             "generate": RateLimitConfig(self.REQUESTS_PER_MINUTE, 60),
         }
         
-        # Add search grounding tracking
-        self._search_requests: List[datetime] = []  # Timestamps of search requests
-        self._search_enabled = True  # Whether search is currently enabled
-        self._last_search_disable: Optional[datetime] = None  # When search was last disabled
-        
-        # Add locks for thread safety
-        self._session_lock = asyncio.Lock()  # For chat sessions
-        self._save_lock = asyncio.Lock()  # For saving data
-        self._stats_lock = asyncio.Lock()  # For usage statistics
-        self._rate_limit_lock = asyncio.Lock()  # For rate limiting
-        self._search_lock = asyncio.Lock()  # For search tracking
-        
-        # Initialize usage data with defaults
-        self._saved_usage = {}
+        # Load saved usage data if exists
         self._usage_file = "data/memory.json"
+        self._load_usage_data()
         
-        # Initialize with default values
-        current_time = datetime.now()
-        self._daily_requests = 0
-        self._last_reset = current_time
-        self._request_sizes = []
-        self._hourly_token_count = 0
-        self._last_token_reset = current_time
-        self._total_prompt_tokens = 0
-        self._total_response_tokens = 0
-        self._max_prompt_tokens = 0
-        self._max_response_tokens = 0
-        self._token_usage_history = []
+        # Usage tracking
+        self._daily_requests = self._saved_usage.get("daily_requests", 0)
+        self._last_reset = datetime.fromisoformat(self._saved_usage.get("last_reset", datetime.now().isoformat()))
+        self._request_sizes = self._saved_usage.get("request_sizes", [])
+        self._hourly_token_count = self._saved_usage.get("hourly_token_count", 0)
+        self._last_token_reset = datetime.fromisoformat(self._saved_usage.get("last_token_reset", datetime.now().isoformat()))
+        
+        # Token tracking
+        self._total_prompt_tokens = self._saved_usage.get("total_prompt_tokens", 0)
+        self._total_response_tokens = self._saved_usage.get("total_response_tokens", 0)
+        self._max_prompt_tokens = self._saved_usage.get("max_prompt_tokens", 0)
+        self._max_response_tokens = self._saved_usage.get("max_response_tokens", 0)
+        self._token_usage_history = self._saved_usage.get("token_usage_history", [])
         
         # Per-minute request tracking
         self._minute_requests = 0
-        self._last_minute_reset = current_time
+        self._last_minute_reset = datetime.now()
         
         # User request tracking
         self._user_requests: Dict[int, List[datetime]] = {}  # user_id -> list of request timestamps
         
         # Add degradation state
-        self._is_enabled = False  # Start disabled until fully initialized
+        self._is_enabled = True
         self._is_slowed_down = False
         self._last_slowdown = None
         self._last_disable = None
@@ -155,7 +117,7 @@ Maintain consistent analytical personality and technical precision regardless of
         # Add performance tracking with non-blocking CPU check
         self._cpu_usage = 0
         self._memory_usage = 0
-        self._last_performance_check = current_time
+        self._last_performance_check = datetime.now()
         self._cpu_check_task = None
         self._is_cpu_check_running = False
 
@@ -163,101 +125,24 @@ Maintain consistent analytical personality and technical precision regardless of
         self._last_notification_time: Dict[str, datetime] = {}  # Track last notification time per type
 
         # Add save debouncing
-        self._last_save = current_time
+        self._last_save = datetime.now()
         self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
         self._pending_save = False
+        self._save_lock = asyncio.Lock()
 
-#        # Initialize search tool with dynamic retrieval configuration
-#        self._search_tool = Tool.from_google_search_retrieval(
-#            Tool.google_search_retrieval(
-#                dynamic_retrieval_config=Tool.DynamicRetrievalConfig(
-#                    dynamic_threshold=0.6
-#                )
-#            )
-#        )
-
-    async def initialize(self) -> None:
-        """Initialize Gemini API resources"""
-        await super().initialize()
-        
-        # Configure the Gemini API
-        genai.configure(api_key=self.api_key, http_options={'api_version': 'v1alpha'})
-        
-        # Get model
-        logger.info("Getting Gemini model...")
-        self._model = genai.GenerativeModel('gemini-2.0-flash-001')
-        
-        # Test basic generation
-        try:
-            logger.info("Testing basic generation...")
-            test_response = await asyncio.to_thread(
-                lambda: self._model.generate_content(
-                    "Test message",
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.9,
-                        top_p=1,
-                        top_k=40,
-                        max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
-                    )
-                ).text
-            )
-            if test_response:
-                logger.info("Basic generation test successful")
-            else:
-                logger.warning("Generation test returned empty response")
-                raise ValueError("Generation test failed with empty response")
-                
-        except Exception as e:
-            logger.error(f"Error during basic generation test: {e}")
-            raise
-        
-        # Initialize chat history
-        self._chat_sessions = {}
-        self._last_interaction = {}
-        
-        # Finally enable the service
-        self._is_enabled = True
-        logger.info("Gemini API initialization completed successfully")
-
-    async def _load_usage_data(self) -> None:
+    def _load_usage_data(self) -> None:
         """Load saved usage data from file"""
         try:
-            await asyncio.to_thread(os.makedirs, os.path.dirname(self._usage_file), exist_ok=True)
-            if await asyncio.to_thread(os.path.exists, self._usage_file):
-                async with asyncio.Lock():
-                    data = await asyncio.to_thread(lambda: json.load(open(self._usage_file, 'r')))
-                    self._saved_usage = data
+            os.makedirs(os.path.dirname(self._usage_file), exist_ok=True)
+            if os.path.exists(self._usage_file):
+                with open(self._usage_file, 'r') as f:
+                    self._saved_usage = json.load(f)
             else:
                 self._saved_usage = {}
-                
-            # Initialize usage tracking from saved data or defaults
-            self._daily_requests = self._saved_usage.get("daily_requests", 0)
-            self._last_reset = datetime.fromisoformat(self._saved_usage.get("last_reset", datetime.now().isoformat()))
-            self._request_sizes = self._saved_usage.get("request_sizes", [])
-            self._hourly_token_count = self._saved_usage.get("hourly_token_count", 0)
-            self._last_token_reset = datetime.fromisoformat(self._saved_usage.get("last_token_reset", datetime.now().isoformat()))
-            self._total_prompt_tokens = self._saved_usage.get("total_prompt_tokens", 0)
-            self._total_response_tokens = self._saved_usage.get("total_response_tokens", 0)
-            self._max_prompt_tokens = self._saved_usage.get("max_prompt_tokens", 0)
-            self._max_response_tokens = self._saved_usage.get("max_response_tokens", 0)
-            self._token_usage_history = self._saved_usage.get("token_usage_history", [])
-            
         except Exception as e:
             logger.error(f"Failed to load usage data: {e}")
             self._saved_usage = {}
-            # Initialize with defaults if loading fails
-            current_time = datetime.now()
-            self._daily_requests = 0
-            self._last_reset = current_time
-            self._request_sizes = []
-            self._hourly_token_count = 0
-            self._last_token_reset = current_time
-            self._total_prompt_tokens = 0
-            self._total_response_tokens = 0
-            self._max_prompt_tokens = 0
-            self._max_response_tokens = 0
-            self._token_usage_history = []
-
+            
     async def _save_usage_data(self) -> None:
         """Save current usage data to file with debouncing"""
         try:
@@ -310,7 +195,112 @@ Maintain consistent analytical personality and technical precision regardless of
         """
         self._notification_channel = channel
 
-    async def _track_request(self, prompt: str, response: str) -> None:
+    async def initialize(self) -> None:
+        """Initialize Gemini API resources"""
+        await super().initialize()
+        # Configure the Gemini API
+        genai.configure(api_key=self.api_key)
+        
+        # Configure safety settings (default: block none)
+        safety_settings = {
+            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
+            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
+            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
+            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
+        }
+        
+        # Configure generation parameters
+        generation_config = {
+            "temperature": 0.9,  # More creative responses
+            "top_p": 1,
+            "top_k": 40,
+            "max_output_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+        }
+        
+        # Initialize text-only model using Gemini 2.0 Flash
+        self._model = genai.GenerativeModel(
+            model_name='gemini-2.0-flash',
+            safety_settings=safety_settings,
+            generation_config=generation_config
+        )
+        
+        # Initialize chat history
+        self._chat_sessions = {}
+        self._last_interaction = {}
+
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens in text using model's tokenizer
+        
+        Args:
+            text: Text to count tokens for
+            
+        Returns:
+            int: Number of tokens
+            
+        Raises:
+            ValueError: If token counting fails
+        """
+        try:
+            return self._model.count_tokens(text).total_tokens
+        except Exception as e:
+            logger.warning(f"Failed to count tokens accurately: {e}")
+            # Fallback to rough estimation
+            return len(text) // 4
+
+    def _check_token_thresholds(self, prompt_tokens: int) -> None:
+        """Check token thresholds and log warnings
+        
+        Args:
+            prompt_tokens: Number of tokens in prompt
+            
+        Raises:
+            ValueError: If token limits are exceeded
+        """
+        # Check prompt token limit
+        if prompt_tokens > self.MAX_PROMPT_TOKENS:
+            raise ValueError(
+                f"입력이 너무 깁니다. 현재: {prompt_tokens:,} 토큰\n"
+                f"최대 입력 길이: {self.MAX_PROMPT_TOKENS:,} 토큰\n"
+                f"입력을 더 짧게 작성해주세요."
+            )
+
+        # Check if we have enough room for response with buffer
+        estimated_max_response = self.MAX_TOTAL_TOKENS - prompt_tokens - self.RESPONSE_BUFFER_TOKENS
+        if estimated_max_response < 1000:  # Minimum reasonable response length
+            raise ValueError(
+                f"입력이 너무 깁니다. 응답을 위한 공간이 부족합니다.\n"
+                f"현재 입력: {prompt_tokens:,} 토큰\n"
+                f"응답 가능 공간: {estimated_max_response:,} 토큰\n"
+                f"입력을 더 짧게 작성해주세요."
+            )
+
+        # Check daily token limit
+        daily_total = self._total_prompt_tokens + self._total_response_tokens
+        estimated_total = daily_total + prompt_tokens + estimated_max_response
+        if estimated_total > self.DAILY_TOKEN_LIMIT:
+            hours_until_reset = 24 - (datetime.now() - self._last_reset).seconds // 3600
+            raise ValueError(
+                f"일일 토큰 한도에 도달했습니다.\n"
+                f"현재 사용량: {daily_total:,} 토큰\n"
+                f"예상 사용량: {estimated_total:,} 토큰\n"
+                f"일일 한도: {self.DAILY_TOKEN_LIMIT:,} 토큰\n"
+                f"리셋까지 남은 시간: {hours_until_reset}시간"
+            )
+
+        # Warning for approaching token limits
+        if prompt_tokens > self.MAX_PROMPT_TOKENS * self.TOKEN_WARNING_THRESHOLD:
+            logger.warning(
+                f"Prompt approaching token limit: {prompt_tokens:,}/{self.MAX_PROMPT_TOKENS:,} "
+                f"({prompt_tokens/self.MAX_PROMPT_TOKENS*100:.1f}%)"
+            )
+
+        if daily_total > self.DAILY_TOKEN_LIMIT * self.TOKEN_WARNING_THRESHOLD:
+            logger.warning(
+                f"Approaching daily token limit: {daily_total:,}/{self.DAILY_TOKEN_LIMIT:,} "
+                f"({daily_total/self.DAILY_TOKEN_LIMIT*100:.1f}%)"
+            )
+
+    def _track_request(self, prompt: str, response: str) -> None:
         """Track API usage
         
         Args:
@@ -319,40 +309,73 @@ Maintain consistent analytical personality and technical precision regardless of
         """
         current_time = datetime.now()
 
-        async with self._stats_lock:
-            # Get accurate token count
-            prompt_tokens = max(0, self._count_tokens(prompt))
-            response_tokens = max(0, self._count_tokens(response))
-            total_tokens = prompt_tokens + response_tokens
+        # Reset daily counters if it's a new day
+        if current_time - self._last_reset > timedelta(days=1):
+            logger.info(
+                f"Daily Gemini API usage summary:\n"
+                f"- Total requests: {self._daily_requests}\n"
+                f"- Total prompt tokens: {self._total_prompt_tokens}\n"
+                f"- Total response tokens: {self._total_response_tokens}\n"
+                f"- Max prompt tokens: {self._max_prompt_tokens}\n"
+                f"- Max response tokens: {self._max_response_tokens}\n"
+                f"- Average tokens per request: {(self._total_prompt_tokens + self._total_response_tokens) / max(1, self._daily_requests):.1f}"
+            )
+            self._daily_requests = 0
+            self._request_sizes = []
+            self._total_prompt_tokens = 0
+            self._total_response_tokens = 0
+            self._max_prompt_tokens = 0
+            self._max_response_tokens = 0
+            self._token_usage_history = []
+            self._last_reset = current_time
+            # Force immediate save on daily reset
+            asyncio.create_task(self._save_usage_data())
+            return
 
-            # Update token statistics
-            self._hourly_token_count = max(0, self._hourly_token_count + total_tokens)
-            self._total_prompt_tokens = max(0, self._total_prompt_tokens + prompt_tokens)
-            self._total_response_tokens = max(0, self._total_response_tokens + response_tokens)
-            self._max_prompt_tokens = max(self._max_prompt_tokens, prompt_tokens)
-            self._max_response_tokens = max(self._max_response_tokens, response_tokens)
-            
-            # Keep token history bounded
-            self._token_usage_history.append({
-                'timestamp': current_time.isoformat(),
-                'prompt_tokens': prompt_tokens,
-                'response_tokens': response_tokens,
-                'total_tokens': total_tokens
-            })
-            if len(self._token_usage_history) > 100:
-                self._token_usage_history = self._token_usage_history[-100:]
+        # Reset per-minute request counter if it's been a minute
+        if current_time - self._last_minute_reset > timedelta(minutes=1):
+            self._minute_requests = 0
+            self._last_minute_reset = current_time
 
-            # Track request size
-            request_size = len(prompt.encode('utf-8')) + len(response.encode('utf-8'))
-            self._request_sizes.append(request_size)
-            if len(self._request_sizes) > 1000:  # Limit size history
-                self._request_sizes = self._request_sizes[-1000:]
+        # Reset hourly token counter if it's been an hour
+        if current_time - self._last_token_reset > timedelta(hours=1):
+            logger.info(f"Hourly token usage: {self._hourly_token_count}")
+            self._hourly_token_count = 0
+            self._last_token_reset = current_time
 
-            # Update counters
-            self._daily_requests += 1
-            self._minute_requests += 1
+        # Track this request
+        self._daily_requests += 1
+        self._minute_requests += 1
+        request_size = len(prompt.encode('utf-8')) + len(response.encode('utf-8'))
+        self._request_sizes.append(request_size)
 
-    async def _check_user_rate_limit(self, user_id: int) -> None:
+        # Get accurate token count
+        prompt_tokens = self._count_tokens(prompt)
+        response_tokens = self._count_tokens(response)
+        total_tokens = prompt_tokens + response_tokens
+
+        # Update token statistics
+        self._hourly_token_count += total_tokens
+        self._total_prompt_tokens += prompt_tokens
+        self._total_response_tokens += response_tokens
+        self._max_prompt_tokens = max(self._max_prompt_tokens, prompt_tokens)
+        self._max_response_tokens = max(self._max_response_tokens, response_tokens)
+        self._token_usage_history.append((prompt_tokens, response_tokens))
+
+        # Schedule a save operation
+        asyncio.create_task(self._schedule_save())
+
+        # Log token details at debug level
+        logger.debug(
+            f"Token usage for request:\n"
+            f"- Prompt tokens: {prompt_tokens:,}\n"
+            f"- Response tokens: {response_tokens:,}\n"
+            f"- Total tokens: {total_tokens:,}\n"
+            f"- Requests this minute: {self._minute_requests}/{self.REQUESTS_PER_MINUTE}\n"
+            f"- Hourly token total: {self._hourly_token_count:,}"
+        )
+
+    def _check_user_rate_limit(self, user_id: int) -> None:
         """Check if user has exceeded their rate limit
         
         Args:
@@ -363,43 +386,42 @@ Maintain consistent analytical personality and technical precision regardless of
         """
         current_time = datetime.now()
         
-        async with self._rate_limit_lock:
-            # Initialize user's request history if not exists
-            if user_id not in self._user_requests:
-                self._user_requests[user_id] = []
-                
-            # Clean up old requests
-            self._user_requests[user_id] = [
-                timestamp for timestamp in self._user_requests[user_id]
-                if (current_time - timestamp).total_seconds() < 60
-            ]
+        # Initialize user's request history if not exists
+        if user_id not in self._user_requests:
+            self._user_requests[user_id] = []
             
-            # Check requests per minute
-            if len(self._user_requests[user_id]) >= self.USER_REQUESTS_PER_MINUTE:
-                oldest_allowed = current_time - timedelta(minutes=1)
-                next_available = self._user_requests[user_id][0] + timedelta(minutes=1)
-                wait_seconds = (next_available - current_time).total_seconds()
-                
+        # Clean up old requests
+        self._user_requests[user_id] = [
+            timestamp for timestamp in self._user_requests[user_id]
+            if (current_time - timestamp).total_seconds() < 60
+        ]
+        
+        # Check requests per minute
+        if len(self._user_requests[user_id]) >= self.USER_REQUESTS_PER_MINUTE:
+            oldest_allowed = current_time - timedelta(minutes=1)
+            next_available = self._user_requests[user_id][0] + timedelta(minutes=1)
+            wait_seconds = (next_available - current_time).total_seconds()
+            
+            raise ValueError(
+                f"요청이 너무 잦습니다.\n"
+                f"분당 최대 {self.USER_REQUESTS_PER_MINUTE}회 요청 가능합니다.\n"
+                f"다음 요청까지 {int(wait_seconds)}초 기다려주세요."
+            )
+        
+        # Check cooldown between requests
+        if self._user_requests[user_id]:
+            last_request = self._user_requests[user_id][-1]
+            seconds_since_last = (current_time - last_request).total_seconds()
+            
+            if seconds_since_last < self.USER_COOLDOWN_SECONDS:
+                wait_seconds = self.USER_COOLDOWN_SECONDS - seconds_since_last
                 raise ValueError(
-                    f"요청이 너무 잦습니다.\n"
-                    f"분당 최대 {self.USER_REQUESTS_PER_MINUTE}회 요청 가능합니다.\n"
+                    f"요청간 간격이 너무 짧습니다.\n"
                     f"다음 요청까지 {int(wait_seconds)}초 기다려주세요."
                 )
-            
-            # Check cooldown between requests
-            if self._user_requests[user_id]:
-                last_request = self._user_requests[user_id][-1]
-                seconds_since_last = (current_time - last_request).total_seconds()
-                
-                if seconds_since_last < self.USER_COOLDOWN_SECONDS:
-                    wait_seconds = self.USER_COOLDOWN_SECONDS - seconds_since_last
-                    raise ValueError(
-                        f"요청간 간격이 너무 짧습니다.\n"
-                        f"다음 요청까지 {int(wait_seconds)}초 기다려주세요."
-                    )
-            
-            # Add current request to history
-            self._user_requests[user_id].append(current_time)
+        
+        # Add current request to history
+        self._user_requests[user_id].append(current_time)
 
     async def _send_notification(
         self, 
@@ -470,16 +492,13 @@ Maintain consistent analytical personality and technical precision regardless of
 
         color = 0xFFA500 if state == "slowdown" else 0xFF0000  # Orange for slowdown, Red for disabled
         
-        try:
-            await self._send_notification(
-                title=title,
-                description="\n".join(description),
-                notification_type=f"state_{state}",
-                color=color,
-                cooldown_minutes=30  # Longer cooldown for state changes
-            )
-        except Exception as e:
-            logger.error(f"Failed to send state change notification: {e}")
+        await self._send_notification(
+            title=title,
+            description="\n".join(description),
+            notification_type=f"state_{state}",
+            color=color,
+            cooldown_minutes=30  # Longer cooldown for state changes
+        )
 
     async def _update_cpu_usage(self) -> None:
         """Update CPU usage in a non-blocking way"""
@@ -511,10 +530,8 @@ Maintain consistent analytical personality and technical precision regardless of
             memory = psutil.virtual_memory()
             memory_percent = memory.percent
             
-            # Update last check time
-            self._last_performance_check = current_time
-            
             self._memory_usage = memory_percent
+            self._last_performance_check = current_time
             
             # Log system metrics at debug level with more detail
             logger.debug(
@@ -539,12 +556,9 @@ Maintain consistent analytical personality and technical precision regardless of
                         self._last_slowdown = None
                         logger.info("Exiting slowdown mode - system resources normalized")
                         await self._notify_state_change(
-                            "normal",
-                            "System resources have returned to normal levels",
-                            {
-                                "CPU Usage": f"{self._cpu_usage:.1f}%",
-                                "Memory Usage": f"{memory_percent:.1f}%"
-                            }
+                            "recovered",
+                            "System resources have normalized",
+                            {"CPU Usage": self._cpu_usage, "Memory Usage": memory_percent}
                         )
             
             # Check if we should exit disabled state
@@ -706,20 +720,9 @@ Maintain consistent analytical personality and technical precision regardless of
         # Replace multiple newlines with just two
         response = '\n\n'.join(filter(None, response.split('\n')))
         
-        # Add disclaimers
-        disclaimers = []
-        
-        # Add AI-generated content disclaimer for long responses
+        # Add disclaimer for AI-generated content if response is long
         if len(response) > 1000:
-            disclaimers.append("_이 답변은 AI가 생성한 내용입니다. 정확성을 직접 확인해주세요._")
-        
-        # Add search grounding disclaimer if search was used
-        if self._search_enabled:
-            disclaimers.append("_이 답변은 최근 1년 내의 Google 검색 결과를 참고하여 생성되었습니다._")
-        
-        # Add disclaimers if any exist
-        if disclaimers:
-            response += "\n\n" + "\n".join(disclaimers)
+            response += "\n\n_이 답변은 AI가 생성한 내용입니다. 정확성을 직접 확인해주세요._"
         
         return response
 
@@ -740,170 +743,41 @@ Maintain consistent analytical personality and technical precision regardless of
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new chat session with search tool
-        chat = self._model.start_chat(
-            model='gemini-2.0-flash-001',
-            config={'tools': [self._search_tool]}
-        )
+        # Create new session with Ptilopsis context
+        chat = self._model.start_chat(history=[])
         
-        # Add Ptilopsis context with proper formatting
-        chat.send_message(self.PTILOPSIS_CONTEXT)
+        # Add role context with proper formatting
+        role_context = {
+            "role": "user",
+            "parts": [self.PTILOPSIS_CONTEXT]
+        }
+        chat.send_message(role_context)
         
         self._chat_sessions[user_id] = chat
         self._last_interaction[user_id] = current_time
         return chat
 
-    async def _cleanup_expired_sessions(self) -> None:
+    def _update_last_interaction(self, user_id: int) -> None:
+        """Update last interaction time for user
+        
+        Args:
+            user_id: Discord user ID
+        """
+        self._last_interaction[user_id] = datetime.now()
+
+    def _cleanup_expired_sessions(self) -> None:
         """Clean up expired chat sessions"""
-        async with self._session_lock:  # Use lock for thread safety
-            current_time = datetime.now()
-            expired_users = [
-                user_id for user_id, last_time in self._last_interaction.items()
-                if (current_time - last_time).total_seconds() >= self.CONTEXT_EXPIRY_MINUTES * 60
-            ]
-            
-            for user_id in expired_users:
-                if user_id in self._chat_sessions:
-                    del self._chat_sessions[user_id]
-                if user_id in self._last_interaction:
-                    del self._last_interaction[user_id]
-
-    def _handle_google_api_error(self, e: Exception) -> None:
-        """Handle Google API errors and raise appropriate custom exceptions
+        current_time = datetime.now()
+        expired_users = [
+            user_id for user_id, last_time in self._last_interaction.items()
+            if (current_time - last_time).total_seconds() >= self.CONTEXT_EXPIRY_MINUTES * 60
+        ]
         
-        Args:
-            e: Original exception from Google API
-            
-        Raises:
-            GeminiAPIError: Wrapped exception with additional context
-        """
-        error_msg = str(e).lower()
-        
-        if "rate limit" in error_msg or "quota" in error_msg:
-            raise GeminiAPIError(
-                "API 요청 한도를 초과했습니다. 잠시 후 다시 시도해주세요.",
-                self.ERROR_RATE_LIMIT
-            )
-        elif "invalid request" in error_msg or "bad request" in error_msg:
-            raise GeminiAPIError(
-                "잘못된 요청입니다. 입력을 확인해주세요.",
-                self.ERROR_INVALID_REQUEST,
-                is_retryable=False
-            )
-        elif "model is overloaded" in error_msg or "server busy" in error_msg:
-            raise GeminiAPIError(
-                "AI 모델이 과부하 상태입니다. 잠시 후 다시 시도해주세요.",
-                self.ERROR_MODEL_OVERLOADED
-            )
-        elif "context length" in error_msg or "too long" in error_msg:
-            raise GeminiAPIError(
-                "입력이 너무 깁니다. 더 짧게 작성해주세요.",
-                self.ERROR_CONTEXT_LENGTH,
-                is_retryable=False
-            )
-        elif "safety" in error_msg or "blocked" in error_msg:
-            raise GeminiAPIError(
-                "안전 정책에 의해 차단되었습니다.",
-                self.ERROR_SAFETY,
-                is_retryable=False
-            )
-        elif "internal server error" in error_msg or "5" in error_msg:
-            raise GeminiAPIError(
-                "서버 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
-                self.ERROR_SERVER
-            )
-        else:
-            raise GeminiAPIError(
-                f"알 수 없는 오류가 발생했습니다: {str(e)}",
-                self.ERROR_UNKNOWN
-            )
-
-    async def _retry_with_exponential_backoff(self, func, *args, **kwargs) -> Any:
-        """Execute function with exponential backoff retry
-        
-        Args:
-            func: Async function to execute
-            *args: Positional arguments for func
-            **kwargs: Keyword arguments for func
-            
-        Returns:
-            Any: Result from func
-            
-        Raises:
-            GeminiAPIError: If all retries fail
-        """
-        last_error = None
-        
-        for attempt in range(self.MAX_RETRIES):
-            try:
-                return await func(*args, **kwargs)
-            except GeminiAPIError as e:
-                if not e.is_retryable or attempt == self.MAX_RETRIES - 1:
-                    raise
-                last_error = e
-                
-                # Calculate delay with exponential backoff and jitter
-                delay = min(
-                    self.RETRY_DELAY_BASE * (2 ** attempt) + random.uniform(0, 1),
-                    self.RETRY_DELAY_MAX
-                )
-                logger.warning(
-                    f"Attempt {attempt + 1}/{self.MAX_RETRIES} failed: {str(e)}. "
-                    f"Retrying in {delay:.1f} seconds..."
-                )
-                await asyncio.sleep(delay)
-        
-        raise last_error
-
-    def _validate_prompt(self, prompt: str) -> None:
-        """Validate user prompt
-        
-        Args:
-            prompt: User input to validate
-            
-        Raises:
-            ValueError: If input is invalid
-        """
-        if not prompt or not prompt.strip():
-            raise ValueError("입력이 비어있습니다.")
-            
-        # Check for minimum length
-        if len(prompt.strip()) < 2:
-            raise ValueError("입력이 너무 짧습니다. 2글자 이상 입력해주세요.")
-            
-        # Check for maximum length (rough estimate before token count)
-        if len(prompt.encode('utf-8')) > self.MAX_PROMPT_TOKENS * 4:  # Rough byte estimate
-            raise ValueError("입력이 너무 깁니다. 더 짧게 작성해주세요.")
-            
-        # Check for excessive newlines or repetition
-        newline_count = prompt.count('\n')
-        if newline_count > 50:
-            raise ValueError("줄바꿈이 너무 많습니다. 50줄 이하로 작성해주세요.")
-            
-        # Check for repetitive patterns
-        words = prompt.split()
-        if len(words) > 10:
-            repeated_sequences = sum(
-                1 for i in range(len(words)-3)
-                if words[i:i+3] == words[i+3:i+6]
-            )
-            if repeated_sequences > 3:
-                raise ValueError("반복되는 패턴이 너무 많습니다. 자연스럽게 작성해주세요.")
-
-    def _validate_user_id(self, user_id: int) -> None:
-        """Validate user ID
-        
-        Args:
-            user_id: Discord user ID to validate
-            
-        Raises:
-            ValueError: If user ID is invalid
-        """
-        if not isinstance(user_id, int):
-            raise ValueError("잘못된 사용자 ID입니다.")
-            
-        if user_id < 0:
-            raise ValueError("잘못된 사용자 ID입니다.")
+        for user_id in expired_users:
+            if user_id in self._chat_sessions:
+                del self._chat_sessions[user_id]
+            if user_id in self._last_interaction:
+                del self._last_interaction[user_id]
 
     async def chat(self, prompt: str, user_id: int) -> str:
         """Send a chat message to Gemini
@@ -932,57 +806,39 @@ Maintain consistent analytical personality and technical precision regardless of
             # Apply slowdown if needed
             if self._is_slowed_down:
                 await asyncio.sleep(5)  # Add 5 second delay
-
+            
             # Existing validation
             if not self._model:
                 raise ValueError("Gemini API not initialized")
 
             # Check user rate limits
-            await self._check_user_rate_limit(user_id)
+            self._check_user_rate_limit(user_id)
 
             # Check token limits
             prompt_tokens = self._count_tokens(prompt)
             self._check_token_thresholds(prompt_tokens)
 
             # Clean up expired sessions
-            await self._cleanup_expired_sessions()
-
-            # Initialize Google Search Tool
-            google_search_tool = Tool(google_search=GoogleSearch())
+            self._cleanup_expired_sessions()
 
             # Get or create chat session
             chat = self._get_or_create_chat_session(user_id)
 
-            # Configure generation with search tool
-            generation_config = GenerateContentConfig(
-                tools=[google_search_tool],
-                    dynamic_retrieval_config=types.DynamicRetrievalConfig(
-                        dynamic_threshold=0.6))
-
             # Send message and get response
-            response = await asyncio.to_thread(
-                lambda: chat.send_message(
-                    prompt,
-                    generation_config=generation_config
-                ).text
-            )
-
-            # Track search request if search was enabled
-            if self._search_enabled:
-                await self._track_search_request()
+            response = chat.send_message(prompt)
 
             # Update last interaction time
             self._update_last_interaction(user_id)
 
             # Validate response
-            if not response:
+            if not response or not response.text:
                 raise ValueError("Empty response from Gemini")
 
             # Process the response
-            processed_response = self._process_response(response)
+            processed_response = self._process_response(response.text)
 
             # Track usage
-            await self._track_request(prompt, processed_response)
+            self._track_request(prompt, processed_response)
 
             return processed_response
 
@@ -995,22 +851,6 @@ Maintain consistent analytical personality and technical precision regardless of
                 raise
             logger.error(f"Error in Gemini chat: {e}")
             raise ValueError(f"Gemini API 요청에 실패했습니다: {str(e)}") from e
-
-    def end_chat_session(self, user_id: int) -> bool:
-        """End chat session for user
-        
-        Args:
-            user_id: Discord user ID
-            
-        Returns:
-            bool: True if session was ended, False if no session existed
-        """
-        if user_id in self._chat_sessions:
-            del self._chat_sessions[user_id]
-            if user_id in self._last_interaction:
-                del self._last_interaction[user_id]
-            return True
-        return False
 
     @property
     def usage_stats(self) -> Dict[str, Any]:
@@ -1110,19 +950,6 @@ Maintain consistent analytical personality and technical precision regardless of
         """
         current_time = datetime.now()
         
-        search_status = {
-            "search_enabled": self._search_enabled,
-            "search_requests_last_minute": len([
-                ts for ts in self._search_requests
-                if (current_time - ts).total_seconds() < 60
-            ]),
-            "time_until_search_enable": (
-                None if not self._last_search_disable else
-                max(0, self.SEARCH_COOLDOWN_MINUTES * 60 - 
-                    (current_time - self._last_search_disable).total_seconds())
-            )
-        }
-        
         return {
             "is_enabled": self._is_enabled,
             "is_slowed_down": self._is_slowed_down,
@@ -1138,8 +965,7 @@ Maintain consistent analytical personality and technical precision regardless of
                 None if not self._last_disable else
                 max(0, self.DISABLE_COOLDOWN_MINUTES * 60 - 
                     (current_time - self._last_disable).total_seconds())
-            ),
-            "search_status": search_status
+            )
         }
 
     async def close(self) -> None:
@@ -1148,19 +974,7 @@ Maintain consistent analytical personality and technical precision regardless of
             # Save final usage data
             await self._save_usage_data()
             
-            # Clear all sessions
-            self._chat_sessions.clear()
-            self._last_interaction.clear()
-            
-            # Reset tracking state
-            self._is_enabled = False
-            self._is_slowed_down = False
-            self._recent_errors.clear()
-            self._error_count = 0
-            
-            # Clear model and client
             self._model = None
-            
             await super().close()
         except Exception as e:
             logger.error(f"Error during Gemini API cleanup: {e}")
@@ -1175,23 +989,15 @@ Maintain consistent analytical personality and technical precision regardless of
             if not self.api_key:
                 return False
                 
-            # Configure API with credentials
+            # Configure the API
             genai.configure(api_key=self.api_key)
             
-            # Try to get model
-            model = genai.GenerativeModel('gemini-2.0-flash-001')
+            # Try to initialize the model
+            model = genai.GenerativeModel('gemini-2.0-flash')
             
             # Try a simple test request using async wrapper
             response = await asyncio.to_thread(
-                lambda: model.generate_content(
-                    "test",
-                    generation_config=genai.GenerationConfig(
-                        temperature=0.9,
-                        top_p=1,
-                        top_k=40,
-                        max_output_tokens=1000
-                    )
-                ).text
+                lambda: model.generate_content("test").text
             )
             
             return bool(response)
@@ -1200,164 +1006,18 @@ Maintain consistent analytical personality and technical precision regardless of
             logger.error(f"Failed to validate Gemini credentials: {e}")
             return False
 
-    def _update_last_interaction(self, user_id: int) -> None:
-        """Update last interaction time for user
+    def end_chat_session(self, user_id: int) -> bool:
+        """End chat session for user
         
         Args:
             user_id: Discord user ID
-        """
-        self._last_interaction[user_id] = datetime.now() 
-
-    async def _check_search_rate_limit(self) -> bool:
-        """Check if search grounding is available based on rate limits
-        
+            
         Returns:
-            bool: True if search is available, False if rate limited
+            bool: True if session was ended, False if no session existed
         """
-        async with self._search_lock:
-            current_time = datetime.now()
-            
-            # If search is disabled, check if cooldown period has passed
-            if not self._search_enabled and self._last_search_disable:
-                time_since_disable = (current_time - self._last_search_disable).total_seconds()
-                if time_since_disable >= self.SEARCH_COOLDOWN_MINUTES * 60:
-                    self._search_enabled = True
-                    self._last_search_disable = None
-                    self._search_requests.clear()
-                    logger.info("Search grounding re-enabled after cooldown")
-                    return True
-                return False
-            
-            # Clean up old requests
-            self._search_requests = [
-                timestamp for timestamp in self._search_requests
-                if (current_time - timestamp).total_seconds() < 60
-            ]
-            
-            # Check if limit exceeded
-            if len(self._search_requests) >= self.SEARCH_REQUESTS_PER_MINUTE:
-                if self._search_enabled:
-                    self._search_enabled = False
-                    self._last_search_disable = current_time
-                    logger.warning(
-                        f"Search grounding disabled for {self.SEARCH_COOLDOWN_MINUTES} minutes "
-                        f"due to rate limit ({self.SEARCH_REQUESTS_PER_MINUTE} requests/minute)"
-                    )
-                    # Notify about search disabling
-                    await self._notify_state_change(
-                        "search_disabled",
-                        "Search grounding temporarily disabled due to rate limit",
-                        {
-                            "Search Requests": len(self._search_requests),
-                            "Limit": self.SEARCH_REQUESTS_PER_MINUTE,
-                            "Cooldown": f"{self.SEARCH_COOLDOWN_MINUTES} minutes"
-                        }
-                    )
-                return False
-            
+        if user_id in self._chat_sessions:
+            del self._chat_sessions[user_id]
+            if user_id in self._last_interaction:
+                del self._last_interaction[user_id]
             return True
-
-    async def _get_current_config(self) -> genai.GenerationConfig:
-        """Get the appropriate configuration based on search availability
-        
-        Returns:
-            genai.GenerationConfig: Current configuration to use
-        """
-        if await self._check_search_rate_limit():
-            return genai.GenerationConfig(
-                temperature=0.9,
-                top_p=1,
-                top_k=40,
-                max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-                tools=[self._search_tool]
-            )
-        return genai.GenerationConfig(
-            temperature=0.9,
-            top_p=1,
-            top_k=40,
-            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
-        )
-
-    async def _track_search_request(self) -> None:
-        """Track a search request if search is enabled"""
-        try:
-            if self._search_enabled:
-                async with self._search_lock:
-                    self._search_requests.append(datetime.now())
-        except Exception as e:
-            logger.error(f"Failed to track search request: {e}")
-
-    def _count_tokens(self, text: str) -> int:
-        """Count tokens in text using model's tokenizer
-        
-        Args:
-            text: Text to count tokens for
-            
-        Returns:
-            int: Number of tokens
-            
-        Raises:
-            ValueError: If token counting fails
-        """
-        try:
-            return self._model.count_tokens(text).total_tokens
-        except Exception as e:
-            logger.warning(f"Failed to count tokens accurately: {e}")
-            # Fallback to rough estimation
-            return len(text) // 4
-
-    def _check_token_thresholds(self, prompt_tokens: int) -> None:
-        """Check token thresholds and log warnings
-        
-        Args:
-            prompt_tokens: Number of tokens in prompt
-            
-        Raises:
-            ValueError: If token limits are exceeded
-        """
-        current_time = datetime.now()
-        time_since_reset = current_time - self._last_reset
-        hours_until_reset = max(0, 24 - int(time_since_reset.total_seconds() / 3600))
-        
-        # Check prompt token limit
-        if prompt_tokens > self.MAX_PROMPT_TOKENS:
-            raise ValueError(
-                f"입력이 너무 깁니다. 현재: {prompt_tokens:,} 토큰\n"
-                f"최대 입력 길이: {self.MAX_PROMPT_TOKENS:,} 토큰\n"
-                f"입력을 더 짧게 작성해주세요."
-            )
-
-        # Check if we have enough room for response with buffer
-        estimated_max_response = self.MAX_TOTAL_TOKENS - prompt_tokens - self.RESPONSE_BUFFER_TOKENS
-        if estimated_max_response < 1000:  # Minimum reasonable response length
-            raise ValueError(
-                f"입력이 너무 깁니다. 응답을 위한 공간이 부족합니다.\n"
-                f"현재 입력: {prompt_tokens:,} 토큰\n"
-                f"응답 가능 공간: {estimated_max_response:,} 토큰\n"
-                f"입력을 더 짧게 작성해주세요."
-            )
-
-        # Check daily token limit
-        daily_total = self._total_prompt_tokens + self._total_response_tokens
-        estimated_total = daily_total + prompt_tokens + estimated_max_response
-        if estimated_total > self.DAILY_TOKEN_LIMIT:
-            raise ValueError(
-                f"일일 토큰 한도에 도달했습니다.\n"
-                f"현재 사용량: {daily_total:,} 토큰\n"
-                f"예상 사용량: {estimated_total:,} 토큰\n"
-                f"일일 한도: {self.DAILY_TOKEN_LIMIT:,} 토큰\n"
-                f"리셋까지 남은 시간: {hours_until_reset}시간"
-            )
-
-        # Warning for approaching token limits
-        if prompt_tokens > self.MAX_PROMPT_TOKENS * self.TOKEN_WARNING_THRESHOLD:
-            logger.warning(
-                f"Prompt approaching token limit: {prompt_tokens:,}/{self.MAX_PROMPT_TOKENS:,} "
-                f"({prompt_tokens/self.MAX_PROMPT_TOKENS*100:.1f}%)"
-            )
-
-        if daily_total > self.DAILY_TOKEN_LIMIT * self.TOKEN_WARNING_THRESHOLD:
-            logger.warning(
-                f"Approaching daily token limit: {daily_total:,}/{self.DAILY_TOKEN_LIMIT:,} "
-                f"({daily_total/self.DAILY_TOKEN_LIMIT*100:.1f}%)"
-            ) 
+        return False 
