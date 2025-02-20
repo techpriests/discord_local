@@ -191,8 +191,16 @@ class APIService:
                 # Optional Gemini API
                 if gemini_key := self._config.get("GEMINI_API_KEY"):
                     logger.info("Creating Gemini API client...")
-                    self._gemini_api = GeminiAPI(gemini_key)
-                    apis_to_init.append(("gemini", self._gemini_api))
+                    try:
+                        self._gemini_api = GeminiAPI(gemini_key)
+                        apis_to_init.append(("gemini", self._gemini_api))
+                        logger.info("Gemini API client created successfully")
+                    except Exception as e:
+                        logger.error(f"Failed to create Gemini API client: {e}", exc_info=True)
+                        self._gemini_api = None
+                else:
+                    logger.info("Gemini API key not provided - AI features will be disabled")
+                    self._gemini_api = None
                 
             except Exception as e:
                 logger.error(f"Failed to create API clients: {str(e)}")
@@ -232,18 +240,33 @@ class APIService:
                     await api.initialize()
                     
                     logger.info(f"Validating {api_name} API credentials...")
-                    if await api.validate_credentials():
+                    validation_result = await api.validate_credentials()
+                    
+                    if validation_result:
                         self._api_states[api_name] = True
                         logger.info(f"Optional {api_name} API initialized and validated successfully")
                     else:
-                        logger.warning(f"Optional {api_name} API validation failed")
+                        logger.error(f"Optional {api_name} API validation failed")
+                        if api_name == "gemini":
+                            logger.error("Disabling Gemini AI features due to validation failure")
+                            self._gemini_api = None
+                            self._api_states["gemini"] = False
                         
                 except Exception as e:
-                    logger.warning(f"Optional {api_name} API initialization failed: {str(e)}")
+                    logger.error(f"Optional {api_name} API initialization failed: {str(e)}", exc_info=True)
+                    if api_name == "gemini":
+                        logger.error("Disabling Gemini AI features due to initialization error")
+                        self._gemini_api = None
+                        self._api_states["gemini"] = False
                     # Continue with other optional APIs
             
             self._initialized = True
             logger.info("API service initialization completed")
+            
+            # Log final API states
+            for api_name, state in self._api_states.items():
+                logger.info(f"API {api_name}: {'Ready' if state else 'Not available'}")
+                
             return True
             
         except Exception as e:

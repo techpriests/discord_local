@@ -36,18 +36,13 @@ class AICommands(BaseCommands):
             raise ValueError("API 서비스가 초기화되지 않았습니다")
         return self.bot.api_service
 
-    def _check_gemini_state(self) -> None:
-        """Check if Gemini API is initialized
-        
-        Raises:
-            ValueError: If Gemini API is not initialized
-        """
-        if not self.api_service.initialized:
-            raise ValueError("API 서비스가 초기화되지 않았습니다")
-            
-        api_states = self.api_service.api_states
-        if not api_states.get('gemini', False):
-            raise ValueError("Gemini API가 초기화되지 않았습니다")
+    async def _check_gemini_state(self) -> bool:
+        """Check if Gemini API is available and ready for use."""
+        if not self.api_service.gemini_api:
+            raise ValueError("AI 기능이 비활성화되어 있습니다. 관리자에게 문의하세요.")
+        if not self.api_service.api_states.get("gemini", False):
+            raise ValueError("AI 서비스가 현재 사용할 수 없습니다. 잠시 후 다시 시도해주세요.")
+        return True
 
     @commands.command(
         name="대화",
@@ -77,18 +72,25 @@ class AICommands(BaseCommands):
             message: Message to send to Gemini
         """
         try:
+            # Check Gemini state first
+            await self._check_gemini_state()
+            
             # Send typing indicator while processing
             async with ctx.typing():
-                # Get response from Gemini
-                response = await self.api_service.gemini.chat(message, ctx.author.id)
-                
-                # Create embed for response
-                embed = discord.Embed(
-                    description=response,
-                    color=INFO_COLOR
-                )
-                
-                await ctx.send(embed=embed)
+                try:
+                    # Get response from Gemini
+                    response = await self.api_service.gemini.chat(message, ctx.author.id)
+                    
+                    # Create embed for response
+                    embed = discord.Embed(
+                        description=response,
+                        color=INFO_COLOR
+                    )
+                    
+                    await ctx.send(embed=embed)
+                except Exception as e:
+                    logger.error(f"Error in Gemini chat: {e}", exc_info=True)
+                    raise ValueError("대화 처리 중 오류가 발생했습니다") from e
                 
         except ValueError as e:
             # Handle API errors
@@ -104,15 +106,45 @@ class AICommands(BaseCommands):
 
     @app_commands.command(
         name="chat",
-        description="Gemini AI와 대화를 나눕니다"
+        description="AI와 대화를 시작합니다"
     )
     async def chat_slash(
         self,
         interaction: discord.Interaction,
-        message: str
-    ) -> None:
-        """Slash command for chatting with Gemini AI"""
-        await self._handle_chat(interaction, message)
+        message: str,
+        search: bool = False,
+        private: bool = False
+    ):
+        """Start a chat with the AI."""
+        try:
+            # Check if Gemini API is available
+            await self._check_gemini_state()
+            
+            # Create or get chat session
+            chat = await self._get_or_create_chat_session(interaction, private)
+            
+            # Process the chat request
+            response = await chat.send_message(
+                message,
+                enable_search=search
+            )
+            
+            # Format and send response
+            await self._process_response(interaction, response, private)
+            
+        except ValueError as e:
+            # Handle known error states (API not available, etc)
+            await interaction.response.send_message(
+                str(e),
+                ephemeral=True
+            )
+        except Exception as e:
+            # Log unexpected errors
+            logger.error(f"Error in chat command: {str(e)}", exc_info=True)
+            await interaction.response.send_message(
+                "AI 응답을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                ephemeral=True
+            )
 
     @command_handler()
     async def _handle_chat(
@@ -202,18 +234,9 @@ class AICommands(BaseCommands):
             ctx_or_interaction: Command context or interaction
         """
         try:
-            self._check_gemini_state()
-            
-            # Get formatted report
-            report = self.api_service.gemini.get_formatted_report()
-            
-            # Get health status
-            health = self.api_service.gemini.health_status
-            
             # Create embed
             embed = discord.Embed(
                 title="시스템 상태",
-                description=report,
                 color=INFO_COLOR
             )
             
@@ -233,29 +256,46 @@ class AICommands(BaseCommands):
                 icon = status_icons[is_active]
                 status_text.append(f"{icon} {api_name.capitalize()}")
             
-            status_text.append("\n**서비스 상태:**")
-            # Service status
-            if not health["is_enabled"]:
-                status_text.append("❌ 서비스 비활성화됨")
-                if health["time_until_enable"]:
-                    minutes = int(health["time_until_enable"] / 60)
-                    status_text.append(f"⏳ 재활성화까지: {minutes}분")
-            elif health["is_slowed_down"]:
-                status_text.append("⚠️ 서비스 속도 제한 중")
-                if health["time_until_slowdown_reset"]:
-                    minutes = int(health["time_until_slowdown_reset"] / 60)
-                    status_text.append(f"⏳ 정상화까지: {minutes}분")
+            # If Gemini is available, add detailed stats
+            if api_states.get('gemini', False):
+                try:
+                    # Get formatted report
+                    report = self.api_service.gemini.get_formatted_report()
+                    embed.description = report
+                    
+                    # Get health status
+                    health = self.api_service.gemini.health_status
+                    
+                    status_text.append("\n**서비스 상태:**")
+                    # Service status
+                    if not health["is_enabled"]:
+                        status_text.append("❌ 서비스 비활성화됨")
+                        if health["time_until_enable"]:
+                            minutes = int(health["time_until_enable"] / 60)
+                            status_text.append(f"⏳ 재활성화까지: {minutes}분")
+                    elif health["is_slowed_down"]:
+                        status_text.append("⚠️ 서비스 속도 제한 중")
+                        if health["time_until_slowdown_reset"]:
+                            minutes = int(health["time_until_slowdown_reset"] / 60)
+                            status_text.append(f"⏳ 정상화까지: {minutes}분")
+                    else:
+                        status_text.append("✅ 서비스 정상")
+                    
+                    # System metrics
+                    status_text.append(f"\n**시스템 리소스:**")
+                    status_text.append(f"🔄 CPU 사용량: {health['cpu_usage']:.1f}%")
+                    status_text.append(f"💾 메모리 사용량: {health['memory_usage']:.1f}%")
+                    
+                    # Error count
+                    if health["error_count"] > 0:
+                        status_text.append(f"\n⚠️ 최근 오류: {health['error_count']}회")
+                except Exception as e:
+                    logger.error(f"Error getting Gemini stats: {e}")
+                    status_text.append("\n⚠️ Gemini 상세 정보를 가져오는데 실패했습니다")
             else:
-                status_text.append("✅ 서비스 정상")
-            
-            # System metrics
-            status_text.append(f"\n**시스템 리소스:**")
-            status_text.append(f"🔄 CPU 사용량: {health['cpu_usage']:.1f}%")
-            status_text.append(f"💾 메모리 사용량: {health['memory_usage']:.1f}%")
-            
-            # Error count
-            if health["error_count"] > 0:
-                status_text.append(f"\n⚠️ 최근 오류: {health['error_count']}회")
+                status_text.append("\n**Gemini AI 서비스:**")
+                status_text.append("❌ 현재 사용할 수 없음")
+                status_text.append("AI 기능이 비활성화되어 있습니다")
             
             embed.add_field(
                 name="시스템 상태",
