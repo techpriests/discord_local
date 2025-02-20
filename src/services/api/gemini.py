@@ -6,7 +6,7 @@ import json
 import random
 
 import google.generativeai as genai
-from google.generativeai import types
+from google.generativeai import Grounding, Tool, GenerateContentConfig, GoogleSearch
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
@@ -167,14 +167,14 @@ Maintain consistent analytical personality and technical precision regardless of
         self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
         self._pending_save = False
 
-        # Initialize search tool with dynamic retrieval configuration
-        self._search_tool = types.Tool(
-            google_search=types.google_search_retrieval(
-                dynamic_retrieval_config=types.DynamicRetrievalConfig(
-                    dynamic_threshold=0.6
-                )
-            )
-        )
+#        # Initialize search tool with dynamic retrieval configuration
+#        self._search_tool = Tool.from_google_search_retrieval(
+#            Tool.google_search_retrieval(
+#                dynamic_retrieval_config=Tool.DynamicRetrievalConfig(
+#                    dynamic_threshold=0.6
+#                )
+#            )
+#        )
 
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""
@@ -742,7 +742,7 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Create new chat session with search tool
         chat = self._model.start_chat(
-            model='gemini-2.0-flash-exp',
+            model='gemini-2.0-flash-001',
             config={'tools': [self._search_tool]}
         )
         
@@ -947,11 +947,17 @@ Maintain consistent analytical personality and technical precision regardless of
             # Clean up expired sessions
             await self._cleanup_expired_sessions()
 
+            # Initialize Google Search Tool
+            google_search_tool = Tool(google_search=GoogleSearch())
+
             # Get or create chat session
             chat = self._get_or_create_chat_session(user_id)
 
-            # Get current generation config with search if available
-            generation_config = await self._get_current_config()
+            # Configure generation with search tool
+            generation_config = GenerateContentConfig(
+                tools=[google_search_tool],
+                    dynamic_retrieval_config=Grounding.DynamicRetrievalConfig(
+                        dynamic_threshold=0.6))
 
             # Send message and get response
             response = await asyncio.to_thread(
@@ -1173,7 +1179,7 @@ Maintain consistent analytical personality and technical precision regardless of
             genai.configure(api_key=self.api_key)
             
             # Try to get model
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash-001')
             
             # Try a simple test request using async wrapper
             response = await asyncio.to_thread(
