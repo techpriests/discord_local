@@ -167,7 +167,7 @@ Maintain consistent analytical personality and technical precision regardless of
         self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
         self._pending_save = False
 
-        # Configure search tool
+        # Initialize search tool with dynamic retrieval configuration
         self._search_tool = types.Tool(
             google_search=types.GoogleSearchRetrieval(
                 dynamic_retrieval_config=types.DynamicRetrievalConfig(
@@ -181,11 +181,11 @@ Maintain consistent analytical personality and technical precision regardless of
         await super().initialize()
         
         # Configure the Gemini API
-        genai.configure(api_key=self.api_key)
+        genai.configure(api_key=self.api_key, http_options={'api_version': 'v1alpha'})
         
         # Get model
         logger.info("Getting Gemini model...")
-        self._model = genai.GenerativeModel('gemini-2.0-flash')
+        self._model = genai.GenerativeModel('gemini-2.0-flash-exp')
         
         # Test basic generation
         try:
@@ -740,8 +740,11 @@ Maintain consistent analytical personality and technical precision regardless of
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new chat session
-        chat = self._model.start_chat()
+        # Create new chat session with search tool
+        chat = self._model.start_chat(
+            model='gemini-2.0-flash-exp',
+            config={'tools': [self._search_tool]}
+        )
         
         # Add Ptilopsis context with proper formatting
         chat.send_message(self.PTILOPSIS_CONTEXT)
@@ -1255,14 +1258,14 @@ Maintain consistent analytical personality and technical precision regardless of
             genai.GenerationConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
-            return types.GenerateContentConfig(
+            return genai.GenerationConfig(
                 temperature=0.9,
                 top_p=1,
                 top_k=40,
                 max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
                 tools=[self._search_tool]
             )
-        return types.GenerateContentConfig(
+        return genai.GenerationConfig(
             temperature=0.9,
             top_p=1,
             top_k=40,
