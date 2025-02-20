@@ -169,7 +169,7 @@ Maintain consistent analytical personality and technical precision regardless of
 
         # Initialize search tool with dynamic retrieval configuration
         self._search_tool = types.Tool(
-            google_search=types.GoogleSearch(
+            google_search=types.google_search_retrieval(
                 dynamic_retrieval_config=types.DynamicRetrievalConfig(
                     dynamic_threshold=0.6
                 )
@@ -185,7 +185,7 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Get model
         logger.info("Getting Gemini model...")
-        self._model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self._model = genai.GenerativeModel('gemini-2.0-flash-001')
         
         # Test basic generation
         try:
