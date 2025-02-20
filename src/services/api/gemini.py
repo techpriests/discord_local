@@ -167,13 +167,14 @@ Maintain consistent analytical personality and technical precision regardless of
         self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
         self._pending_save = False
 
-    def _load_usage_data(self) -> None:
+    async def _load_usage_data(self) -> None:
         """Load saved usage data from file"""
         try:
-            os.makedirs(os.path.dirname(self._usage_file), exist_ok=True)
-            if os.path.exists(self._usage_file):
-                with open(self._usage_file, 'r') as f:
-                    self._saved_usage = json.load(f)
+            await asyncio.to_thread(os.makedirs, os.path.dirname(self._usage_file), exist_ok=True)
+            if await asyncio.to_thread(os.path.exists, self._usage_file):
+                async with asyncio.Lock():
+                    data = await asyncio.to_thread(lambda: json.load(open(self._usage_file, 'r')))
+                    self._saved_usage = data
             else:
                 self._saved_usage = {}
                 
