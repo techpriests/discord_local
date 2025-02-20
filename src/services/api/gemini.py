@@ -6,7 +6,7 @@ import json
 import random
 
 import google.generativeai as genai
-from google.generativeai import Grounding, Tool, GenerateContentConfig, GoogleSearch
+from google.generativeai import Types, Tool, GenerateContentConfig, GoogleSearch
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
@@ -956,7 +956,7 @@ Maintain consistent analytical personality and technical precision regardless of
             # Configure generation with search tool
             generation_config = GenerateContentConfig(
                 tools=[google_search_tool],
-                    dynamic_retrieval_config=Grounding.DynamicRetrievalConfig(
+                    dynamic_retrieval_config=Types.DynamicRetrievalConfig(
                         dynamic_threshold=0.6))
 
             # Send message and get response
