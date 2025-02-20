@@ -169,7 +169,7 @@ Maintain consistent analytical personality and technical precision regardless of
 
         # Initialize search tool with dynamic retrieval configuration
         self._search_tool = types.Tool(
-            google_search=types.GoogleSearchRetrieval(
+            google_search=types.GoogleSearch(
                 dynamic_retrieval_config=types.DynamicRetrievalConfig(
                     dynamic_threshold=0.6
                 )
