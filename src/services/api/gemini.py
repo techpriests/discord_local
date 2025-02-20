@@ -206,9 +206,9 @@ Maintain consistent analytical personality and technical precision regardless of
                             top_p=1,
                             top_k=40,
                             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-                            tools=[self._search_tool],
                             response_modalities=["TEXT"]
-                        )
+                        ),
+                        tools=[self._search_tool] if self._search_enabled else None
                     ).text
                 )
                 if test_response:
@@ -784,8 +784,8 @@ Maintain consistent analytical personality and technical precision regardless of
             current_config = await self._get_current_config()
             
             # Create new chat session
-            chat = self._model.chats.create(
-                config={'tools': [self._search_tool]} if self._search_enabled else {}
+            chat = self._model.start_chat(
+                tools=[self._search_tool] if self._search_enabled else None
             )
             
             # Add Ptilopsis context with proper formatting
