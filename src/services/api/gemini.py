@@ -117,27 +117,26 @@ Maintain consistent analytical personality and technical precision regardless of
         self._rate_limit_lock = asyncio.Lock()  # For rate limiting
         self._search_lock = asyncio.Lock()  # For search tracking
         
-        # Load saved usage data if exists
+        # Initialize usage data with defaults
+        self._saved_usage = {}
         self._usage_file = "data/memory.json"
-        self._load_usage_data()
         
-        # Usage tracking
-        self._daily_requests = self._saved_usage.get("daily_requests", 0)
-        self._last_reset = datetime.fromisoformat(self._saved_usage.get("last_reset", datetime.now().isoformat()))
-        self._request_sizes = self._saved_usage.get("request_sizes", [])
-        self._hourly_token_count = self._saved_usage.get("hourly_token_count", 0)
-        self._last_token_reset = datetime.fromisoformat(self._saved_usage.get("last_token_reset", datetime.now().isoformat()))
-        
-        # Token tracking
-        self._total_prompt_tokens = self._saved_usage.get("total_prompt_tokens", 0)
-        self._total_response_tokens = self._saved_usage.get("total_response_tokens", 0)
-        self._max_prompt_tokens = self._saved_usage.get("max_prompt_tokens", 0)
-        self._max_response_tokens = self._saved_usage.get("max_response_tokens", 0)
-        self._token_usage_history = self._saved_usage.get("token_usage_history", [])
+        # Initialize with default values
+        current_time = datetime.now()
+        self._daily_requests = 0
+        self._last_reset = current_time
+        self._request_sizes = []
+        self._hourly_token_count = 0
+        self._last_token_reset = current_time
+        self._total_prompt_tokens = 0
+        self._total_response_tokens = 0
+        self._max_prompt_tokens = 0
+        self._max_response_tokens = 0
+        self._token_usage_history = []
         
         # Per-minute request tracking
         self._minute_requests = 0
-        self._last_minute_reset = datetime.now()
+        self._last_minute_reset = current_time
         
         # User request tracking
         self._user_requests: Dict[int, List[datetime]] = {}  # user_id -> list of request timestamps
@@ -155,7 +154,7 @@ Maintain consistent analytical personality and technical precision regardless of
         # Add performance tracking with non-blocking CPU check
         self._cpu_usage = 0
         self._memory_usage = 0
-        self._last_performance_check = datetime.now()
+        self._last_performance_check = current_time
         self._cpu_check_task = None
         self._is_cpu_check_running = False
 
@@ -163,100 +162,9 @@ Maintain consistent analytical personality and technical precision regardless of
         self._last_notification_time: Dict[str, datetime] = {}  # Track last notification time per type
 
         # Add save debouncing
-        self._last_save = datetime.now()
+        self._last_save = current_time
         self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
         self._pending_save = False
-
-    async def _load_usage_data(self) -> None:
-        """Load saved usage data from file"""
-        try:
-            await asyncio.to_thread(os.makedirs, os.path.dirname(self._usage_file), exist_ok=True)
-            if await asyncio.to_thread(os.path.exists, self._usage_file):
-                async with asyncio.Lock():
-                    data = await asyncio.to_thread(lambda: json.load(open(self._usage_file, 'r')))
-                    self._saved_usage = data
-            else:
-                self._saved_usage = {}
-                
-            # Initialize usage tracking from saved data or defaults
-            self._daily_requests = self._saved_usage.get("daily_requests", 0)
-            self._last_reset = datetime.fromisoformat(self._saved_usage.get("last_reset", datetime.now().isoformat()))
-            self._request_sizes = self._saved_usage.get("request_sizes", [])
-            self._hourly_token_count = self._saved_usage.get("hourly_token_count", 0)
-            self._last_token_reset = datetime.fromisoformat(self._saved_usage.get("last_token_reset", datetime.now().isoformat()))
-            self._total_prompt_tokens = self._saved_usage.get("total_prompt_tokens", 0)
-            self._total_response_tokens = self._saved_usage.get("total_response_tokens", 0)
-            self._max_prompt_tokens = self._saved_usage.get("max_prompt_tokens", 0)
-            self._max_response_tokens = self._saved_usage.get("max_response_tokens", 0)
-            self._token_usage_history = self._saved_usage.get("token_usage_history", [])
-            
-        except Exception as e:
-            logger.error(f"Failed to load usage data: {e}")
-            self._saved_usage = {}
-            # Initialize with defaults if loading fails
-            current_time = datetime.now()
-            self._daily_requests = 0
-            self._last_reset = current_time
-            self._request_sizes = []
-            self._hourly_token_count = 0
-            self._last_token_reset = current_time
-            self._total_prompt_tokens = 0
-            self._total_response_tokens = 0
-            self._max_prompt_tokens = 0
-            self._max_response_tokens = 0
-            self._token_usage_history = []
-
-    async def _save_usage_data(self) -> None:
-        """Save current usage data to file with debouncing"""
-        try:
-            async with self._save_lock:
-                current_time = datetime.now()
-                
-                # If a save is already pending or it hasn't been long enough since last save, skip
-                if self._pending_save or (current_time - self._last_save) < self._save_interval:
-                    self._pending_save = True
-                    return
-                    
-                self._pending_save = False
-                self._last_save = current_time
-                
-                usage_data = {
-                    "daily_requests": self._daily_requests,
-                    "last_reset": self._last_reset.isoformat(),
-                    "request_sizes": self._request_sizes,
-                    "hourly_token_count": self._hourly_token_count,
-                    "last_token_reset": self._last_token_reset.isoformat(),
-                    "total_prompt_tokens": self._total_prompt_tokens,
-                    "total_response_tokens": self._total_response_tokens,
-                    "max_prompt_tokens": self._max_prompt_tokens,
-                    "max_response_tokens": self._max_response_tokens,
-                    "token_usage_history": self._token_usage_history
-                }
-                
-                temp_file = f"{self._usage_file}.tmp"
-                with open(temp_file, "w", encoding="utf-8") as f:
-                    json.dump(usage_data, f, ensure_ascii=False, indent=2)
-                os.replace(temp_file, self._usage_file)
-                
-        except Exception as e:
-            logger.error(f"Failed to save usage data: {e}")
-            if os.path.exists(temp_file):
-                os.unlink(temp_file)
-
-    async def _schedule_save(self) -> None:
-        """Schedule a save operation"""
-        if not self._pending_save:
-            self._pending_save = True
-            await asyncio.sleep(self._save_interval.total_seconds())
-            await self._save_usage_data()
-
-    def update_notification_channel(self, channel: discord.TextChannel) -> None:
-        """Update notification channel
-        
-        Args:
-            channel: New notification channel to use
-        """
-        self._notification_channel = channel
 
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""
@@ -373,80 +281,96 @@ Maintain consistent analytical personality and technical precision regardless of
         # Start initial system health check
         await self._check_system_health()
 
-    def _count_tokens(self, text: str) -> int:
-        """Count tokens in text using model's tokenizer
-        
-        Args:
-            text: Text to count tokens for
-            
-        Returns:
-            int: Number of tokens
-            
-        Raises:
-            ValueError: If token counting fails
-        """
+    async def _load_usage_data(self) -> None:
+        """Load saved usage data from file"""
         try:
-            return self._model.count_tokens(text).total_tokens
+            await asyncio.to_thread(os.makedirs, os.path.dirname(self._usage_file), exist_ok=True)
+            if await asyncio.to_thread(os.path.exists, self._usage_file):
+                async with asyncio.Lock():
+                    data = await asyncio.to_thread(lambda: json.load(open(self._usage_file, 'r')))
+                    self._saved_usage = data
+            else:
+                self._saved_usage = {}
+                
+            # Initialize usage tracking from saved data or defaults
+            self._daily_requests = self._saved_usage.get("daily_requests", 0)
+            self._last_reset = datetime.fromisoformat(self._saved_usage.get("last_reset", datetime.now().isoformat()))
+            self._request_sizes = self._saved_usage.get("request_sizes", [])
+            self._hourly_token_count = self._saved_usage.get("hourly_token_count", 0)
+            self._last_token_reset = datetime.fromisoformat(self._saved_usage.get("last_token_reset", datetime.now().isoformat()))
+            self._total_prompt_tokens = self._saved_usage.get("total_prompt_tokens", 0)
+            self._total_response_tokens = self._saved_usage.get("total_response_tokens", 0)
+            self._max_prompt_tokens = self._saved_usage.get("max_prompt_tokens", 0)
+            self._max_response_tokens = self._saved_usage.get("max_response_tokens", 0)
+            self._token_usage_history = self._saved_usage.get("token_usage_history", [])
+            
         except Exception as e:
-            logger.warning(f"Failed to count tokens accurately: {e}")
-            # Fallback to rough estimation
-            return len(text) // 4
+            logger.error(f"Failed to load usage data: {e}")
+            self._saved_usage = {}
+            # Initialize with defaults if loading fails
+            current_time = datetime.now()
+            self._daily_requests = 0
+            self._last_reset = current_time
+            self._request_sizes = []
+            self._hourly_token_count = 0
+            self._last_token_reset = current_time
+            self._total_prompt_tokens = 0
+            self._total_response_tokens = 0
+            self._max_prompt_tokens = 0
+            self._max_response_tokens = 0
+            self._token_usage_history = []
 
-    def _check_token_thresholds(self, prompt_tokens: int) -> None:
-        """Check token thresholds and log warnings
+    async def _save_usage_data(self) -> None:
+        """Save current usage data to file with debouncing"""
+        try:
+            async with self._save_lock:
+                current_time = datetime.now()
+                
+                # If a save is already pending or it hasn't been long enough since last save, skip
+                if self._pending_save or (current_time - self._last_save) < self._save_interval:
+                    self._pending_save = True
+                    return
+                    
+                self._pending_save = False
+                self._last_save = current_time
+                
+                usage_data = {
+                    "daily_requests": self._daily_requests,
+                    "last_reset": self._last_reset.isoformat(),
+                    "request_sizes": self._request_sizes,
+                    "hourly_token_count": self._hourly_token_count,
+                    "last_token_reset": self._last_token_reset.isoformat(),
+                    "total_prompt_tokens": self._total_prompt_tokens,
+                    "total_response_tokens": self._total_response_tokens,
+                    "max_prompt_tokens": self._max_prompt_tokens,
+                    "max_response_tokens": self._max_response_tokens,
+                    "token_usage_history": self._token_usage_history
+                }
+                
+                temp_file = f"{self._usage_file}.tmp"
+                with open(temp_file, "w", encoding="utf-8") as f:
+                    json.dump(usage_data, f, ensure_ascii=False, indent=2)
+                os.replace(temp_file, self._usage_file)
+                
+        except Exception as e:
+            logger.error(f"Failed to save usage data: {e}")
+            if os.path.exists(temp_file):
+                os.unlink(temp_file)
+
+    async def _schedule_save(self) -> None:
+        """Schedule a save operation"""
+        if not self._pending_save:
+            self._pending_save = True
+            await asyncio.sleep(self._save_interval.total_seconds())
+            await self._save_usage_data()
+
+    def update_notification_channel(self, channel: discord.TextChannel) -> None:
+        """Update notification channel
         
         Args:
-            prompt_tokens: Number of tokens in prompt
-            
-        Raises:
-            ValueError: If token limits are exceeded
+            channel: New notification channel to use
         """
-        current_time = datetime.now()
-        time_since_reset = current_time - self._last_reset
-        hours_until_reset = max(0, 24 - int(time_since_reset.total_seconds() / 3600))
-        
-        # Check prompt token limit
-        if prompt_tokens > self.MAX_PROMPT_TOKENS:
-            raise ValueError(
-                f"입력이 너무 깁니다. 현재: {prompt_tokens:,} 토큰\n"
-                f"최대 입력 길이: {self.MAX_PROMPT_TOKENS:,} 토큰\n"
-                f"입력을 더 짧게 작성해주세요."
-            )
-
-        # Check if we have enough room for response with buffer
-        estimated_max_response = self.MAX_TOTAL_TOKENS - prompt_tokens - self.RESPONSE_BUFFER_TOKENS
-        if estimated_max_response < 1000:  # Minimum reasonable response length
-            raise ValueError(
-                f"입력이 너무 깁니다. 응답을 위한 공간이 부족합니다.\n"
-                f"현재 입력: {prompt_tokens:,} 토큰\n"
-                f"응답 가능 공간: {estimated_max_response:,} 토큰\n"
-                f"입력을 더 짧게 작성해주세요."
-            )
-
-        # Check daily token limit
-        daily_total = self._total_prompt_tokens + self._total_response_tokens
-        estimated_total = daily_total + prompt_tokens + estimated_max_response
-        if estimated_total > self.DAILY_TOKEN_LIMIT:
-            raise ValueError(
-                f"일일 토큰 한도에 도달했습니다.\n"
-                f"현재 사용량: {daily_total:,} 토큰\n"
-                f"예상 사용량: {estimated_total:,} 토큰\n"
-                f"일일 한도: {self.DAILY_TOKEN_LIMIT:,} 토큰\n"
-                f"리셋까지 남은 시간: {hours_until_reset}시간"
-            )
-
-        # Warning for approaching token limits
-        if prompt_tokens > self.MAX_PROMPT_TOKENS * self.TOKEN_WARNING_THRESHOLD:
-            logger.warning(
-                f"Prompt approaching token limit: {prompt_tokens:,}/{self.MAX_PROMPT_TOKENS:,} "
-                f"({prompt_tokens/self.MAX_PROMPT_TOKENS*100:.1f}%)"
-            )
-
-        if daily_total > self.DAILY_TOKEN_LIMIT * self.TOKEN_WARNING_THRESHOLD:
-            logger.warning(
-                f"Approaching daily token limit: {daily_total:,}/{self.DAILY_TOKEN_LIMIT:,} "
-                f"({daily_total/self.DAILY_TOKEN_LIMIT*100:.1f}%)"
-            )
+        self._notification_channel = channel
 
     async def _track_request(self, prompt: str, response: str) -> None:
         """Track API usage
@@ -1442,6 +1366,84 @@ Maintain consistent analytical personality and technical precision regardless of
 
     async def _track_search_request(self) -> None:
         """Track a search request if search is enabled"""
-        if self._search_enabled:
-            async with self._search_lock:
-                self._search_requests.append(datetime.now()) 
+        try:
+            if self._search_enabled:
+                async with self._search_lock:
+                    self._search_requests.append(datetime.now())
+        except Exception as e:
+            logger.error(f"Failed to track search request: {e}")
+
+    def _count_tokens(self, text: str) -> int:
+        """Count tokens in text using model's tokenizer
+        
+        Args:
+            text: Text to count tokens for
+            
+        Returns:
+            int: Number of tokens
+            
+        Raises:
+            ValueError: If token counting fails
+        """
+        try:
+            return self._model.count_tokens(text).total_tokens
+        except Exception as e:
+            logger.warning(f"Failed to count tokens accurately: {e}")
+            # Fallback to rough estimation
+            return len(text) // 4
+
+    def _check_token_thresholds(self, prompt_tokens: int) -> None:
+        """Check token thresholds and log warnings
+        
+        Args:
+            prompt_tokens: Number of tokens in prompt
+            
+        Raises:
+            ValueError: If token limits are exceeded
+        """
+        current_time = datetime.now()
+        time_since_reset = current_time - self._last_reset
+        hours_until_reset = max(0, 24 - int(time_since_reset.total_seconds() / 3600))
+        
+        # Check prompt token limit
+        if prompt_tokens > self.MAX_PROMPT_TOKENS:
+            raise ValueError(
+                f"입력이 너무 깁니다. 현재: {prompt_tokens:,} 토큰\n"
+                f"최대 입력 길이: {self.MAX_PROMPT_TOKENS:,} 토큰\n"
+                f"입력을 더 짧게 작성해주세요."
+            )
+
+        # Check if we have enough room for response with buffer
+        estimated_max_response = self.MAX_TOTAL_TOKENS - prompt_tokens - self.RESPONSE_BUFFER_TOKENS
+        if estimated_max_response < 1000:  # Minimum reasonable response length
+            raise ValueError(
+                f"입력이 너무 깁니다. 응답을 위한 공간이 부족합니다.\n"
+                f"현재 입력: {prompt_tokens:,} 토큰\n"
+                f"응답 가능 공간: {estimated_max_response:,} 토큰\n"
+                f"입력을 더 짧게 작성해주세요."
+            )
+
+        # Check daily token limit
+        daily_total = self._total_prompt_tokens + self._total_response_tokens
+        estimated_total = daily_total + prompt_tokens + estimated_max_response
+        if estimated_total > self.DAILY_TOKEN_LIMIT:
+            raise ValueError(
+                f"일일 토큰 한도에 도달했습니다.\n"
+                f"현재 사용량: {daily_total:,} 토큰\n"
+                f"예상 사용량: {estimated_total:,} 토큰\n"
+                f"일일 한도: {self.DAILY_TOKEN_LIMIT:,} 토큰\n"
+                f"리셋까지 남은 시간: {hours_until_reset}시간"
+            )
+
+        # Warning for approaching token limits
+        if prompt_tokens > self.MAX_PROMPT_TOKENS * self.TOKEN_WARNING_THRESHOLD:
+            logger.warning(
+                f"Prompt approaching token limit: {prompt_tokens:,}/{self.MAX_PROMPT_TOKENS:,} "
+                f"({prompt_tokens/self.MAX_PROMPT_TOKENS*100:.1f}%)"
+            )
+
+        if daily_total > self.DAILY_TOKEN_LIMIT * self.TOKEN_WARNING_THRESHOLD:
+            logger.warning(
+                f"Approaching daily token limit: {daily_total:,}/{self.DAILY_TOKEN_LIMIT:,} "
+                f"({daily_total/self.DAILY_TOKEN_LIMIT*100:.1f}%)"
+            ) 
