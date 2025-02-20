@@ -37,12 +37,41 @@ class AICommands(BaseCommands):
         return self.bot.api_service
 
     async def _check_gemini_state(self) -> bool:
-        """Check if Gemini API is available and ready for use."""
-        if not self.api_service.gemini_api:
-            raise ValueError("AI 기능이 비활성화되어 있습니다. 관리자에게 문의하세요.")
-        if not self.api_service.api_states.get("gemini", False):
-            raise ValueError("AI 서비스가 현재 사용할 수 없습니다. 잠시 후 다시 시도해주세요.")
-        return True
+        """Check if Gemini API is available and ready for use.
+        
+        Returns:
+            bool: True if Gemini API is available
+            
+        Raises:
+            ValueError: If Gemini API is not available or not initialized
+        """
+        try:
+            logger.info("Checking Gemini API state...")
+            
+            # Check API service initialization
+            logger.info(f"API service initialized: {self.api_service.initialized}")
+            if not self.api_service.initialized:
+                raise ValueError("API 서비스가 초기화되지 않았습니다")
+            
+            # Check Gemini API instance
+            logger.info(f"Gemini API instance present: {self.api_service.gemini_api is not None}")
+            if not self.api_service.gemini_api:
+                raise ValueError("AI 기능이 비활성화되어 있습니다. 관리자에게 문의하세요.")
+            
+            # Check Gemini API state
+            api_states = self.api_service.api_states
+            logger.info(f"API states: {api_states}")
+            if not api_states.get("gemini", False):
+                raise ValueError("AI 서비스가 현재 사용할 수 없습니다. 잠시 후 다시 시도해주세요.")
+            
+            logger.info("Gemini API state check passed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error checking Gemini state: {e}", exc_info=True)
+            if isinstance(e, ValueError):
+                raise
+            raise ValueError("AI 서비스 상태 확인에 실패했습니다") from e
 
     @commands.command(
         name="대화",
