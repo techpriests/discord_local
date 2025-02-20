@@ -6,6 +6,7 @@ import json
 import random
 
 import google.generativeai as genai
+from google.generativeai import types
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
@@ -167,7 +168,13 @@ Maintain consistent analytical personality and technical precision regardless of
         self._pending_save = False
 
         # Configure search tool
-        self._search_tool = {'google_search': {}}  # Empty dict for default configuration
+        self._search_tool = types.Tool(
+            google_search=types.GoogleSearchRetrieval(
+                dynamic_retrieval_config=types.DynamicRetrievalConfig(
+                    dynamic_threshold=0.6
+                )
+            )
+        )
 
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""
@@ -928,20 +935,32 @@ Maintain consistent analytical personality and technical precision regardless of
                 raise ValueError("Gemini API not initialized")
 
             # Check user rate limits
-            self._check_user_rate_limit(user_id)
+            await self._check_user_rate_limit(user_id)
 
             # Check token limits
             prompt_tokens = self._count_tokens(prompt)
             self._check_token_thresholds(prompt_tokens)
 
             # Clean up expired sessions
-            self._cleanup_expired_sessions()
+            await self._cleanup_expired_sessions()
 
             # Get or create chat session
             chat = self._get_or_create_chat_session(user_id)
 
+            # Get current generation config with search if available
+            generation_config = await self._get_current_config()
+
             # Send message and get response
-            response = chat.send_message(prompt).text
+            response = await asyncio.to_thread(
+                lambda: chat.send_message(
+                    prompt,
+                    generation_config=generation_config
+                ).text
+            )
+
+            # Track search request if search was enabled
+            if self._search_enabled:
+                await self._track_search_request()
 
             # Update last interaction time
             self._update_last_interaction(user_id)
@@ -954,7 +973,7 @@ Maintain consistent analytical personality and technical precision regardless of
             processed_response = self._process_response(response)
 
             # Track usage
-            self._track_request(prompt, processed_response)
+            await self._track_request(prompt, processed_response)
 
             return processed_response
 
@@ -1236,14 +1255,14 @@ Maintain consistent analytical personality and technical precision regardless of
             genai.GenerationConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
-            return genai.GenerationConfig(
+            return types.GenerateContentConfig(
                 temperature=0.9,
                 top_p=1,
                 top_k=40,
                 max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
                 tools=[self._search_tool]
             )
-        return genai.GenerationConfig(
+        return types.GenerateContentConfig(
             temperature=0.9,
             top_p=1,
             top_k=40,
