@@ -186,11 +186,11 @@ Maintain consistent analytical personality and technical precision regardless of
             
             # Initialize Gemini API
             logger.info("Initializing Gemini API...")
-            self._client = genai.Client(api_key=self.api_key)
+            genai.configure(api_key=self.api_key)
             
             # Get model
             logger.info("Getting Gemini model...")
-            self._model = 'gemini-2.0-flash'
+            self._model = genai.GenerativeModel('gemini-2.0-flash')
             
             # Configure safety settings
             self._safety_settings = [
@@ -225,9 +225,8 @@ Maintain consistent analytical personality and technical precision regardless of
             try:
                 logger.info("Testing basic generation...")
                 test_response = await asyncio.to_thread(
-                    lambda: self._client.models.generate_content(
-                        model=self._model,
-                        contents=["Test message"],
+                    lambda: self._model.generate_content(
+                        "Test message",
                         generation_config=self._generation_config,
                         safety_settings=self._safety_settings
                     ).text
@@ -798,16 +797,16 @@ Maintain consistent analytical personality and technical precision regardless of
                     return self._chat_sessions[user_id]
             
             # Create new chat session with current configuration
-            if not self._client:
+            if not self._model:
                 raise ValueError("Gemini API not initialized")
                 
             # Get current configuration based on search availability
             current_config = await self._get_current_config()
             
-            # Create new chat session with search-enabled configuration
-            chat = self._client.chats.create(
-                model=self._model,
-                config=current_config
+            # Create new chat session
+            chat = self._model.start_chat(
+                generation_config=current_config,
+                safety_settings=self._safety_settings
             )
             
             # Add Ptilopsis context with proper formatting
@@ -1032,7 +1031,7 @@ Maintain consistent analytical personality and technical precision regardless of
             try:
                 response = await self._retry_with_exponential_backoff(
                     lambda: asyncio.to_thread(
-                        lambda: chat.send_message(prompt)
+                        lambda: chat.send_message(prompt).text
                     )
                 )
                 # Track search request if search was enabled
@@ -1047,13 +1046,13 @@ Maintain consistent analytical personality and technical precision regardless of
                 self._update_last_interaction(user_id)
 
                 # Validate response
-                if not response or not response.text:
+                if not response:
                     error_tracked = True
                     self._track_error()
                     raise GeminiAPIError("Empty response from Gemini", self.ERROR_SERVER)
 
                 # Process the response
-                processed_response = self._process_response(response.text)
+                processed_response = self._process_response(response)
 
                 # Track usage
                 await self._track_request(prompt, processed_response)
@@ -1268,12 +1267,7 @@ Maintain consistent analytical personality and technical precision regardless of
                         top_k=40,
                         max_output_tokens=1000
                     ),
-                    safety_settings=[
-                        {
-                            "category": genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                            "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
-                        }
-                    ]
+                    safety_settings=self._safety_settings
                 ).text
             )
             
@@ -1392,7 +1386,7 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            return self._client.models.count_tokens(model=self._model, text=text).total_tokens
+            return self._model.count_tokens(text).total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
             # Fallback to rough estimation
