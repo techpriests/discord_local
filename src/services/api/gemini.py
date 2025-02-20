@@ -274,24 +274,32 @@ Maintain consistent analytical personality and technical precision regardless of
         # Initialize Gemini client with API key
         self._client = genai.Client(api_key=self.api_key)
         
-        # Configure generation parameters
-        self._generation_config = {
-            "temperature": 0.9,  # More creative responses
-            "top_p": 1,
-            "top_k": 40,
-            "max_output_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-        }
-        
         # Configure safety settings (default: block none)
-        self._safety_settings = {
-            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
-            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
-            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
-        }
+        self._safety_settings = [
+            genai.types.SafetySetting(
+                category=genai.types.HarmCategory.HARASSMENT,
+                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
+            ),
+            genai.types.SafetySetting(
+                category=genai.types.HarmCategory.HATE_SPEECH,
+                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
+            ),
+            genai.types.SafetySetting(
+                category=genai.types.HarmCategory.SEXUALLY_EXPLICIT,
+                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
+            ),
+            genai.types.SafetySetting(
+                category=genai.types.HarmCategory.DANGEROUS_CONTENT,
+                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
+            )
+        ]
 
         # Configure search grounding with enhanced settings
-        self._search_config = genai.types.GenerateContentConfig(
+        self._search_config = genai.GenerationConfig(
+            temperature=0.9,
+            top_p=1,
+            top_k=40,
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
             tools=[genai.types.Tool(
                 google_search=genai.types.GoogleSearchRetrieval(
                     dynamic_retrieval_config=genai.types.DynamicRetrievalConfig(
@@ -301,9 +309,7 @@ Maintain consistent analytical personality and technical precision regardless of
                         time_range="1y"  # Search within last year
                     )
                 )
-            )],
-            safety_settings=self._safety_settings,
-            generation_config=self._generation_config
+            )]
         )
 
         try:
@@ -315,7 +321,8 @@ Maintain consistent analytical personality and technical precision regardless of
             test_response = await asyncio.to_thread(
                 lambda: self._model.generate_content(
                     "What is the latest version of Python?",
-                    config=self._search_config
+                    generation_config=self._search_config,
+                    safety_settings=self._safety_settings
                 ).text
             )
             if test_response:
@@ -328,9 +335,11 @@ Maintain consistent analytical personality and technical precision regardless of
             if "permission" in str(e).lower() or "scope" in str(e).lower():
                 logger.error("API key may not have search permission. Falling back to standard chat.")
                 # Fall back to standard config without search
-                self._search_config = genai.types.GenerateContentConfig(
-                    safety_settings=self._safety_settings,
-                    generation_config=self._generation_config
+                self._search_config = genai.GenerationConfig(
+                    temperature=0.9,
+                    top_p=1,
+                    top_k=40,
+                    max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
                 )
             raise
 
@@ -1337,8 +1346,18 @@ Maintain consistent analytical personality and technical precision regardless of
             response = await asyncio.to_thread(
                 lambda: model.generate_content(
                     "test",
-                    generation_config=self._generation_config,
-                    safety_settings=self._safety_settings
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.9,
+                        top_p=1,
+                        top_k=40,
+                        max_output_tokens=1000
+                    ),
+                    safety_settings=[
+                        genai.types.SafetySetting(
+                            category=genai.types.HarmCategory.HARASSMENT,
+                            threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
+                        )
+                    ]
                 ).text
             )
             
@@ -1405,17 +1424,19 @@ Maintain consistent analytical personality and technical precision regardless of
             
             return True
 
-    async def _get_current_config(self) -> genai.types.GenerateContentConfig:
+    async def _get_current_config(self) -> genai.GenerationConfig:
         """Get the appropriate configuration based on search availability
         
         Returns:
-            genai.types.GenerateContentConfig: Current configuration to use
+            genai.GenerationConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
             return self._search_config
-        return genai.types.GenerateContentConfig(
-            safety_settings=self._safety_settings,
-            generation_config=self._generation_config
+        return genai.GenerationConfig(
+            temperature=0.9,
+            top_p=1,
+            top_k=40,
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
         )
 
     async def _track_search_request(self) -> None:
