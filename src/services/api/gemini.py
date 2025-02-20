@@ -142,7 +142,7 @@ Maintain consistent analytical personality and technical precision regardless of
         self._user_requests: Dict[int, List[datetime]] = {}  # user_id -> list of request timestamps
         
         # Add degradation state
-        self._is_enabled = True
+        self._is_enabled = False  # Start disabled until fully initialized
         self._is_slowed_down = False
         self._last_slowdown = None
         self._last_disable = None
@@ -168,118 +168,114 @@ Maintain consistent analytical personality and technical precision regardless of
 
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""
-        await super().initialize()
-        
-        # Initialize locks first
-        self._session_lock = asyncio.Lock()  # For chat sessions
-        self._save_lock = asyncio.Lock()  # For saving data
-        self._stats_lock = asyncio.Lock()  # For usage statistics
-        self._rate_limit_lock = asyncio.Lock()  # For rate limiting
-        self._search_lock = asyncio.Lock()  # For search tracking
-        
-        # Load saved data
-        await self._load_usage_data()
-        
-        # Initialize Gemini client with API key
-        self._client = genai.Client(api_key=self.api_key)
-        
-        # Configure safety settings (default: block none)
-        self._safety_settings = [
-            genai.types.SafetySetting(
-                category=genai.types.HarmCategory.HARASSMENT,
-                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
-            ),
-            genai.types.SafetySetting(
-                category=genai.types.HarmCategory.HATE_SPEECH,
-                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
-            ),
-            genai.types.SafetySetting(
-                category=genai.types.HarmCategory.SEXUALLY_EXPLICIT,
-                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
-            ),
-            genai.types.SafetySetting(
-                category=genai.types.HarmCategory.DANGEROUS_CONTENT,
-                threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
-            )
-        ]
-
-        # Configure search grounding with enhanced settings
-        self._search_config = genai.GenerationConfig(
-            temperature=0.9,
-            top_p=1,
-            top_k=40,
-            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-            tools=[genai.types.Tool(
-                google_search=genai.types.GoogleSearchRetrieval(
-                    dynamic_retrieval_config=genai.types.DynamicRetrievalConfig(
-                        dynamic_threshold=0.6,  # Relevance threshold
-                        max_results=5,  # Maximum search results to use
-                        language_codes=["ko", "en"],  # Support Korean and English
-                        time_range="1y"  # Search within last year
-                    )
-                )
-            )]
-        )
-
         try:
-            # Initialize model
-            self._model = self._client.models.get_model('gemini-2.0-flash')
+            await super().initialize()
             
-            # Verify search capability
-            logger.info("Verifying search grounding capability...")
-            test_response = await asyncio.to_thread(
-                lambda: self._model.generate_content(
-                    "What is the latest version of Python?",
-                    generation_config=self._search_config,
-                    safety_settings=self._safety_settings
-                ).text
+            # Initialize locks first
+            self._session_lock = asyncio.Lock()  # For chat sessions
+            self._save_lock = asyncio.Lock()  # For saving data
+            self._stats_lock = asyncio.Lock()  # For usage statistics
+            self._rate_limit_lock = asyncio.Lock()  # For rate limiting
+            self._search_lock = asyncio.Lock()  # For search tracking
+            
+            # Initialize with default values
+            self._is_enabled = False  # Start disabled until fully initialized
+            
+            # Load saved data
+            await self._load_usage_data()
+            
+            # Initialize Gemini API
+            logger.info("Initializing Gemini API...")
+            genai.configure(api_key=self.api_key)
+            
+            # Get model
+            logger.info("Getting Gemini model...")
+            self._model = genai.GenerativeModel('gemini-2.0-flash')
+            
+            if not self._model:
+                raise ValueError("Failed to initialize Gemini model")
+            
+            # Configure safety settings
+            self._safety_settings = [
+                {
+                    "category": genai.types.HarmCategory.HARASSMENT,
+                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
+                },
+                {
+                    "category": genai.types.HarmCategory.HATE_SPEECH,
+                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
+                },
+                {
+                    "category": genai.types.HarmCategory.SEXUALLY_EXPLICIT,
+                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
+                },
+                {
+                    "category": genai.types.HarmCategory.DANGEROUS_CONTENT,
+                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
+                }
+            ]
+            
+            # Initialize generation config
+            logger.info("Configuring generation parameters...")
+            self._generation_config = genai.types.GenerationConfig(
+                temperature=0.9,
+                top_p=1,
+                top_k=40,
+                max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
             )
-            if test_response:
-                logger.info("Search grounding verified successfully")
-            else:
-                logger.warning("Search grounding test returned empty response")
-                
-        except Exception as e:
-            logger.error(f"Error during model initialization: {e}")
-            if "permission" in str(e).lower() or "scope" in str(e).lower():
-                logger.error("API key may not have search permission. Falling back to standard chat.")
-                # Fall back to standard config without search
-                self._search_config = genai.GenerationConfig(
-                    temperature=0.9,
-                    top_p=1,
-                    top_k=40,
-                    max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
+            
+            # Test basic generation
+            try:
+                logger.info("Testing basic generation...")
+                test_response = await asyncio.to_thread(
+                    lambda: self._model.generate_content(
+                        "Test message",
+                        generation_config=self._generation_config,
+                        safety_settings=self._safety_settings
+                    ).text
                 )
-            raise
-
-        # Initialize tracking state
-        self._is_enabled = True
-        self._is_slowed_down = False
-        self._last_slowdown = None
-        self._last_disable = None
-        self._recent_errors = []
-        self._error_count = 0
-        
-        # Initialize performance tracking
-        self._cpu_usage = 0
-        self._memory_usage = 0
-        self._last_performance_check = datetime.now()
-        self._cpu_check_task = None
-        self._is_cpu_check_running = False
-        
-        # Initialize notification tracking
-        self._last_notification_time = {}
-        
-        # Initialize save debouncing
-        self._last_save = datetime.now()
-        self._pending_save = False
-
-        # Reset chat sessions (don't reinitialize the dictionary)
-        self._chat_sessions.clear()
-        self._last_interaction.clear()
-
-        # Start initial system health check
-        await self._check_system_health()
+                if test_response:
+                    logger.info("Basic generation test successful")
+                else:
+                    logger.warning("Generation test returned empty response")
+                    raise ValueError("Generation test failed with empty response")
+                    
+            except Exception as e:
+                logger.error(f"Error during basic generation test: {e}")
+                raise
+            
+            # Initialize tracking state
+            self._chat_sessions = {}
+            self._last_interaction = {}
+            self._user_requests = {}
+            self._search_requests = []
+            self._last_search_disable = None
+            
+            # Initialize performance tracking
+            self._cpu_usage = 0
+            self._memory_usage = 0
+            self._last_performance_check = datetime.now()
+            self._is_cpu_check_running = False
+            
+            # Initialize notification tracking
+            self._last_notification_time = {}
+            
+            # Initialize save debouncing
+            self._last_save = datetime.now()
+            self._pending_save = False
+            
+            # Start initial system health check
+            await self._check_system_health()
+            
+            # Finally enable the service
+            self._is_enabled = True
+            logger.info("Gemini API initialization completed successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize Gemini API: {e}", exc_info=True)
+            self._is_enabled = False
+            self._model = None
+            raise ValueError(f"Failed to initialize Gemini API: {str(e)}")
 
     async def _load_usage_data(self) -> None:
         """Load saved usage data from file"""
@@ -1050,23 +1046,23 @@ Maintain consistent analytical personality and technical precision regardless of
                 error_tracked = True
                 self._track_error()
                 self._handle_google_api_error(e)
+            else:
+                # Update last interaction time
+                self._update_last_interaction(user_id)
 
-            # Update last interaction time
-            self._update_last_interaction(user_id)
+                # Validate response
+                if not response or not response.text:
+                    error_tracked = True
+                    self._track_error()
+                    raise GeminiAPIError("Empty response from Gemini", self.ERROR_SERVER)
 
-            # Validate response
-            if not response or not response.text:
-                error_tracked = True
-                self._track_error()
-                raise GeminiAPIError("Empty response from Gemini", self.ERROR_SERVER)
+                # Process the response
+                processed_response = self._process_response(response.text)
 
-            # Process the response
-            processed_response = self._process_response(response.text)
+                # Track usage
+                await self._track_request(prompt, processed_response)
 
-            # Track usage
-            await self._track_request(prompt, processed_response)
-
-            return processed_response
+                return processed_response
 
         except GeminiAPIError as e:
             if not error_tracked:
@@ -1245,7 +1241,6 @@ Maintain consistent analytical personality and technical precision regardless of
             
             # Clear model and client
             self._model = None
-            self._client = None
             
             await super().close()
         except Exception as e:
@@ -1356,7 +1351,7 @@ Maintain consistent analytical personality and technical precision regardless of
             genai.GenerationConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
-            return self._search_config
+            return self._generation_config
         return genai.GenerationConfig(
             temperature=0.9,
             top_p=1,

@@ -221,3 +221,101 @@ async def test_gemini_load_usage_data(bot):
         
         # Verify the method was called again
         gemini_api._load_usage_data.assert_called_once() 
+
+@pytest.mark.asyncio
+class TestGeminiInitialization:
+    """Test Gemini API initialization patterns"""
+    
+    async def test_gemini_initialization_pattern(self, bot, mock_genai_fixture):
+        """Test that Gemini API follows the correct initialization pattern"""
+        # Get the Gemini API instance
+        gemini_api = bot.api_service.gemini_api
+        
+        # Verify initial state
+        assert not gemini_api._is_enabled
+        assert gemini_api._model is None
+        
+        # Set up mock model response for test generation
+        mock_model = mock_genai_fixture.GenerativeModel.return_value
+        mock_model.generate_content.return_value = MagicMock(text="Test response")
+        
+        # Verify initialization sequence
+        await gemini_api.initialize()
+        
+        # 1. Verify usage data loading
+        gemini_api._load_usage_data.assert_called_once()
+        
+        # 2. Verify API configuration
+        mock_genai_fixture.configure.assert_called_once_with(api_key=gemini_api.api_key)
+        
+        # 3. Verify model initialization
+        mock_genai_fixture.GenerativeModel.assert_called_once_with('gemini-2.0-flash')
+        
+        # 4. Verify safety settings format
+        safety_settings = gemini_api._safety_settings
+        assert isinstance(safety_settings, list)
+        assert len(safety_settings) == 4  # Should have all 4 safety categories
+        
+        # Check specific safety settings
+        expected_categories = {
+            mock_genai_fixture.types.HarmCategory.HARASSMENT,
+            mock_genai_fixture.types.HarmCategory.HATE_SPEECH,
+            mock_genai_fixture.types.HarmCategory.SEXUALLY_EXPLICIT,
+            mock_genai_fixture.types.HarmCategory.DANGEROUS_CONTENT
+        }
+        
+        actual_categories = {setting["category"] for setting in safety_settings}
+        assert actual_categories == expected_categories
+        
+        # 5. Verify generation config
+        gen_config = gemini_api._generation_config
+        assert isinstance(gen_config, mock_genai_fixture.types.GenerationConfig)
+        assert gen_config.temperature == 0.9
+        assert gen_config.top_p == 1
+        assert gen_config.top_k == 40
+        assert gen_config.max_output_tokens == gemini_api.MAX_TOTAL_TOKENS - gemini_api.MAX_PROMPT_TOKENS
+        
+        # 6. Verify test generation was performed
+        mock_model.generate_content.assert_called_once()
+        test_call_args = mock_model.generate_content.call_args
+        assert test_call_args[0][0] == "Test message"  # First positional arg
+        assert test_call_args[1]["generation_config"] == gemini_api._generation_config
+        assert test_call_args[1]["safety_settings"] == gemini_api._safety_settings
+        
+        # 7. Verify initialization of tracking state
+        assert gemini_api._is_enabled  # Service should be enabled after successful init
+        assert isinstance(gemini_api._chat_sessions, dict)
+        assert isinstance(gemini_api._last_interaction, dict)
+        assert isinstance(gemini_api._search_requests, list)
+        assert gemini_api._last_search_disable is None
+        
+        # 8. Verify locks were initialized
+        assert gemini_api._session_lock is not None
+        assert gemini_api._save_lock is not None
+        assert gemini_api._stats_lock is not None
+        assert gemini_api._rate_limit_lock is not None
+        assert gemini_api._search_lock is not None
+    
+    async def test_gemini_initialization_error_handling(self, bot, mock_genai_fixture):
+        """Test error handling during Gemini API initialization"""
+        gemini_api = bot.api_service.gemini_api
+        
+        # Ensure service starts disabled
+        assert not gemini_api._is_enabled
+        
+        # Test API key configuration error
+        mock_genai_fixture.configure.side_effect = Exception("Invalid API key")
+        
+        with pytest.raises(ValueError) as exc_info:
+            await gemini_api.initialize()
+        assert "Failed to initialize Gemini API" in str(exc_info.value)
+        assert not gemini_api._is_enabled  # Should remain disabled
+        
+        # Reset mock and test model initialization error
+        mock_genai_fixture.configure.side_effect = None
+        mock_genai_fixture.GenerativeModel.side_effect = Exception("Model not found")
+        
+        with pytest.raises(ValueError) as exc_info:
+            await gemini_api.initialize()
+        assert "Failed to initialize Gemini API" in str(exc_info.value)
+        assert not gemini_api._is_enabled  # Should remain disabled 
