@@ -186,14 +186,11 @@ Maintain consistent analytical personality and technical precision regardless of
             
             # Initialize Gemini API
             logger.info("Initializing Gemini API...")
-            genai.configure(api_key=self.api_key)
+            self._client = genai.Client(api_key=self.api_key)
             
             # Get model
             logger.info("Getting Gemini model...")
-            self._model = genai.GenerativeModel('gemini-2.0-flash')
-            
-            if not self._model:
-                raise ValueError("Failed to initialize Gemini model")
+            self._model = 'gemini-2.0-flash'
             
             # Configure safety settings
             self._safety_settings = [
@@ -228,8 +225,9 @@ Maintain consistent analytical personality and technical precision regardless of
             try:
                 logger.info("Testing basic generation...")
                 test_response = await asyncio.to_thread(
-                    lambda: self._model.generate_content(
-                        "Test message",
+                    lambda: self._client.models.generate_content(
+                        model=self._model,
+                        contents=["Test message"],
                         generation_config=self._generation_config,
                         safety_settings=self._safety_settings
                     ).text
@@ -800,24 +798,22 @@ Maintain consistent analytical personality and technical precision regardless of
                     return self._chat_sessions[user_id]
             
             # Create new chat session with current configuration
-            if not self._model:
+            if not self._client:
                 raise ValueError("Gemini API not initialized")
                 
             # Get current configuration based on search availability
             current_config = await self._get_current_config()
             
-            # Create new session with current config
-            chat = self._model.start_chat(
-                history=[],  # Initialize with empty history
-                config=current_config  # Use current configuration
+            # Create new chat session with search-enabled configuration
+            chat = self._client.chats.create(
+                model=self._model,
+                config=current_config
             )
             
             # Add Ptilopsis context with proper formatting
-            role_context = {
-                "role": "user",
-                "parts": [self.PTILOPSIS_CONTEXT]
-            }
-            chat.send_message(role_context)
+            await asyncio.to_thread(
+                lambda: chat.send_message(self.PTILOPSIS_CONTEXT)
+            )
             
             self._chat_sessions[user_id] = chat
             self._last_interaction[user_id] = current_time
@@ -1256,27 +1252,27 @@ Maintain consistent analytical personality and technical precision regardless of
             if not self.api_key:
                 return False
                 
-            # Initialize client with same config as initialize()
-            client = genai.Client(api_key=self.api_key)
+            # Configure API with credentials
+            genai.configure(api_key=self.api_key)
             
-            # Try to initialize the model with our standard config
-            model = client.models.get_model('gemini-2.0-flash')
+            # Try to get model
+            model = genai.GenerativeModel('gemini-2.0-flash')
             
             # Try a simple test request using async wrapper
             response = await asyncio.to_thread(
                 lambda: model.generate_content(
                     "test",
-                    generation_config=genai.GenerationConfig(
+                    generation_config=genai.types.GenerationConfig(
                         temperature=0.9,
                         top_p=1,
                         top_k=40,
                         max_output_tokens=1000
                     ),
                     safety_settings=[
-                        genai.types.SafetySetting(
-                            category=genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                            threshold=genai.types.HarmBlockThreshold.BLOCK_NONE
-                        )
+                        {
+                            "category": genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+                            "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
+                        }
                     ]
                 ).text
             )
@@ -1351,8 +1347,23 @@ Maintain consistent analytical personality and technical precision regardless of
             genai.GenerationConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
-            return self._generation_config
-        return genai.GenerationConfig(
+            return genai.types.GenerationConfig(
+                temperature=0.9,
+                top_p=1,
+                top_k=40,
+                max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+                tools=[genai.types.Tool(
+                    google_search=genai.types.GoogleSearchRetrieval(
+                        dynamic_retrieval_config=genai.types.DynamicRetrievalConfig(
+                            dynamic_threshold=0.6,  # Relevance threshold
+                            max_results=5,  # Maximum search results to use
+                            language_codes=["ko", "en"],  # Support Korean and English
+                            time_range="1y"  # Search within last year
+                        )
+                    )
+                )]
+            )
+        return genai.types.GenerationConfig(
             temperature=0.9,
             top_p=1,
             top_k=40,
@@ -1381,7 +1392,7 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            return self._model.count_tokens(text).total_tokens
+            return self._client.models.count_tokens(model=self._model, text=text).total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
             # Fallback to rough estimation

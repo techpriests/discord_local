@@ -8,6 +8,7 @@ import asyncio
 
 # Set up mocks before any imports
 class MockHarmCategory:
+    """Mock HarmCategory enum"""
     HARM_CATEGORY_HARASSMENT = "HARM_CATEGORY_HARASSMENT"
     HARM_CATEGORY_HATE_SPEECH = "HARM_CATEGORY_HATE_SPEECH"
     HARM_CATEGORY_SEXUALLY_EXPLICIT = "HARM_CATEGORY_SEXUALLY_EXPLICIT"
