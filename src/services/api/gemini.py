@@ -171,88 +171,46 @@ Maintain consistent analytical personality and technical precision regardless of
 
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""
+        await super().initialize()
+        
+        # Configure the Gemini API
+        genai.configure(api_key=self.api_key)
+        
+        # Get model
+        logger.info("Getting Gemini model...")
+        self._model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Test basic generation
         try:
-            await super().initialize()
-            
-            # Initialize locks first
-            self._session_lock = asyncio.Lock()  # For chat sessions
-            self._save_lock = asyncio.Lock()  # For saving data
-            self._stats_lock = asyncio.Lock()  # For usage statistics
-            self._rate_limit_lock = asyncio.Lock()  # For rate limiting
-            self._search_lock = asyncio.Lock()  # For search tracking
-            
-            # Initialize with default values
-            self._is_enabled = False  # Start disabled until fully initialized
-            
-            # Load saved data
-            await self._load_usage_data()
-            
-            # Initialize Gemini API
-            logger.info("Initializing Gemini API...")
-            genai.configure(api_key=self.api_key)
-            
-            # Get model
-            logger.info("Getting Gemini model...")
-            self._model = genai.GenerativeModel('gemini-2.0-flash')
-            
-            # Test basic generation
-            try:
-                logger.info("Testing basic generation...")
-                test_response = await asyncio.to_thread(
-                    lambda: self._model.generate_content(
-                        "Test message",
-                        generation_config=genai.GenerationConfig(
-                            temperature=0.9,
-                            top_p=1,
-                            top_k=40,
-                            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-                            response_modalities=["TEXT"]
-                        ),
-                        tools=[self._search_tool] if self._search_enabled else None
-                    ).text
-                )
-                if test_response:
-                    logger.info("Basic generation test successful")
-                else:
-                    logger.warning("Generation test returned empty response")
-                    raise ValueError("Generation test failed with empty response")
-                    
-            except Exception as e:
-                logger.error(f"Error during basic generation test: {e}")
-                raise
-            
-            # Initialize tracking state
-            self._chat_sessions = {}
-            self._last_interaction = {}
-            self._user_requests = {}
-            self._search_requests = []
-            self._last_search_disable = None
-            
-            # Initialize performance tracking
-            self._cpu_usage = 0
-            self._memory_usage = 0
-            self._last_performance_check = datetime.now()
-            self._is_cpu_check_running = False
-            
-            # Initialize notification tracking
-            self._last_notification_time = {}
-            
-            # Initialize save debouncing
-            self._last_save = datetime.now()
-            self._pending_save = False
-            
-            # Start initial system health check
-            await self._check_system_health()
-            
-            # Finally enable the service
-            self._is_enabled = True
-            logger.info("Gemini API initialization completed successfully")
-            
+            logger.info("Testing basic generation...")
+            test_response = await asyncio.to_thread(
+                lambda: self._model.generate_content(
+                    "Test message",
+                    generation_config=genai.GenerationConfig(
+                        temperature=0.9,
+                        top_p=1,
+                        top_k=40,
+                        max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
+                    )
+                ).text
+            )
+            if test_response:
+                logger.info("Basic generation test successful")
+            else:
+                logger.warning("Generation test returned empty response")
+                raise ValueError("Generation test failed with empty response")
+                
         except Exception as e:
-            logger.error(f"Failed to initialize Gemini API: {e}", exc_info=True)
-            self._is_enabled = False
-            self._model = None
-            raise ValueError(f"Failed to initialize Gemini API: {str(e)}")
+            logger.error(f"Error during basic generation test: {e}")
+            raise
+        
+        # Initialize chat history
+        self._chat_sessions = {}
+        self._last_interaction = {}
+        
+        # Finally enable the service
+        self._is_enabled = True
+        logger.info("Gemini API initialization completed successfully")
 
     async def _load_usage_data(self) -> None:
         """Load saved usage data from file"""
@@ -758,7 +716,7 @@ Maintain consistent analytical personality and technical precision regardless of
         
         return response
 
-    async def _get_or_create_chat_session(self, user_id: int) -> genai.ChatSession:
+    def _get_or_create_chat_session(self, user_id: int) -> genai.ChatSession:
         """Get existing chat session or create new one for user
         
         Args:
@@ -767,35 +725,23 @@ Maintain consistent analytical personality and technical precision regardless of
         Returns:
             genai.ChatSession: Chat session for user
         """
-        async with self._session_lock:  # Use lock for thread safety
-            current_time = datetime.now()
-            
-            # Check if session exists and is not expired
-            if user_id in self._chat_sessions and user_id in self._last_interaction:
-                last_time = self._last_interaction[user_id]
-                if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
-                    return self._chat_sessions[user_id]
-            
-            # Create new chat session with current configuration
-            if not self._model:
-                raise ValueError("Gemini API not initialized")
-                
-            # Get current configuration based on search availability
-            current_config = await self._get_current_config()
-            
-            # Create new chat session
-            chat = self._model.start_chat(
-                tools=[self._search_tool] if self._search_enabled else None
-            )
-            
-            # Add Ptilopsis context with proper formatting
-            await asyncio.to_thread(
-                lambda: chat.send_message(self.PTILOPSIS_CONTEXT)
-            )
-            
-            self._chat_sessions[user_id] = chat
-            self._last_interaction[user_id] = current_time
-            return chat
+        current_time = datetime.now()
+        
+        # Check if session exists and is not expired
+        if user_id in self._chat_sessions and user_id in self._last_interaction:
+            last_time = self._last_interaction[user_id]
+            if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
+                return self._chat_sessions[user_id]
+        
+        # Create new chat session
+        chat = self._model.start_chat()
+        
+        # Add Ptilopsis context with proper formatting
+        chat.send_message(self.PTILOPSIS_CONTEXT)
+        
+        self._chat_sessions[user_id] = chat
+        self._last_interaction[user_id] = current_time
+        return chat
 
     async def _cleanup_expired_sessions(self) -> None:
         """Clean up expired chat sessions"""
@@ -961,14 +907,8 @@ Maintain consistent analytical personality and technical precision regardless of
 
         Raises:
             ValueError: If the request fails or limits are exceeded
-            GeminiAPIError: If the API call fails
         """
-        error_tracked = False
         try:
-            # Input validation
-            self._validate_prompt(prompt)
-            self._validate_user_id(user_id)
-            
             # Check system health
             await self._check_system_health()
             
@@ -988,68 +928,43 @@ Maintain consistent analytical personality and technical precision regardless of
                 raise ValueError("Gemini API not initialized")
 
             # Check user rate limits
-            await self._check_user_rate_limit(user_id)
+            self._check_user_rate_limit(user_id)
 
             # Check token limits
             prompt_tokens = self._count_tokens(prompt)
             self._check_token_thresholds(prompt_tokens)
 
             # Clean up expired sessions
-            await self._cleanup_expired_sessions()
+            self._cleanup_expired_sessions()
 
-            # Get or create chat session with appropriate config
-            chat = await self._get_or_create_chat_session(user_id)
-            
-            # Get current configuration based on search availability
-            current_config = await self._get_current_config()
-            
-            # Update chat configuration
-            chat.config = current_config
+            # Get or create chat session
+            chat = self._get_or_create_chat_session(user_id)
 
-            # Send message and get response with retries
-            try:
-                response = await self._retry_with_exponential_backoff(
-                    lambda: asyncio.to_thread(
-                        lambda: chat.send_message(prompt).text
-                    )
-                )
-                
-                # Track search request if search was enabled
-                if self._search_enabled:
-                    await self._track_search_request()
-                
-                # Update last interaction time
-                self._update_last_interaction(user_id)
+            # Send message and get response
+            response = chat.send_message(prompt).text
 
-                # Validate response
-                if not response:
-                    error_tracked = True
-                    self._track_error()
-                    raise GeminiAPIError("Empty response from Gemini", self.ERROR_SERVER)
+            # Update last interaction time
+            self._update_last_interaction(user_id)
 
-                # Process the response
-                processed_response = self._process_response(response)
+            # Validate response
+            if not response:
+                raise ValueError("Empty response from Gemini")
 
-                # Track usage
-                await self._track_request(prompt, processed_response)
+            # Process the response
+            processed_response = self._process_response(response)
 
-                return processed_response
+            # Track usage
+            self._track_request(prompt, processed_response)
 
-            except Exception as e:
-                error_tracked = True
-                self._track_error()
-                self._handle_google_api_error(e)
+            return processed_response
 
-        except GeminiAPIError as e:
-            if not error_tracked:
-                self._track_error()
-            raise ValueError(str(e))
-        except ValueError as e:
-            # Don't track validation errors
-            raise
         except Exception as e:
-            if not error_tracked:
-                self._track_error()
+            # Track error for degradation
+            self._track_error()
+            
+            # Re-raise with appropriate message
+            if isinstance(e, ValueError):
+                raise
             logger.error(f"Error in Gemini chat: {e}")
             raise ValueError(f"Gemini API 요청에 실패했습니다: {str(e)}") from e
 
@@ -1326,15 +1241,13 @@ Maintain consistent analytical personality and technical precision regardless of
                 top_p=1,
                 top_k=40,
                 max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-                tools=[self._search_tool],
-                response_modalities=["TEXT"]
+                tools=[self._search_tool]
             )
         return genai.GenerationConfig(
             temperature=0.9,
             top_p=1,
             top_k=40,
-            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-            response_modalities=["TEXT"]
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
         )
 
     async def _track_search_request(self) -> None:
