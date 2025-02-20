@@ -258,10 +258,10 @@ class TestGeminiInitialization:
         
         # Check specific safety settings
         expected_categories = {
-            mock_genai_fixture.types.HarmCategory.HARASSMENT,
-            mock_genai_fixture.types.HarmCategory.HATE_SPEECH,
-            mock_genai_fixture.types.HarmCategory.SEXUALLY_EXPLICIT,
-            mock_genai_fixture.types.HarmCategory.DANGEROUS_CONTENT
+            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
+            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
+            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
+            mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT
         }
         
         actual_categories = {setting["category"] for setting in safety_settings}
