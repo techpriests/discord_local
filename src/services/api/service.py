@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict, Optional, List, Tuple
+from typing import Dict, Optional, List, Tuple, Any
 import discord
 
 from src.services.api.exchange import ExchangeAPI
@@ -8,6 +8,7 @@ from src.services.api.population import PopulationAPI
 from src.services.api.steam import SteamAPI
 from src.services.api.gemini import GeminiAPI
 from src.services.api.base import BaseAPI
+from src.services.api.dundam import DundamAPI
 
 logger = logging.getLogger(__name__)
 
@@ -37,6 +38,7 @@ class APIService:
         self._population_api: Optional[PopulationAPI] = None
         self._exchange_api: Optional[ExchangeAPI] = None
         self._gemini_api: Optional[GeminiAPI] = None
+        self._dundam_api: Optional[DundamAPI] = None
         
         # Track initialization state
         self._initialized = False
@@ -44,7 +46,8 @@ class APIService:
             "steam": False,
             "population": False,
             "exchange": False,
-            "gemini": False
+            "gemini": False,
+            "dundam": False
         }
         logger.info("API service instance created with initial states: %s", self._api_states)
 
@@ -164,141 +167,66 @@ class APIService:
             raise ValueError("Gemini API is not available - API key not provided")
         return self._gemini_api
 
-    async def initialize(self) -> bool:
-        """Initialize all API clients"""
-        if self._initialized:
-            logger.info("API service already initialized")
-            return True
+    @property
+    def dundam(self) -> DundamAPI:
+        """Get Dundam API client
+        
+        Returns:
+            DundamAPI: Dundam API client
+            
+        Raises:
+            ValueError: If Dundam API is not initialized
+        """
+        self._ensure_initialized()
+        if not self._dundam_api:
+            raise ValueError("Dundam API is not initialized")
+        return self._dundam_api
 
+    async def initialize(self, credentials: Dict[str, Any]) -> None:
+        """Initialize API clients"""
         try:
-            logger.info("Starting API service initialization...")
-            # Log configuration state
-            logger.info("Configuration state:")
-            for key in ["STEAM_API_KEY", "GEMINI_API_KEY"]:
-                logger.info(f"  {key}: {'Present' if self._config.get(key) else 'Missing'}")
-            
-            # Reset states at start of initialization
-            self._reset_api_states()
-            apis_to_init = []
-            
-            # 1. Create API clients first (without marking as ready)
-            try:
-                # Steam API (Required)
-                logger.info("Creating Steam API client...")
-                self._steam_api = SteamAPI(self._get_required_key(self._config, "STEAM_API_KEY"))
-                apis_to_init.append(("steam", self._steam_api))
-                
-                # Population API (Optional)
-                logger.info("Creating Population API client...")
-                self._population_api = PopulationAPI()
-                apis_to_init.append(("population", self._population_api))
-                
-                # Exchange API (Optional)
-                logger.info("Creating Exchange API client...")
-                self._exchange_api = ExchangeAPI()
-                apis_to_init.append(("exchange", self._exchange_api))
-                
-                # Optional Gemini API
-                if gemini_key := self._config.get("GEMINI_API_KEY"):
-                    logger.info("Creating Gemini API client...")
-                    try:
-                        self._gemini_api = GeminiAPI(gemini_key)
-                        apis_to_init.append(("gemini", self._gemini_api))
-                        logger.info("Gemini API client created successfully")
-                    except Exception as e:
-                        logger.error(f"Failed to create Gemini API client: {e}", exc_info=True)
-                        self._gemini_api = None
-                        logger.info("Current Gemini API state: None")
-                else:
-                    logger.info("Gemini API key not provided - AI features will be disabled")
-                    self._gemini_api = None
-                    logger.info("Current Gemini API state: None (No key provided)")
-                
-            except Exception as e:
-                logger.error(f"Failed to create API clients: {str(e)}", exc_info=True)
-                await self._cleanup_apis(apis_to_init)
-                self._reset_api_states()
-                raise ValueError(f"Failed to create API clients: {str(e)}")
-            
-            # Log APIs to initialize
-            logger.info("APIs to initialize:")
-            for api_name, _ in apis_to_init:
-                logger.info(f"  {api_name}")
-            
-            # 2. Initialize and validate required APIs first
-            required_apis = [("steam", self._steam_api)]
-            for api_name, api in required_apis:
-                try:
-                    logger.info(f"Initializing required API: {api_name}...")
-                    await api.initialize()
-                    
-                    logger.info(f"Validating {api_name} API credentials...")
-                    if not await api.validate_credentials():
-                        logger.error(f"Required {api_name} API validation failed")
-                        await self._cleanup_apis(apis_to_init)
-                        self._reset_api_states()
-                        return False
-                        
-                    # Mark required API as ready
-                    self._api_states[api_name] = True
-                    logger.info(f"Required {api_name} API initialized and validated successfully")
-                    
-                except Exception as e:
-                    logger.error(f"Failed to initialize required {api_name} API: {str(e)}", exc_info=True)
-                    await self._cleanup_apis(apis_to_init)
-                    self._reset_api_states()
-                    raise ValueError(f"Required {api_name} API initialization failed: {str(e)}")
-            
-            # 3. Initialize and validate optional APIs
-            optional_apis = [(n, a) for n, a in apis_to_init if n != "steam"]
-            logger.info("Optional APIs to initialize:")
-            for api_name, _ in optional_apis:
-                logger.info(f"  {api_name}")
-                
-            for api_name, api in optional_apis:
-                try:
-                    logger.info(f"Initializing optional API: {api_name}...")
-                    await api.initialize()
-                    
-                    logger.info(f"Validating {api_name} API credentials...")
-                    validation_result = await api.validate_credentials()
-                    logger.info(f"{api_name} validation result: {validation_result}")
-                    
-                    if validation_result:
-                        self._api_states[api_name] = True
-                        logger.info(f"Optional {api_name} API initialized and validated successfully")
-                    else:
-                        logger.error(f"Optional {api_name} API validation failed")
-                        if api_name == "gemini":
-                            logger.error("Disabling Gemini AI features due to validation failure")
-                            self._gemini_api = None
-                            self._api_states["gemini"] = False
-                            logger.info("Current Gemini API state: None (Validation failed)")
-                        
-                except Exception as e:
-                    logger.error(f"Optional {api_name} API initialization failed: {str(e)}", exc_info=True)
-                    if api_name == "gemini":
-                        logger.error("Disabling Gemini AI features due to initialization error")
-                        self._gemini_api = None
-                        self._api_states["gemini"] = False
-                        logger.info("Current Gemini API state: None (Initialization failed)")
-                    # Continue with other optional APIs
-            
+            # Initialize Steam API
+            steam_key = self._get_required_key(credentials, "STEAM_API_KEY")
+            self._steam_api = SteamAPI(steam_key)
+            await self._steam_api.initialize()
+            self._api_states["steam"] = True
+            logger.info("Initialized Steam API")
+
+            # Initialize Population API (no credentials needed)
+            self._population_api = PopulationAPI({})
+            await self._population_api.initialize()
+            self._api_states["population"] = True
+            logger.info("Initialized Population API")
+
+            # Initialize Exchange API (no credentials needed)
+            self._exchange_api = ExchangeAPI({})
+            await self._exchange_api.initialize()
+            self._api_states["exchange"] = True
+            logger.info("Initialized Exchange API")
+
+            # Initialize Gemini API if credentials provided
+            if "GEMINI_API_KEY" in credentials:
+                self._gemini_api = GeminiAPI(
+                    credentials["GEMINI_API_KEY"],
+                    self._notification_channel
+                )
+                await self._gemini_api.initialize()
+                self._api_states["gemini"] = True
+                logger.info("Initialized Gemini API")
+
+            # Initialize Dundam API (no credentials needed)
+            self._dundam_api = DundamAPI({})
+            # await self._dundam_api.initialize()
+            self._api_states["dundam"] = False  # Mark as not initialized
+            logger.info("Dundam API initialization skipped - feature temporarily disabled")
+
             self._initialized = True
-            logger.info("API service initialization completed")
-            
-            # Log final state
-            logger.info("Final API states:")
-            for api_name, state in self._api_states.items():
-                logger.info(f"  {api_name}: {'Ready' if state else 'Not available'}")
-            logger.info(f"Gemini API instance present: {self._gemini_api is not None}")
-            
-            return True
-            
+            logger.info("API service initialization complete")
+
         except Exception as e:
-            logger.error(f"API service initialization failed: {str(e)}", exc_info=True)
-            self._initialized = False
-            raise ValueError(f"API 초기화에 실패했습니다: {str(e)}")
+            self._reset_api_states()
+            logger.error(f"Failed to initialize API service: {e}")
+            raise
 
     async def _cleanup_apis(self, apis: List[tuple[str, BaseAPI]]) -> None:
         """Clean up initialized APIs
@@ -359,7 +287,8 @@ class APIService:
         apis_to_close = [
             ("Steam", self._steam_api),
             ("Population", self._population_api),
-            ("Exchange", self._exchange_api)
+            ("Exchange", self._exchange_api),
+            ("Dundam", self._dundam_api)
         ]
         
         if self._gemini_api:
@@ -370,7 +299,7 @@ class APIService:
 
     async def __aenter__(self) -> 'APIService':
         """Async context manager entry"""
-        await self.initialize()
+        await self.initialize(self._config)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:

@@ -3,12 +3,14 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ main ]  # Only run on main
+    tags:
+      - 'temp_stable'  # Also run on our temporary tag
   pull_request:
     branches: [ main ]  # Only run on PRs to main
 
 jobs:
   ci:
-    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'pull_request' || github.ref == 'refs/tags/temp_stable'
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -29,7 +31,7 @@ jobs:
 
   cd:
     needs: ci
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/tags/temp_stable')
     runs-on: ubuntu-latest
     steps:
     - name: Deploy to EC2
@@ -56,7 +58,14 @@ jobs:
 
           # Deploy application
           cd ~/discord_local
-          git pull origin main
+          
+          # If deploying from tag, checkout that specific commit
+          if [[ "${{ github.ref }}" == "refs/tags/temp_stable" ]]; then
+            git fetch --all --tags
+            git checkout e2084d92c867bd980da1aa9b3a39e53dd73794dc
+          else
+            git pull origin main
+          fi
           
           # Set Git environment variables
           export GIT_COMMIT=$(git rev-parse --short HEAD)
