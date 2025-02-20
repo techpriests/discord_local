@@ -190,19 +190,17 @@ Maintain consistent analytical personality and technical precision regardless of
             # Initialize Gemini API
             logger.info("Initializing Gemini API...")
             genai.configure(api_key=self.api_key)
-            self._client = genai.Client(http_options={'api_version': 'v1alpha'})
             
             # Get model
             logger.info("Getting Gemini model...")
-            self._model = 'gemini-2.0-flash'
+            self._model = genai.GenerativeModel('gemini-2.0-flash')
             
             # Test basic generation
             try:
                 logger.info("Testing basic generation...")
                 test_response = await asyncio.to_thread(
-                    lambda: self._client.models.generate_content(
-                        model=self._model,
-                        contents="Test message",
+                    lambda: self._model.generate_content(
+                        "Test message",
                         generation_config=genai.GenerationConfig(
                             temperature=0.9,
                             top_p=1,
@@ -211,9 +209,9 @@ Maintain consistent analytical personality and technical precision regardless of
                             tools=[self._search_tool],
                             response_modalities=["TEXT"]
                         )
-                    )
+                    ).text
                 )
-                if test_response.text:
+                if test_response:
                     logger.info("Basic generation test successful")
                 else:
                     logger.warning("Generation test returned empty response")
@@ -786,8 +784,7 @@ Maintain consistent analytical personality and technical precision regardless of
             current_config = await self._get_current_config()
             
             # Create new chat session
-            chat = self._client.chats.create(
-                model=self._model,
+            chat = self._model.chats.create(
                 config={'tools': [self._search_tool]} if self._search_enabled else {}
             )
             
@@ -1362,7 +1359,7 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            return self._client.models.count_tokens(text).total_tokens
+            return self._model.count_tokens(text).total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
             # Fallback to rough estimation
