@@ -10,6 +10,7 @@ from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
 import discord
+from google.genai.types import Tool, GenerateContentConfig, GoogleSearch
 
 logger = logging.getLogger(__name__)
 
@@ -186,11 +187,11 @@ Maintain consistent analytical personality and technical precision regardless of
             
             # Initialize Gemini API
             logger.info("Initializing Gemini API...")
-            genai.configure(api_key=self.api_key)
+            self._client = genai.Client(api_key=self.api_key)
             
             # Get model
             logger.info("Getting Gemini model...")
-            self._model = genai.GenerativeModel('gemini-2.0-flash')
+            self._model = 'gemini-2.0-flash'
             
             # Configure safety settings
             self._safety_settings = [
@@ -211,27 +212,30 @@ Maintain consistent analytical personality and technical precision regardless of
                     "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
                 }
             ]
-            
-            # Initialize generation config
-            logger.info("Configuring generation parameters...")
-            self._generation_config = genai.types.GenerationConfig(
-                temperature=0.9,
-                top_p=1,
-                top_k=40,
-                max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
+
+            # Configure search tool
+            self._search_tool = genai.types.Tool(
+                google_search=genai.types.GoogleSearch()
             )
             
             # Test basic generation
             try:
                 logger.info("Testing basic generation...")
                 test_response = await asyncio.to_thread(
-                    lambda: self._model.generate_content(
-                        "Test message",
-                        generation_config=self._generation_config,
-                        safety_settings=self._safety_settings
-                    ).text
+                    lambda: self._client.models.generate_content(
+                        model=self._model,
+                        contents="Test message",
+                        config=genai.types.GenerateContentConfig(
+                            temperature=0.9,
+                            top_p=1,
+                            top_k=40,
+                            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+                            safety_settings=self._safety_settings,
+                            response_modalities=["TEXT"]
+                        )
+                    )
                 )
-                if test_response:
+                if test_response.text:
                     logger.info("Basic generation test successful")
                 else:
                     logger.warning("Generation test returned empty response")
@@ -804,9 +808,9 @@ Maintain consistent analytical personality and technical precision regardless of
             current_config = await self._get_current_config()
             
             # Create new chat session
-            chat = self._model.start_chat(
-                generation_config=current_config,
-                safety_settings=self._safety_settings
+            chat = self._client.models.start_chat(
+                model=self._model,
+                config=current_config
             )
             
             # Add Ptilopsis context with proper formatting
@@ -1334,34 +1338,29 @@ Maintain consistent analytical personality and technical precision regardless of
             
             return True
 
-    async def _get_current_config(self) -> genai.GenerationConfig:
+    async def _get_current_config(self) -> genai.types.GenerateContentConfig:
         """Get the appropriate configuration based on search availability
         
         Returns:
-            genai.GenerationConfig: Current configuration to use
+            genai.types.GenerateContentConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
-            return genai.types.GenerationConfig(
+            return genai.types.GenerateContentConfig(
                 temperature=0.9,
                 top_p=1,
                 top_k=40,
                 max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-                tools=[genai.types.Tool(
-                    google_search=genai.types.GoogleSearchRetrieval(
-                        dynamic_retrieval_config=genai.types.DynamicRetrievalConfig(
-                            dynamic_threshold=0.6,  # Relevance threshold
-                            max_results=5,  # Maximum search results to use
-                            language_codes=["ko", "en"],  # Support Korean and English
-                            time_range="1y"  # Search within last year
-                        )
-                    )
-                )]
+                safety_settings=self._safety_settings,
+                tools=[self._search_tool],
+                response_modalities=["TEXT"]
             )
-        return genai.types.GenerationConfig(
+        return genai.types.GenerateContentConfig(
             temperature=0.9,
             top_p=1,
             top_k=40,
-            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+            safety_settings=self._safety_settings,
+            response_modalities=["TEXT"]
         )
 
     async def _track_search_request(self) -> None:
@@ -1386,7 +1385,7 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            return self._model.count_tokens(text).total_tokens
+            return self._client.models.count_tokens(text).total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
             # Fallback to rough estimation
