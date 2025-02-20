@@ -193,13 +193,13 @@ class APIService:
             logger.info("Initialized Steam API")
 
             # Initialize Population API (no credentials needed)
-            self._population_api = PopulationAPI({})
+            self._population_api = PopulationAPI()
             await self._population_api.initialize()
             self._api_states["population"] = True
             logger.info("Initialized Population API")
 
             # Initialize Exchange API (no credentials needed)
-            self._exchange_api = ExchangeAPI({})
+            self._exchange_api = ExchangeAPI()
             await self._exchange_api.initialize()
             self._api_states["exchange"] = True
             logger.info("Initialized Exchange API")
@@ -215,7 +215,7 @@ class APIService:
                 logger.info("Initialized Gemini API")
 
             # Initialize Dundam API (no credentials needed)
-            self._dundam_api = DundamAPI({})
+            self._dundam_api = DundamAPI()
             # await self._dundam_api.initialize()
             self._api_states["dundam"] = False  # Mark as not initialized
             logger.info("Dundam API initialization skipped - feature temporarily disabled")
