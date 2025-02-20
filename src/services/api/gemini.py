@@ -10,7 +10,6 @@ from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
 import discord
-from google.generativeai import Tool, GenerationConfig, GoogleSearch
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +166,9 @@ Maintain consistent analytical personality and technical precision regardless of
         self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
         self._pending_save = False
 
+        # Configure search tool
+        self._search_tool = {'google_search': {}}  # Empty dict for default configuration
+
     async def initialize(self) -> None:
         """Initialize Gemini API resources"""
         try:
@@ -187,36 +189,12 @@ Maintain consistent analytical personality and technical precision regardless of
             
             # Initialize Gemini API
             logger.info("Initializing Gemini API...")
-            self._client = genai.Client(api_key=self.api_key)
+            genai.configure(api_key=self.api_key)
+            self._client = genai.Client(http_options={'api_version': 'v1alpha'})
             
             # Get model
             logger.info("Getting Gemini model...")
             self._model = 'gemini-2.0-flash'
-            
-            # Configure safety settings
-            self._safety_settings = [
-                {
-                    "category": genai.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
-                },
-                {
-                    "category": genai.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
-                },
-                {
-                    "category": genai.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
-                },
-                {
-                    "category": genai.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                    "threshold": genai.types.HarmBlockThreshold.BLOCK_NONE
-                }
-            ]
-
-            # Configure search tool
-            self._search_tool = genai.types.Tool(
-                google_search=genai.types.GoogleSearch()
-            )
             
             # Test basic generation
             try:
@@ -225,12 +203,12 @@ Maintain consistent analytical personality and technical precision regardless of
                     lambda: self._client.models.generate_content(
                         model=self._model,
                         contents="Test message",
-                        config=genai.types.GenerateContentConfig(
+                        generation_config=genai.GenerationConfig(
                             temperature=0.9,
                             top_p=1,
                             top_k=40,
                             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-                            safety_settings=self._safety_settings,
+                            tools=[self._search_tool],
                             response_modalities=["TEXT"]
                         )
                     )
@@ -808,9 +786,9 @@ Maintain consistent analytical personality and technical precision regardless of
             current_config = await self._get_current_config()
             
             # Create new chat session
-            chat = self._client.models.start_chat(
+            chat = self._client.chats.create(
                 model=self._model,
-                config=current_config
+                config={'tools': [self._search_tool]} if self._search_enabled else {}
             )
             
             # Add Ptilopsis context with proper formatting
@@ -1038,14 +1016,11 @@ Maintain consistent analytical personality and technical precision regardless of
                         lambda: chat.send_message(prompt).text
                     )
                 )
+                
                 # Track search request if search was enabled
                 if self._search_enabled:
                     await self._track_search_request()
-            except Exception as e:
-                error_tracked = True
-                self._track_error()
-                self._handle_google_api_error(e)
-            else:
+                
                 # Update last interaction time
                 self._update_last_interaction(user_id)
 
@@ -1062,6 +1037,11 @@ Maintain consistent analytical personality and technical precision regardless of
                 await self._track_request(prompt, processed_response)
 
                 return processed_response
+
+            except Exception as e:
+                error_tracked = True
+                self._track_error()
+                self._handle_google_api_error(e)
 
         except GeminiAPIError as e:
             if not error_tracked:
@@ -1265,13 +1245,12 @@ Maintain consistent analytical personality and technical precision regardless of
             response = await asyncio.to_thread(
                 lambda: model.generate_content(
                     "test",
-                    generation_config=genai.types.GenerationConfig(
+                    generation_config=genai.GenerationConfig(
                         temperature=0.9,
                         top_p=1,
                         top_k=40,
                         max_output_tokens=1000
-                    ),
-                    safety_settings=self._safety_settings
+                    )
                 ).text
             )
             
@@ -1338,28 +1317,26 @@ Maintain consistent analytical personality and technical precision regardless of
             
             return True
 
-    async def _get_current_config(self) -> genai.types.GenerationConfig:
+    async def _get_current_config(self) -> genai.GenerationConfig:
         """Get the appropriate configuration based on search availability
         
         Returns:
-            genai.types.GenerationConfig: Current configuration to use
+            genai.GenerationConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
-            return genai.types.GenerationConfig(
+            return genai.GenerationConfig(
                 temperature=0.9,
                 top_p=1,
                 top_k=40,
                 max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-                safety_settings=self._safety_settings,
                 tools=[self._search_tool],
                 response_modalities=["TEXT"]
             )
-        return genai.types.GenerationConfig(
+        return genai.GenerationConfig(
             temperature=0.9,
             top_p=1,
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-            safety_settings=self._safety_settings,
             response_modalities=["TEXT"]
         )
 
