@@ -4,6 +4,8 @@ from discord.ext import commands
 from discord import app_commands
 from typing import cast
 from unittest.mock import MagicMock, AsyncMock, PropertyMock
+from unittest.mock import patch
+from datetime import datetime
 
 @pytest.mark.asyncio
 class TestBotBasic:
@@ -181,4 +183,41 @@ class TestBotBasic:
         
         # Verify services are set to None after setup failure cleanup
         assert bot._api_service is None
-        assert bot.memory_db is None 
+        assert bot.memory_db is None
+
+@pytest.mark.asyncio
+async def test_gemini_load_usage_data(bot):
+    """Test that Gemini API's _load_usage_data method works correctly"""
+    # Get the Gemini API instance
+    gemini_api = bot.api_service.gemini_api
+    
+    # Test loading with no existing file
+    await gemini_api._load_usage_data()
+    
+    # Verify the method was called
+    gemini_api._load_usage_data.assert_called_once()
+    
+    # Reset the mock for the next test
+    gemini_api._load_usage_data.reset_mock()
+    
+    # Test loading with mock data
+    mock_data = {
+        "daily_requests": 10,
+        "last_reset": datetime.now().isoformat(),
+        "request_sizes": [100, 200],
+        "hourly_token_count": 1000,
+        "last_token_reset": datetime.now().isoformat(),
+        "total_prompt_tokens": 500,
+        "total_response_tokens": 600,
+        "max_prompt_tokens": 300,
+        "max_response_tokens": 400,
+        "token_usage_history": []
+    }
+    
+    # Mock file operations
+    with patch('os.path.exists', return_value=True), \
+         patch('json.load', return_value=mock_data):
+        await gemini_api._load_usage_data()
+        
+        # Verify the method was called again
+        gemini_api._load_usage_data.assert_called_once() 
