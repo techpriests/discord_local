@@ -100,9 +100,8 @@ class DiscordBot(commands.Bot):
                 logger.info("Initializing API service...")
                 try:
                     self._api_service = APIService(self._config)
-                    if not await self._api_service.initialize():
-                        raise ValueError("API service initialization failed - credential validation error")
-                        
+                    await self._api_service.initialize(self._config)  # Pass credentials here
+                    
                     # Log API states
                     api_states = self._api_service.api_states
                     logger.info("API initialization states:")
