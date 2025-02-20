@@ -4,11 +4,40 @@ from unittest.mock import AsyncMock, MagicMock, create_autospec, patch, Property
 from contextlib import ExitStack
 import os
 import sys
+import asyncio
 
-# Mock google.generativeai module
+# Set up mocks before any imports
+class MockHarmCategory:
+    HARASSMENT = "HARASSMENT"
+    HATE_SPEECH = "HATE_SPEECH"
+    SEXUALLY_EXPLICIT = "SEXUALLY_EXPLICIT"
+    DANGEROUS_CONTENT = "DANGEROUS_CONTENT"
+
+class MockHarmBlockThreshold:
+    BLOCK_NONE = "BLOCK_NONE"
+
+class MockGenerationConfig:
+    def __init__(self, temperature=None, top_p=None, top_k=None, max_output_tokens=None):
+        self.temperature = temperature
+        self.top_p = top_p
+        self.top_k = top_k
+        self.max_output_tokens = max_output_tokens
+
+# Create and inject mock before imports
 mock_genai = MagicMock()
+mock_genai.types = MagicMock()
+mock_genai.types.HarmCategory = MockHarmCategory
+mock_genai.types.HarmBlockThreshold = MockHarmBlockThreshold
+mock_genai.types.GenerationConfig = MockGenerationConfig
 mock_genai.configure = MagicMock()
 mock_genai.GenerativeModel = MagicMock()
+
+mock_model = MagicMock()
+mock_model.generate_content = MagicMock(return_value=MagicMock(text="Test response"))
+mock_model.count_tokens = MagicMock(return_value=MagicMock(total_tokens=10))
+mock_genai.GenerativeModel.return_value = mock_model
+
+# Mock modules
 sys.modules['google'] = MagicMock()
 sys.modules['google.generativeai'] = mock_genai
 
@@ -18,6 +47,7 @@ mock_psutil.cpu_percent.return_value = 50.0
 mock_psutil.virtual_memory.return_value = MagicMock(percent=60.0)
 sys.modules['psutil'] = mock_psutil
 
+# Now we can import the rest
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -35,8 +65,13 @@ def mock_config() -> Dict[str, str]:
         "GEMINI_API_KEY": "mock_gemini_api_key",
     }
 
+@pytest.fixture(autouse=True)
+def mock_genai_fixture():
+    """Mock google.generativeai module"""
+    return mock_genai
+
 @pytest.fixture
-def mock_api_service() -> MagicMock:
+def mock_api_service(mock_genai_fixture) -> MagicMock:
     """Create mock API service with all required methods"""
     service = MagicMock(spec=APIService)
     service.initialize = AsyncMock()
@@ -46,13 +81,87 @@ def mock_api_service() -> MagicMock:
     
     # Create a proper mock for Gemini API
     gemini = MagicMock()
+    
+    # Set initial state using property mock to ensure proper behavior
+    enabled_prop = PropertyMock(return_value=False)
+    type(gemini)._is_enabled = enabled_prop
+    gemini._model = None  # Start with no model
+    gemini.api_key = "mock_gemini_api_key"
+    
+    # Mock initialize to actually call configure and set up the model
+    async def mock_initialize():
+        try:
+            # Load usage data first
+            await gemini._load_usage_data()
+            
+            # Configure API
+            mock_genai_fixture.configure(api_key=gemini.api_key)
+            
+            # Get model
+            gemini._model = mock_genai_fixture.GenerativeModel('gemini-2.0-flash')
+            
+            # Initialize locks
+            gemini._session_lock = AsyncMock()
+            gemini._save_lock = AsyncMock()
+            gemini._stats_lock = AsyncMock()
+            gemini._rate_limit_lock = AsyncMock()
+            gemini._search_lock = AsyncMock()
+            
+            # Initialize tracking state
+            gemini._chat_sessions = {}
+            gemini._last_interaction = {}
+            gemini._search_requests = []
+            gemini._last_search_disable = None
+            
+            # Test generation
+            await asyncio.sleep(0)  # Simulate async operation
+            gemini._model.generate_content(
+                "Test message",
+                generation_config=gemini._generation_config,
+                safety_settings=gemini._safety_settings
+            )
+            
+            enabled_prop.return_value = True  # Update the property mock
+            return True
+            
+        except Exception as e:
+            enabled_prop.return_value = False  # Update the property mock
+            raise ValueError(f"Failed to initialize Gemini API: {str(e)}")
+    
+    gemini.initialize = AsyncMock(side_effect=mock_initialize)
     gemini.chat = AsyncMock()
     gemini._load_usage_data = AsyncMock()
     gemini._saved_usage = {}
-    gemini._daily_requests = 0
-    gemini._total_prompt_tokens = 0
-    gemini._request_sizes = []
-    gemini._hourly_token_count = 0
+    
+    # Add required attributes for test verification
+    gemini._safety_settings = [
+        {
+            "category": mock_genai_fixture.types.HarmCategory.HARASSMENT,
+            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+        },
+        {
+            "category": mock_genai_fixture.types.HarmCategory.HATE_SPEECH,
+            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+        },
+        {
+            "category": mock_genai_fixture.types.HarmCategory.SEXUALLY_EXPLICIT,
+            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+        },
+        {
+            "category": mock_genai_fixture.types.HarmCategory.DANGEROUS_CONTENT,
+            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
+        }
+    ]
+    
+    gemini._generation_config = mock_genai_fixture.types.GenerationConfig(
+        temperature=0.9,
+        top_p=1,
+        top_k=40,
+        max_output_tokens=24000  # MAX_TOTAL_TOKENS (32000) - MAX_PROMPT_TOKENS (8000)
+    )
+    
+    gemini.MAX_TOTAL_TOKENS = 32000
+    gemini.MAX_PROMPT_TOKENS = 8000
     
     # Set up the property mock for gemini_api
     gemini_api = PropertyMock(return_value=gemini)
