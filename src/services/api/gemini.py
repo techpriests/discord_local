@@ -10,6 +10,7 @@ from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
 import discord
+from google.generativeai import Tool, GenerationConfig, GoogleSearch
 
 logger = logging.getLogger(__name__)
 
@@ -1337,14 +1338,14 @@ Maintain consistent analytical personality and technical precision regardless of
             
             return True
 
-    async def _get_current_config(self) -> genai.types.GenerateContentConfig:
+    async def _get_current_config(self) -> genai.types.GenerationConfig:
         """Get the appropriate configuration based on search availability
         
         Returns:
-            genai.types.GenerateContentConfig: Current configuration to use
+            genai.types.GenerationConfig: Current configuration to use
         """
         if await self._check_search_rate_limit():
-            return genai.types.GenerateContentConfig(
+            return genai.types.GenerationConfig(
                 temperature=0.9,
                 top_p=1,
                 top_k=40,
@@ -1353,7 +1354,7 @@ Maintain consistent analytical personality and technical precision regardless of
                 tools=[self._search_tool],
                 response_modalities=["TEXT"]
             )
-        return genai.types.GenerateContentConfig(
+        return genai.types.GenerationConfig(
             temperature=0.9,
             top_p=1,
             top_k=40,
