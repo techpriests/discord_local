@@ -28,6 +28,7 @@ class APIService:
         Raises:
             ValueError: If required API keys are missing
         """
+        logger.info("Initializing API service with config keys: %s", list(config.keys()))
         self._config = config
         self._notification_channel = notification_channel
         
@@ -45,7 +46,7 @@ class APIService:
             "exchange": False,
             "gemini": False
         }
-        logger.info("API service instance created")
+        logger.info("API service instance created with initial states: %s", self._api_states)
 
     @property
     def api_states(self) -> Dict[str, bool]:
@@ -88,7 +89,9 @@ class APIService:
             KeyError: If key is missing or empty
         """
         value = config.get(key)
+        logger.info("Checking required key %s: %s", key, "Present" if value else "Missing")
         if not value:
+            logger.error("Required key %s is missing or empty", key)
             raise KeyError(f"{key} is required")
         return value
 
