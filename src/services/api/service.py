@@ -8,7 +8,7 @@ from src.services.api.population import PopulationAPI
 from src.services.api.steam import SteamAPI
 from src.services.api.gemini import GeminiAPI
 from src.services.api.base import BaseAPI
-from src.services.api.dundam import DundamAPI
+from src.services.api.dnf import DNFAPI
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class APIService:
         self._population_api: Optional[PopulationAPI] = None
         self._exchange_api: Optional[ExchangeAPI] = None
         self._gemini_api: Optional[GeminiAPI] = None
-        self._dundam_api: Optional[DundamAPI] = None
+        self._dnf_api: Optional[DNFAPI] = None
         
         # Track initialization state
         self._initialized = False
@@ -47,7 +47,7 @@ class APIService:
             "population": False,
             "exchange": False,
             "gemini": False,
-            "dundam": False
+            "dnf": False
         }
         logger.info("API service instance created with initial states: %s", self._api_states)
 
@@ -167,20 +167,18 @@ class APIService:
             raise ValueError("Gemini API is not available - API key not provided")
         return self._gemini_api
 
-    @property
-    def dundam(self) -> DundamAPI:
-        """Get Dundam API client
-        
+    def dnf(self) -> DNFAPI:
+        """Get DNF API client
+
         Returns:
-            DundamAPI: Dundam API client
-            
+            DNFAPI: DNF API client
+
         Raises:
-            ValueError: If Dundam API is not initialized
+            ValueError: If DNF API is not initialized
         """
-        self._ensure_initialized()
-        if not self._dundam_api:
-            raise ValueError("Dundam API is not initialized")
-        return self._dundam_api
+        if not self._dnf_api:
+            raise ValueError("DNF API is not initialized")
+        return self._dnf_api
 
     async def initialize(self, credentials: Dict[str, Any]) -> None:
         """Initialize API clients"""
@@ -214,15 +212,15 @@ class APIService:
                 self._api_states["gemini"] = True
                 logger.info("Initialized Gemini API")
 
-            # Initialize Dundam API with Neople API key
+            # Initialize DNF API with Neople API key
             if "NEOPLE_API_KEY" in credentials:
-                self._dundam_api = DundamAPI(credentials["NEOPLE_API_KEY"])
-                await self._dundam_api.initialize()
-                self._api_states["dundam"] = True
-                logger.info("Initialized Dundam API")
+                self._dnf_api = DNFAPI(credentials["NEOPLE_API_KEY"])
+                await self._dnf_api.initialize()
+                self._api_states["dnf"] = True
+                logger.info("Initialized DNF API")
             else:
-                logger.warning("Neople API key not provided - Dundam API will not be available")
-                self._api_states["dundam"] = False
+                logger.warning("Neople API key not provided - DNF API will not be available")
+                self._api_states["dnf"] = False
 
             self._initialized = True
             logger.info("API service initialization complete")
@@ -292,7 +290,7 @@ class APIService:
             ("Steam", self._steam_api),
             ("Population", self._population_api),
             ("Exchange", self._exchange_api),
-            ("Dundam", self._dundam_api)
+            ("DNF", self._dnf_api)
         ]
         
         if self._gemini_api:

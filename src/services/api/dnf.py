@@ -444,64 +444,19 @@ class DNFAPI(BaseAPI[Dict[str, Any]]):
             return {"error": f"Failed to calculate damage: {str(e)}"}
 
     async def search_character(self, name: str, server: str = "all") -> Optional[Dict[str, Any]]:
-        """Search for character and get their complete information"""
-        try:
-            server = self._normalize_server_name(server)
+        """Search for a character by name and server
+        
+        Args:
+            name: Character name to search for
+            server: Server name (defaults to all servers)
             
-            # Get character ID
-            character_id = await self.get_character_id(name, server)
-            if not character_id:
-                return None
-
-            # Get all character information in parallel
-            tasks = [
-                self.get_character_basic(server, character_id),
-                self.get_character_status(server, character_id),
-                self.get_character_equipment(server, character_id),
-                self.get_character_avatar(server, character_id),
-                self.get_character_creature(server, character_id)
-            ]
+        Returns:
+            Optional[Dict[str, Any]]: Character information if found
             
-            basic, status, equipment, avatar, creature = await asyncio.gather(*tasks)
-            
-            if not basic or not status:
-                return None
-
-            # Get skill information if we have job information
-            skill_info = None
-            if basic.get("jobId") and basic.get("jobGrowId"):
-                skill_info = await self.get_skill_info(basic["jobId"], basic["jobGrowId"])
-
-            # Calculate damage if we have all necessary information
-            damage_info = None
-            if status and equipment and skill_info:
-                damage_info = self.calculate_damage(
-                    status,
-                    equipment.get("equipment", []),
-                    skill_info.get("skills", []),
-                    status.get("buffPower", {})
-                )
-
-            # Combine all information
-            return {
-                "name": basic.get("characterName", name),
-                "server": server,
-                "level": basic.get("level", ""),
-                "job_name": basic.get("jobName", ""),
-                "job_growth_name": basic.get("jobGrowName", ""),
-                "character_id": character_id,
-                "stats": status.get("status", {}),
-                "buff_power": status.get("buffPower", {}),
-                "equipment": equipment.get("equipment", []),
-                "avatar": avatar.get("avatar", []) if avatar else None,
-                "creature": creature.get("creature", {}) if creature else None,
-                "skills": skill_info.get("skills", []) if skill_info else None,
-                "damage_info": damage_info
-            }
-
-        except Exception as e:
-            logger.error(f"Error searching character: {e}")
-            return None
+        Raises:
+            ValueError: If the feature is currently disabled
+        """
+        raise ValueError("던전앤파이터 캐릭터 검색 기능이 현재 비활성화되어 있습니다. 추후 업데이트 예정입니다.")
 
     async def close(self) -> None:
         """Cleanup resources"""
