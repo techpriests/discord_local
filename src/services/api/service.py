@@ -214,11 +214,15 @@ class APIService:
                 self._api_states["gemini"] = True
                 logger.info("Initialized Gemini API")
 
-            # Initialize Dundam API (no credentials needed)
-            self._dundam_api = DundamAPI()
-            # await self._dundam_api.initialize()
-            self._api_states["dundam"] = False  # Mark as not initialized
-            logger.info("Dundam API initialization skipped - feature temporarily disabled")
+            # Initialize Dundam API with Neople API key
+            if "NEOPLE_API_KEY" in credentials:
+                self._dundam_api = DundamAPI(credentials["NEOPLE_API_KEY"])
+                await self._dundam_api.initialize()
+                self._api_states["dundam"] = True
+                logger.info("Initialized Dundam API")
+            else:
+                logger.warning("Neople API key not provided - Dundam API will not be available")
+                self._api_states["dundam"] = False
 
             self._initialized = True
             logger.info("API service initialization complete")

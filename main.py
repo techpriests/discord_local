@@ -10,7 +10,8 @@ async def main():
     # Initialize configuration
     config = {
         "STEAM_API_KEY": os.getenv("STEAM_API_KEY"),
-        "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY")
+        "GEMINI_API_KEY": os.getenv("GEMINI_API_KEY"),
+        "NEOPLE_API_KEY": os.getenv("NEOPLE_API_KEY")
     }
     
     # Initialize bot (API service will be initialized in setup_hook)
