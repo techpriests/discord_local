@@ -7,7 +7,7 @@ import discord
 import pytz
 from discord.ext import commands
 from discord.ext.commands import Context
-from discord import File
+from discord import File, app_commands
 
 from src.services.api import APIService
 from src.utils.decorators import command_handler
@@ -619,73 +619,39 @@ class InformationCommands(BaseCommands):
         )
 
     @commands.hybrid_command(
-        name="던담",
-        aliases=["dundam", "df"],
-        help="던전앤파이터 캐릭터의 스탯을 검색합니다",
-        brief="던파 캐릭터 검색",
-        description="dundam.xyz에서 던전앤파이터 캐릭터의 스탯을 검색합니다"
+        name="던파",
+        aliases=["dnf", "df"],
+        description="던전앤파이터 캐릭터의 정보를 검색합니다"
     )
-    async def search_dundam(self, ctx: commands.Context, *, name: str):
-        """Search for character information from dundam.xyz
+    @app_commands.describe(
+        character_name="검색할 캐릭터 이름",
+        server_name="서버 이름 (예: 카인, 디레지에 등)"
+    )
+    async def search_dnf(
+        self,
+        ctx: commands.Context,
+        character_name: str,
+        server_name: str = "all"
+    ) -> None:
+        """던전앤파이터 캐릭터의 정보를 검색합니다"""
         
-        Args:
-            ctx: Command context
-            name: Character name to search for
-        """
-        # Send initial response
-        processing_embed = discord.Embed(
-            title="🔍 캐릭터 검색 중...",
-            description=f"`{name}` 캐릭터를 검색하고 있습니다.",
-            color=discord.Color.blue()
+        # Send disabled message
+        disabled_embed = discord.Embed(
+            title="⚠️ 기능 비활성화",
+            description=(
+                "던전앤파이터 캐릭터 검색 기능이 현재 비활성화되어 있습니다.\n"
+                "더 정확한 데미지 계산을 위해 업데이트 중입니다.\n"
+                "추후 업데이트를 통해 다시 제공될 예정입니다."
+            ),
+            color=discord.Color.orange()
         )
-        message = await ctx.send(embed=processing_embed)
-        
-        try:
-            # Search for character
-            character_info = await self.api.dundam.search_character(name)
-            
-            if not character_info:
-                error_embed = discord.Embed(
-                    title="❌ 캐릭터를 찾을 수 없습니다",
-                    description=f"`{name}` 캐릭터를 찾을 수 없습니다.\n올바른 이름인지 확인해주세요.",
-                    color=discord.Color.red()
-                )
-                await message.edit(embed=error_embed)
-                return
-            
-            # Create embed with character information
-            embed = discord.Embed(
-                title=f"📋 {character_info['name']} 정보",
-                url=character_info['url'],
-                color=discord.Color.gold()
-            )
-            
-            # Add basic info
-            embed.add_field(
-                name="기본 정보",
-                value=f"**서버:** {character_info['server']}\n**레벨:** {character_info['level']}",
-                inline=False
-            )
-            
-            # Add damage stats if available
-            if character_info['damage_stats']:
-                stats_text = "\n".join(f"**{k}:** {v}" for k, v in character_info['damage_stats'].items())
-                embed.add_field(
-                    name="데미지 스탯",
-                    value=stats_text or "정보 없음",
-                    inline=False
-                )
-            
-            # Add footer with source
-            embed.set_footer(text="Data from dundam.xyz")
-            
-            await message.edit(embed=embed)
-            
-        except Exception as e:
-            logger.error(f"Error searching for character {name}: {e}")
-            error_embed = discord.Embed(
-                title="❌ 오류 발생",
-                description="캐릭터 정보를 가져오는 중 오류가 발생했습니다.\n잠시 후 다시 시도해주세요.",
-                color=discord.Color.red()
-            )
-            await message.edit(embed=error_embed)
+        disabled_embed.add_field(
+            name="대체 방법",
+            value=(
+                "캐릭터 정보 확인은 아래 사이트를 이용해주세요:\n"
+                "• [네오플 던전앤파이터](https://df.nexon.com/)\n"
+                "• [던담](https://dundam.xyz/)"
+            ),
+            inline=False
+        )
+        await ctx.send(embed=disabled_embed)

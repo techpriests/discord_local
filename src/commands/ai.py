@@ -110,13 +110,30 @@ class AICommands(BaseCommands):
                     # Get response from Gemini
                     response = await self.api_service.gemini.chat(message, ctx.author.id)
                     
-                    # Create embed for response
-                    embed = discord.Embed(
-                        description=response,
-                        color=INFO_COLOR
-                    )
-                    
-                    await ctx.send(embed=embed)
+                    # Split long responses into multiple messages
+                    max_length = 4000  # Leave some buffer for embed formatting
+                    if len(response) > max_length:
+                        # Split response into chunks
+                        chunks = [response[i:i+max_length] for i in range(0, len(response), max_length)]
+                        
+                        # Send first chunk as an embed
+                        first_embed = discord.Embed(
+                            description=chunks[0],
+                            color=INFO_COLOR
+                        )
+                        await ctx.send(embed=first_embed)
+                        
+                        # Send remaining chunks as regular messages
+                        for chunk in chunks[1:]:
+                            await ctx.send(chunk)
+                    else:
+                        # Create embed for response
+                        embed = discord.Embed(
+                            description=response,
+                            color=INFO_COLOR
+                        )
+                        
+                        await ctx.send(embed=embed)
                 except Exception as e:
                     logger.error(f"Error in Gemini chat: {e}", exc_info=True)
                     raise ValueError("대화 처리 중 오류가 발생했습니다") from e
@@ -200,16 +217,40 @@ class AICommands(BaseCommands):
             # Get response from Gemini
             response = await self.api_service.gemini.chat(message, user_id)
             
-            # Create embed for response
-            embed = discord.Embed(
-                description=response,
-                color=INFO_COLOR
-            )
-            
-            if isinstance(ctx_or_interaction, discord.Interaction):
-                await ctx_or_interaction.response.send_message(embed=embed)
+            # Split long responses into multiple messages
+            max_length = 4000  # Leave some buffer for embed formatting
+            if len(response) > max_length:
+                # Split response into chunks
+                chunks = [response[i:i+max_length] for i in range(0, len(response), max_length)]
+                
+                # Send first chunk as an embed
+                first_embed = discord.Embed(
+                    description=chunks[0],
+                    color=INFO_COLOR
+                )
+                
+                if isinstance(ctx_or_interaction, discord.Interaction):
+                    await ctx_or_interaction.response.send_message(embed=first_embed)
+                else:
+                    await ctx_or_interaction.send(embed=first_embed)
+                
+                # Send remaining chunks as regular messages
+                for chunk in chunks[1:]:
+                    if isinstance(ctx_or_interaction, discord.Interaction):
+                        await ctx_or_interaction.followup.send(chunk)
+                    else:
+                        await ctx_or_interaction.send(chunk)
             else:
-                await ctx_or_interaction.send(embed=embed)
+                # Create embed for response
+                embed = discord.Embed(
+                    description=response,
+                    color=INFO_COLOR
+                )
+                
+                if isinstance(ctx_or_interaction, discord.Interaction):
+                    await ctx_or_interaction.response.send_message(embed=embed)
+                else:
+                    await ctx_or_interaction.send(embed=embed)
                 
         except ValueError as e:
             # Handle API errors
