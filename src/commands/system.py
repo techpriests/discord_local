@@ -244,6 +244,18 @@ class SystemCommands(BaseCommands):
             )
 
             embed.add_field(
+                name="🎲 명일방주 명령어",
+                value=(
+                    "• !!명방 [횟수] - 일반 배너 뽑기 확률 계산\n"
+                    "  └ /arknights_pull [횟수] - 슬래시 명령어 버전\n"
+                    "• !!명방한정 [횟수] - 한정 배너 뽑기 확률 계산\n"
+                    "• !!자원 [합성옥] [순오리지늄] [헤드헌팅권] - 보유 자원으로 가능한 뽑기 횟수 계산\n"
+                    "  └ /arknights_resources - 슬래시 명령어 버전"
+                ),
+                inline=False
+            )
+
+            embed.add_field(
                 name="⚙️ 시스템 명령어",
                 value=(
                     "• !!핑 - 봇 지연시간 확인\n"
