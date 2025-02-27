@@ -116,7 +116,7 @@ class ArknightsCommands(BaseCommands):
                 return
 
             # Calculate probabilities
-            result = self.calculator.calculate_probabilities(pulls, is_limited)
+            result = self.calculator.calculate_banner_probability(pulls, is_limited)
             
             # Create embed
             user_name = self.get_user_name(ctx_or_interaction)
