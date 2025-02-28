@@ -247,8 +247,8 @@ Maintain consistent analytical personality and technical precision regardless of
         self._chat_sessions = {}
         self._last_interaction = {}
 
-    def _count_tokens(self, text: str) -> int:
-        """Count tokens in text using model's tokenizer
+    async def _count_tokens(self, text: str) -> int:
+        """Count tokens in text using Gemini API
         
         Args:
             text: Text to count tokens for
@@ -260,12 +260,15 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            # Use the client's count_tokens method
-            result = self._client.count_tokens(text)
-            return result.total_tokens
+            # Use the model's count_tokens method
+            response = await self._client.aio.models.count_tokens(
+                model='gemini-2.0-flash-thinking-exp',
+                contents=text
+            )
+            return response.total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
-            # Fallback to rough estimation
+            # Fallback to rough estimation - 4 characters per token
             return len(text) // 4
 
     def _check_token_thresholds(self, prompt_tokens: int) -> None:
@@ -321,7 +324,7 @@ Maintain consistent analytical personality and technical precision regardless of
                 f"({daily_total/self.DAILY_TOKEN_LIMIT*100:.1f}%)"
             )
 
-    def _track_request(self, prompt: str, response: str) -> None:
+    async def _track_request(self, prompt: str, response: str) -> None:
         """Track API usage
         
         Args:
@@ -371,8 +374,8 @@ Maintain consistent analytical personality and technical precision regardless of
         self._request_sizes.append(request_size)
 
         # Get accurate token count
-        prompt_tokens = self._count_tokens(prompt)
-        response_tokens = self._count_tokens(response)
+        prompt_tokens = await self._count_tokens(prompt)
+        response_tokens = await self._count_tokens(response)
         total_tokens = prompt_tokens + response_tokens
 
         # Update token statistics
@@ -767,12 +770,14 @@ Maintain consistent analytical personality and technical precision regardless of
         # Create new chat session
         chat = self._client.aio.chats.create(
             model='gemini-2.0-flash-thinking-exp',
-            config=self._generation_config,
-            safety_settings=self._safety_settings
+            config=types.GenerateContentConfig(
+                generation_config=self._generation_config,
+                safety_settings=self._safety_settings
+            )
         )
         
         # Add role context with proper formatting
-        chat.send_message(self.PTILOPSIS_CONTEXT)
+        await chat.send_message(self.PTILOPSIS_CONTEXT)
         
         self._chat_sessions[user_id] = chat
         self._last_interaction[user_id] = current_time
@@ -836,7 +841,7 @@ Maintain consistent analytical personality and technical precision regardless of
             self._check_user_rate_limit(user_id)
 
             # Check token limits
-            prompt_tokens = self._count_tokens(prompt)
+            prompt_tokens = await self._count_tokens(prompt)
             self._check_token_thresholds(prompt_tokens)
 
             # Clean up expired sessions
@@ -859,7 +864,7 @@ Maintain consistent analytical personality and technical precision regardless of
             processed_response = self._process_response(response.text)
 
             # Track usage
-            self._track_request(prompt, processed_response)
+            await self._track_request(prompt, processed_response)
 
             return processed_response
 
