@@ -202,10 +202,11 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Configure the Gemini API with v1alpha version for Flash Thinking
         self._client = genai.Client(
-            api_key=self.api_key
+            api_key=self.api_key,
+            http_options=genai.types.HttpOptions(api_version='v1alpha')
         )
 
-        # Configure safety settings and generation config
+        # Configure safety settings
         self._safety_settings = [
             SafetySetting(
                 category='HARM_CATEGORY_HARASSMENT',
@@ -225,19 +226,17 @@ Maintain consistent analytical personality and technical precision regardless of
             )
         ]
 
+        # Configure generation settings
         self._generation_config = GenerateContentConfig(
             temperature=0.9,  # More creative responses
             top_p=1,
             top_k=40,
-            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-            safety_settings=self._safety_settings
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
         )
 
-        # Initialize text-only model using standard Gemini model
-        self._model = self._client.models.get_model(
-            'gemini-pro',
-            safety_settings=self._safety_settings,
-            generation_config=self._generation_config
+        # Initialize text-only model using flash thinking model
+        self._model = self._client.GenerativeModel(
+            model_name='gemini-2.0-flash-thinking-exp'
         )
         
         # Initialize chat history
@@ -762,9 +761,14 @@ Maintain consistent analytical personality and technical precision regardless of
                 return self._chat_sessions[user_id]
         
         # Create new session with Ptilopsis context
-        self._chat_sessions[user_id] = self._client.chat(
-            model='gemini-pro',
-            config=self._generation_config
+        model = self._client.GenerativeModel(
+            model_name='gemini-2.0-flash-thinking-exp',
+            generation_config=self._generation_config,
+            safety_settings=self._safety_settings
+        )
+        
+        self._chat_sessions[user_id] = model.start_chat(
+            history=[]
         )
         
         # Add role context with proper formatting
@@ -1007,11 +1011,32 @@ Maintain consistent analytical personality and technical precision regardless of
                 
             # Initialize the client with v1alpha API version
             client = genai.Client(
-                api_key=self.api_key
+                api_key=self.api_key,
+                http_options=genai.types.HttpOptions(api_version='v1alpha')
             )
             
-            # Try to get the model
-            model = client.models.get_model('gemini-pro')
+            # Try to create the model
+            model = client.GenerativeModel(
+                model_name='gemini-2.0-flash-thinking-exp',
+                safety_settings=[
+                    SafetySetting(
+                        category='HARM_CATEGORY_HARASSMENT',
+                        threshold='BLOCK_NONE'
+                    ),
+                    SafetySetting(
+                        category='HARM_CATEGORY_HATE_SPEECH',
+                        threshold='BLOCK_NONE'
+                    ),
+                    SafetySetting(
+                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                        threshold='BLOCK_NONE'
+                    ),
+                    SafetySetting(
+                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
+                        threshold='BLOCK_NONE'
+                    )
+                ]
+            )
             
             # Try a simple test request using async wrapper
             response = await asyncio.to_thread(

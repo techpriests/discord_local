@@ -31,12 +31,15 @@ mock_genai.types = MagicMock()
 mock_genai.types.HarmCategory = MockHarmCategory
 mock_genai.types.HarmBlockThreshold = MockHarmBlockThreshold
 mock_genai.types.GenerationConfig = MockGenerationConfig
+mock_genai.types.HttpOptions = MagicMock(return_value=MagicMock())
+mock_genai.Client = MagicMock()
 mock_genai.configure = MagicMock()
 mock_genai.GenerativeModel = MagicMock()
 
 mock_model = MagicMock()
 mock_model.generate_content = MagicMock(return_value=MagicMock(text="Test response"))
 mock_model.count_tokens = MagicMock(return_value=MagicMock(total_tokens=10))
+mock_model.start_chat = MagicMock(return_value=MagicMock())
 mock_genai.GenerativeModel.return_value = mock_model
 
 # Mock psutil module
@@ -94,9 +97,13 @@ def mock_api_service(mock_genai_fixture) -> MagicMock:
             
             # Configure API
             mock_genai_fixture.configure(api_key=gemini.api_key)
+            mock_genai_fixture.http_options = MagicMock()
+            mock_genai_fixture.types.HttpOptions = MagicMock(return_value=MagicMock())
             
             # Get model
-            gemini._model = mock_genai_fixture.GenerativeModel('gemini-2.0-flash-thinking-exp')
+            gemini._model = mock_genai_fixture.GenerativeModel(
+                model_name='gemini-2.0-flash-thinking-exp'
+            )
             
             # Initialize locks
             gemini._session_lock = AsyncMock()
