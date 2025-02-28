@@ -9,6 +9,7 @@ from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
 import discord
+from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -202,40 +203,40 @@ Maintain consistent analytical personality and technical precision regardless of
         # Configure the Gemini API with v1alpha version for Flash Thinking
         self._client = genai.Client(
             api_key=self.api_key,
-            http_options={'api_version': 'v1alpha'}
+            http_options=types.HttpOptions(api_version='v1alpha')
         )
-        
-        # Configure safety settings (default: block none)
+
+        # Configure safety settings and generation config
         self._safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE"
-            }
+            types.SafetySetting(
+                category='HARM_CATEGORY_HARASSMENT',
+                threshold='BLOCK_NONE'
+            ),
+            types.SafetySetting(
+                category='HARM_CATEGORY_HATE_SPEECH',
+                threshold='BLOCK_NONE'
+            ),
+            types.SafetySetting(
+                category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                threshold='BLOCK_NONE'
+            ),
+            types.SafetySetting(
+                category='HARM_CATEGORY_DANGEROUS_CONTENT',
+                threshold='BLOCK_NONE'
+            )
         ]
-        
-        # Configure generation parameters
-        self._generation_config = {
-            "temperature": 0.9,  # More creative responses
-            "top_p": 1,
-            "top_k": 40,
-            "max_output_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-            "thinking_config": {
-                "include_thoughts": True
-            }
-        }
-        
+
+        self._generation_config = types.GenerateContentConfig(
+            temperature=0.9,  # More creative responses
+            top_p=1,
+            top_k=40,
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+            safety_settings=self._safety_settings,
+            thinking_config=types.ThinkingConfig(
+                include_thoughts=True
+            )
+        )
+
         # Initialize text-only model using Gemini 2.0 Flash Thinking
         self._model = self._client.models.get_model(
             'gemini-2.0-flash-thinking-exp',
@@ -748,35 +749,33 @@ Maintain consistent analytical personality and technical precision regardless of
         return response
 
     async def _get_or_create_chat_session(self, user_id: int) -> Any:
-        """Get existing chat session or create new one for user
+        """Get existing chat session or create new one
         
         Args:
             user_id: Discord user ID
             
         Returns:
-            Chat session for user
+            Chat session object
         """
         current_time = datetime.now()
         
-        # Check if session exists and is not expired
+        # Check if existing session has expired
         if user_id in self._chat_sessions and user_id in self._last_interaction:
             last_time = self._last_interaction[user_id]
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new session with Ptilopsis context using the client's chat creation
-        chat = await self._client.aio.chats.create(
+        # Create new session with Ptilopsis context
+        self._chat_sessions[user_id] = self._client.chat(
             model='gemini-2.0-flash-thinking-exp',
-            safety_settings=self._safety_settings,
-            generation_config=self._generation_config
+            config=self._generation_config
         )
         
         # Add role context with proper formatting
-        await chat.send_message(self.PTILOPSIS_CONTEXT)
+        await self._chat_sessions[user_id].send_message(self.PTILOPSIS_CONTEXT)
         
-        self._chat_sessions[user_id] = chat
         self._last_interaction[user_id] = current_time
-        return chat
+        return self._chat_sessions[user_id]
 
     def _update_last_interaction(self, user_id: int) -> None:
         """Update last interaction time for user
