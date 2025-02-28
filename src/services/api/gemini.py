@@ -4,7 +4,8 @@ from datetime import datetime, timedelta
 import os
 import json
 
-from google import genai
+import google.genai as genai
+from google.genai.types import SafetySetting, GenerateContentConfig
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
@@ -201,44 +202,40 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Configure the Gemini API with v1alpha version for Flash Thinking
         self._client = genai.Client(
-            api_key=self.api_key,
-            http_options={'api_version': 'v1alpha'}
+            api_key=self.api_key
         )
-        
-        # Configure safety settings (default: block none)
+
+        # Configure safety settings and generation config
         self._safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_NONE"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_NONE"
-            }
+            SafetySetting(
+                category='HARM_CATEGORY_HARASSMENT',
+                threshold='BLOCK_NONE'
+            ),
+            SafetySetting(
+                category='HARM_CATEGORY_HATE_SPEECH',
+                threshold='BLOCK_NONE'
+            ),
+            SafetySetting(
+                category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
+                threshold='BLOCK_NONE'
+            ),
+            SafetySetting(
+                category='HARM_CATEGORY_DANGEROUS_CONTENT',
+                threshold='BLOCK_NONE'
+            )
         ]
-        
-        # Configure generation parameters
-        self._generation_config = {
-            "temperature": 0.9,  # More creative responses
-            "top_p": 1,
-            "top_k": 40,
-            "max_output_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-            "thinking_config": {
-                "include_thoughts": True
-            }
-        }
-        
-        # Initialize text-only model using Gemini 2.0 Flash Thinking
+
+        self._generation_config = GenerateContentConfig(
+            temperature=0.9,  # More creative responses
+            top_p=1,
+            top_k=40,
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+            safety_settings=self._safety_settings
+        )
+
+        # Initialize text-only model using standard Gemini model
         self._model = self._client.models.get_model(
-            'gemini-2.0-flash-thinking-exp',
+            'gemini-pro',
             safety_settings=self._safety_settings,
             generation_config=self._generation_config
         )
@@ -748,35 +745,33 @@ Maintain consistent analytical personality and technical precision regardless of
         return response
 
     async def _get_or_create_chat_session(self, user_id: int) -> Any:
-        """Get existing chat session or create new one for user
+        """Get existing chat session or create new one
         
         Args:
             user_id: Discord user ID
             
         Returns:
-            Chat session for user
+            Chat session object
         """
         current_time = datetime.now()
         
-        # Check if session exists and is not expired
+        # Check if existing session has expired
         if user_id in self._chat_sessions and user_id in self._last_interaction:
             last_time = self._last_interaction[user_id]
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new session with Ptilopsis context using the client's chat creation
-        chat = await self._client.aio.chats.create(
-            model='gemini-2.0-flash-thinking-exp',
-            safety_settings=self._safety_settings,
-            generation_config=self._generation_config
+        # Create new session with Ptilopsis context
+        self._chat_sessions[user_id] = self._client.chat(
+            model='gemini-pro',
+            config=self._generation_config
         )
         
         # Add role context with proper formatting
-        await chat.send_message(self.PTILOPSIS_CONTEXT)
+        await self._chat_sessions[user_id].send_message(self.PTILOPSIS_CONTEXT)
         
-        self._chat_sessions[user_id] = chat
         self._last_interaction[user_id] = current_time
-        return chat
+        return self._chat_sessions[user_id]
 
     def _update_last_interaction(self, user_id: int) -> None:
         """Update last interaction time for user
@@ -1012,12 +1007,11 @@ Maintain consistent analytical personality and technical precision regardless of
                 
             # Initialize the client with v1alpha API version
             client = genai.Client(
-                api_key=self.api_key,
-                http_options={'api_version': 'v1alpha'}
+                api_key=self.api_key
             )
             
             # Try to get the model
-            model = client.models.get_model('gemini-2.0-flash-thinking-exp')
+            model = client.models.get_model('gemini-pro')
             
             # Try a simple test request using async wrapper
             response = await asyncio.to_thread(
