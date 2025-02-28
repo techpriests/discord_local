@@ -200,6 +200,12 @@ Maintain consistent analytical personality and technical precision regardless of
         """Initialize Gemini API resources"""
         await super().initialize()
         
+        # Initialize the client with v1alpha version for Flash Thinking
+        self._client = genai.Client(
+            api_key=self.api_key,
+            http_options=genai.types.HttpOptions(api_version='v1alpha')
+        )
+
         # Configure safety settings
         self._safety_settings = [
             SafetySetting(
@@ -228,13 +234,14 @@ Maintain consistent analytical personality and technical precision regardless of
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
         )
         
-        # Configure the Gemini API with v1alpha version for Flash Thinking
-        self._client = genai.GenerativeModel(
-            model_name='gemini-2.0-flash-thinking-exp',
-            api_key=self.api_key,
-            generation_config=self._generation_config,
-            safety_settings=self._safety_settings
+        # Test the API connection
+        response = self._client.models.generate_content(
+            model='gemini-2.0-flash-thinking-exp',
+            contents='test',
+            config=self._generation_config
         )
+        if not response or not response.text:
+            raise ValueError("Failed to initialize Gemini API - test request failed")
         
         # Initialize chat history
         self._chat_sessions = {}
@@ -254,10 +261,7 @@ Maintain consistent analytical personality and technical precision regardless of
         """
         try:
             # Use the client's count_tokens method
-            result = self._client.models.count_tokens(
-                model='gemini-2.0-flash-thinking-exp',
-                contents=text
-            )
+            result = self._client.count_tokens(text)
             return result.total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
@@ -761,7 +765,11 @@ Maintain consistent analytical personality and technical precision regardless of
                 return self._chat_sessions[user_id]
         
         # Create new chat session
-        chat = self._client.start_chat(history=[])
+        chat = self._client.start_chat(
+            model='gemini-2.0-flash-thinking-exp',
+            config=self._generation_config,
+            safety_settings=self._safety_settings
+        )
         
         # Add role context with proper formatting
         chat.send_message(self.PTILOPSIS_CONTEXT)
@@ -987,7 +995,7 @@ Maintain consistent analytical personality and technical precision regardless of
             # Save final usage data
             await self._save_usage_data()
             
-            self._model = None
+            self._client = None
             await super().close()
         except Exception as e:
             logger.error(f"Error during Gemini API cleanup: {e}")
