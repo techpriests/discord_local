@@ -199,7 +199,11 @@ Maintain consistent analytical personality and technical precision regardless of
         """Initialize Gemini API resources"""
         await super().initialize()
         # Configure the Gemini API
-        genai.configure(api_key=self.api_key)
+        genai.configure(
+            api_key=self.api_key,
+            transport="rest",
+            client_options={"api_endpoint": "generativelanguage.googleapis.com", "api_version": "v1alpha"}
+        )
         
         # Configure safety settings (default: block none)
         safety_settings = {
@@ -219,7 +223,7 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Initialize text-only model using Gemini 2.0 Flash
         self._model = genai.GenerativeModel(
-            model_name='gemini-2.0-flash',
+            model_name='gemini-2.0-flash-thinking-exp',
             safety_settings=safety_settings,
             generation_config=generation_config
         )
@@ -993,7 +997,7 @@ Maintain consistent analytical personality and technical precision regardless of
             genai.configure(api_key=self.api_key)
             
             # Try to initialize the model
-            model = genai.GenerativeModel('gemini-2.0-flash')
+            model = genai.GenerativeModel('gemini-2.0-flash-thinking-exp')
             
             # Try a simple test request using async wrapper
             response = await asyncio.to_thread(
