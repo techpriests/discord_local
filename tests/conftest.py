@@ -5,6 +5,7 @@ from contextlib import ExitStack
 import os
 import sys
 import asyncio
+import google.genai as genai  # Import the real package first
 
 # Set up mocks before any imports
 class MockHarmCategory:
@@ -24,8 +25,8 @@ class MockGenerationConfig:
         self.top_k = top_k
         self.max_output_tokens = max_output_tokens
 
-# Create and inject mock before imports
-mock_genai = MagicMock()
+# Create mock for genai module while preserving the real types
+mock_genai = MagicMock(wraps=genai)  # Wrap the real module
 mock_genai.types = MagicMock()
 mock_genai.types.HarmCategory = MockHarmCategory
 mock_genai.types.HarmBlockThreshold = MockHarmBlockThreshold
@@ -37,10 +38,6 @@ mock_model = MagicMock()
 mock_model.generate_content = MagicMock(return_value=MagicMock(text="Test response"))
 mock_model.count_tokens = MagicMock(return_value=MagicMock(total_tokens=10))
 mock_genai.GenerativeModel.return_value = mock_model
-
-# Mock modules
-sys.modules['google'] = MagicMock()
-sys.modules['google.generativeai'] = mock_genai
 
 # Mock psutil module
 mock_psutil = MagicMock()

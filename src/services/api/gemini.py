@@ -4,12 +4,12 @@ from datetime import datetime, timedelta
 import os
 import json
 
-from google import genai
+import google.genai as genai
+from google.genai.types import SafetySetting, GenerateContentConfig
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
 import discord
-from google.genai import types
 
 logger = logging.getLogger(__name__)
 
@@ -202,44 +202,40 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Configure the Gemini API with v1alpha version for Flash Thinking
         self._client = genai.Client(
-            api_key=self.api_key,
-            http_options=types.HttpOptions(api_version='v1alpha')
+            api_key=self.api_key
         )
 
         # Configure safety settings and generation config
         self._safety_settings = [
-            types.SafetySetting(
+            SafetySetting(
                 category='HARM_CATEGORY_HARASSMENT',
                 threshold='BLOCK_NONE'
             ),
-            types.SafetySetting(
+            SafetySetting(
                 category='HARM_CATEGORY_HATE_SPEECH',
                 threshold='BLOCK_NONE'
             ),
-            types.SafetySetting(
+            SafetySetting(
                 category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
                 threshold='BLOCK_NONE'
             ),
-            types.SafetySetting(
+            SafetySetting(
                 category='HARM_CATEGORY_DANGEROUS_CONTENT',
                 threshold='BLOCK_NONE'
             )
         ]
 
-        self._generation_config = types.GenerateContentConfig(
+        self._generation_config = GenerateContentConfig(
             temperature=0.9,  # More creative responses
             top_p=1,
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
-            safety_settings=self._safety_settings,
-            thinking_config=types.ThinkingConfig(
-                include_thoughts=True
-            )
+            safety_settings=self._safety_settings
         )
 
-        # Initialize text-only model using Gemini 2.0 Flash Thinking
+        # Initialize text-only model using standard Gemini model
         self._model = self._client.models.get_model(
-            'gemini-2.0-flash-thinking-exp',
+            'gemini-pro',
             safety_settings=self._safety_settings,
             generation_config=self._generation_config
         )
@@ -767,7 +763,7 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Create new session with Ptilopsis context
         self._chat_sessions[user_id] = self._client.chat(
-            model='gemini-2.0-flash-thinking-exp',
+            model='gemini-pro',
             config=self._generation_config
         )
         
@@ -1011,12 +1007,11 @@ Maintain consistent analytical personality and technical precision regardless of
                 
             # Initialize the client with v1alpha API version
             client = genai.Client(
-                api_key=self.api_key,
-                http_options={'api_version': 'v1alpha'}
+                api_key=self.api_key
             )
             
             # Try to get the model
-            model = client.models.get_model('gemini-2.0-flash-thinking-exp')
+            model = client.models.get_model('gemini-pro')
             
             # Try a simple test request using async wrapper
             response = await asyncio.to_thread(
