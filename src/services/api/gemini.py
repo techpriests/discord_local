@@ -235,8 +235,11 @@ Maintain consistent analytical personality and technical precision regardless of
         )
 
         # Initialize text-only model using flash thinking model
-        self._model = self._client.GenerativeModel(
-            model_name='gemini-2.0-flash-thinking-exp'
+        self._model = genai.GenerativeModel(
+            model_name='gemini-2.0-flash-thinking-exp',
+            generation_config=self._generation_config,
+            safety_settings=self._safety_settings,
+            client=self._client
         )
         
         # Initialize chat history
@@ -256,8 +259,8 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            # Use the client's count_tokens method
-            result = self._client.count_tokens(text)
+            # Use the model's count_tokens method
+            result = self._model.count_tokens(text)
             return result.total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
@@ -761,10 +764,11 @@ Maintain consistent analytical personality and technical precision regardless of
                 return self._chat_sessions[user_id]
         
         # Create new session with Ptilopsis context
-        model = self._client.GenerativeModel(
+        model = genai.GenerativeModel(
             model_name='gemini-2.0-flash-thinking-exp',
             generation_config=self._generation_config,
-            safety_settings=self._safety_settings
+            safety_settings=self._safety_settings,
+            client=self._client
         )
         
         self._chat_sessions[user_id] = model.start_chat(
@@ -1016,8 +1020,9 @@ Maintain consistent analytical personality and technical precision regardless of
             )
             
             # Try to create the model
-            model = client.GenerativeModel(
+            model = genai.GenerativeModel(
                 model_name='gemini-2.0-flash-thinking-exp',
+                generation_config=genai.types.GenerateContentConfig(),
                 safety_settings=[
                     SafetySetting(
                         category='HARM_CATEGORY_HARASSMENT',
@@ -1035,15 +1040,14 @@ Maintain consistent analytical personality and technical precision regardless of
                         category='HARM_CATEGORY_DANGEROUS_CONTENT',
                         threshold='BLOCK_NONE'
                     )
-                ]
+                ],
+                client=client
             )
             
             # Try a simple test request using async wrapper
-            response = await asyncio.to_thread(
-                lambda: model.generate_content("test").text
-            )
+            response = await model.generate_content("test")
             
-            return bool(response)
+            return bool(response.text)
             
         except Exception as e:
             logger.error(f"Failed to validate Gemini credentials: {e}")
