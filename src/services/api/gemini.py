@@ -235,11 +235,10 @@ Maintain consistent analytical personality and technical precision regardless of
         )
 
         # Initialize text-only model using flash thinking model
-        self._model = genai.GenerativeModel(
+        self._model = self._client.models.generate_content(
             model_name='gemini-2.0-flash-thinking-exp',
             generation_config=self._generation_config,
-            safety_settings=self._safety_settings,
-            client=self._client
+            safety_settings=self._safety_settings
         )
         
         # Initialize chat history
@@ -764,14 +763,10 @@ Maintain consistent analytical personality and technical precision regardless of
                 return self._chat_sessions[user_id]
         
         # Create new session with Ptilopsis context
-        model = genai.GenerativeModel(
+        self._chat_sessions[user_id] = self._client.chats.create(
             model_name='gemini-2.0-flash-thinking-exp',
             generation_config=self._generation_config,
             safety_settings=self._safety_settings,
-            client=self._client
-        )
-        
-        self._chat_sessions[user_id] = model.start_chat(
             history=[]
         )
         
@@ -1020,7 +1015,7 @@ Maintain consistent analytical personality and technical precision regardless of
             )
             
             # Try to create the model
-            model = genai.GenerativeModel(
+            model = client.models.generate_content(
                 model_name='gemini-2.0-flash-thinking-exp',
                 generation_config=genai.types.GenerateContentConfig(),
                 safety_settings=[
@@ -1040,8 +1035,7 @@ Maintain consistent analytical personality and technical precision regardless of
                         category='HARM_CATEGORY_DANGEROUS_CONTENT',
                         threshold='BLOCK_NONE'
                     )
-                ],
-                client=client
+                ]
             )
             
             # Try a simple test request using async wrapper
