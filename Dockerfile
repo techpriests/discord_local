@@ -16,10 +16,11 @@ RUN pip install poetry
 # Copy project files
 COPY pyproject.toml poetry.lock ./
 COPY src ./src/
+COPY tests ./tests/
 
 # Install dependencies
 RUN poetry config virtualenvs.create false && \
-    poetry install --only main --no-interaction --no-ansi && \
+    poetry install --no-interaction --no-ansi && \
     pip uninstall -y google-generativeai google-genai && \
     pip install --no-cache-dir google-genai==1.3.0
 
