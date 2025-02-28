@@ -200,9 +200,6 @@ Maintain consistent analytical personality and technical precision regardless of
         """Initialize Gemini API resources"""
         await super().initialize()
         
-        # Configure API key
-        genai.configure(api_key=self.api_key)
-        
         # Configure safety settings
         self._safety_settings = [
             SafetySetting(
@@ -234,6 +231,7 @@ Maintain consistent analytical personality and technical precision regardless of
         # Configure the Gemini API with v1alpha version for Flash Thinking
         self._client = genai.GenerativeModel(
             model_name='gemini-2.0-flash-thinking-exp',
+            api_key=self.api_key,
             generation_config=self._generation_config,
             safety_settings=self._safety_settings
         )
