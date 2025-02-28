@@ -761,10 +761,7 @@ Maintain consistent analytical personality and technical precision regardless of
                 return self._chat_sessions[user_id]
         
         # Create new chat session
-        chat = self._client.chat(
-            model='gemini-2.0-flash-thinking-exp',
-            config=self._generation_config
-        )
+        chat = self._client.start_chat(history=[])
         
         # Add role context with proper formatting
         chat.send_message(self.PTILOPSIS_CONTEXT)
