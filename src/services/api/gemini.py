@@ -762,18 +762,15 @@ Maintain consistent analytical personality and technical precision regardless of
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new session with Ptilopsis context
-        self._chat_sessions[user_id] = self._client.chats.create(
-            model='gemini-2.0-flash-thinking-exp',
-            config=self._generation_config,
-            history=[]
-        )
+        # Create new chat session
+        chat = self._client.start_chat(history=[])
         
         # Add role context with proper formatting
-        await self._chat_sessions[user_id].send_message(self.PTILOPSIS_CONTEXT)
+        chat.send_message(self.PTILOPSIS_CONTEXT)
         
+        self._chat_sessions[user_id] = chat
         self._last_interaction[user_id] = current_time
-        return self._chat_sessions[user_id]
+        return chat
 
     def _update_last_interaction(self, user_id: int) -> None:
         """Update last interaction time for user
@@ -842,8 +839,8 @@ Maintain consistent analytical personality and technical precision regardless of
             # Get or create chat session
             chat = await self._get_or_create_chat_session(user_id)
 
-            # Send message and get response using async chat
-            response = await chat.send_message(prompt)
+            # Send message and get response using sync chat
+            response = chat.send_message(prompt)
 
             # Update last interaction time
             self._update_last_interaction(user_id)
