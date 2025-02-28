@@ -848,7 +848,7 @@ Maintain consistent analytical personality and technical precision regardless of
             chat = await self._get_or_create_chat_session(user_id)
 
             # Send message and get response using sync chat
-            response = chat.send_message(prompt)
+            response = await chat.send_message(prompt)
 
             # Update last interaction time
             self._update_last_interaction(user_id)
