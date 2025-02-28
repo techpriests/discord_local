@@ -200,7 +200,7 @@ Maintain consistent analytical personality and technical precision regardless of
         """Initialize Gemini API resources"""
         await super().initialize()
         
-        # Configure the Gemini API with v1alpha version for Flash Thinking
+        # Initialize the client with v1alpha version for Flash Thinking
         self._client = genai.Client(
             api_key=self.api_key,
             http_options=genai.types.HttpOptions(api_version='v1alpha')
@@ -234,12 +234,14 @@ Maintain consistent analytical personality and technical precision regardless of
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
         )
 
-        # Initialize text-only model using flash thinking model
-        self._model = self._client.models.generate_content(
+        # Test the API connection
+        response = self._client.models.generate_content(
             model='gemini-2.0-flash-thinking-exp',
             contents='test',
             config=self._generation_config
         )
+        if not response or not response.text:
+            raise ValueError("Failed to initialize Gemini API - test request failed")
         
         # Initialize chat history
         self._chat_sessions = {}
@@ -258,8 +260,8 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            # Use the model's count_tokens method
-            result = self._model.count_tokens(text)
+            # Use the client's count_tokens method
+            result = self._client.count_tokens(text)
             return result.total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
@@ -822,8 +824,8 @@ Maintain consistent analytical personality and technical precision regardless of
             if self._is_slowed_down:
                 await asyncio.sleep(5)  # Add 5 second delay
             
-            # Existing validation
-            if not self._model:
+            # Check if client is initialized
+            if not self._client:
                 raise ValueError("Gemini API not initialized")
 
             # Check user rate limits
@@ -989,7 +991,7 @@ Maintain consistent analytical personality and technical precision regardless of
             # Save final usage data
             await self._save_usage_data()
             
-            self._model = None
+            self._client = None
             await super().close()
         except Exception as e:
             logger.error(f"Error during Gemini API cleanup: {e}")
@@ -1017,8 +1019,8 @@ Maintain consistent analytical personality and technical precision regardless of
                 config=genai.types.GenerateContentConfig()
             )
             
-            # Try a simple test request using async wrapper
-            response = await model.generate_content("test")
+            # Try a simple test request
+            response = model.generate_content("test")
             
             return bool(response.text)
             
