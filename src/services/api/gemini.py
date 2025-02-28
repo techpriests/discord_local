@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import os
 import json
 
-from google import genai
+import google.generativeai as genai
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
@@ -206,12 +206,24 @@ Maintain consistent analytical personality and technical precision regardless of
         )
         
         # Configure safety settings (default: block none)
-        self._safety_settings = {
-            "HARM_CATEGORY_HARASSMENT": "BLOCK_NONE",
-            "HARM_CATEGORY_HATE_SPEECH": "BLOCK_NONE",
-            "HARM_CATEGORY_SEXUALLY_EXPLICIT": "BLOCK_NONE",
-            "HARM_CATEGORY_DANGEROUS_CONTENT": "BLOCK_NONE",
-        }
+        self._safety_settings = [
+            {
+                "category": "HARM_CATEGORY_HARASSMENT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_HATE_SPEECH",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                "threshold": "BLOCK_NONE"
+            },
+            {
+                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                "threshold": "BLOCK_NONE"
+            }
+        ]
         
         # Configure generation parameters
         self._generation_config = {
@@ -219,6 +231,9 @@ Maintain consistent analytical personality and technical precision regardless of
             "top_p": 1,
             "top_k": 40,
             "max_output_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+            "thinking_config": {
+                "include_thoughts": True
+            }
         }
         
         # Initialize text-only model using Gemini 2.0 Flash Thinking
