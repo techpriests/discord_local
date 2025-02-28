@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import os
 import json
 
-from google import genai
+import google.generativeai as genai
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
