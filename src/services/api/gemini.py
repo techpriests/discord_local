@@ -199,7 +199,7 @@ Maintain consistent analytical personality and technical precision regardless of
         """Initialize Gemini API resources"""
         await super().initialize()
         
-        # Configure the Gemini API with v1alpha version
+        # Configure the Gemini API with v1alpha version for Flash Thinking
         self._client = genai.Client(
             api_key=self.api_key,
             http_options={'api_version': 'v1alpha'}

@@ -20,8 +20,8 @@ COPY src ./src/
 # Install dependencies
 RUN poetry config virtualenvs.create false && \
     poetry install --only main --no-interaction --no-ansi && \
-    pip uninstall -y google-generativeai && \
-    pip install --no-cache-dir google-generativeai==0.8.4
+    pip uninstall -y google-generativeai google-genai && \
+    pip install --no-cache-dir google-genai==1.3.0
 
 # Add version labels and environment variables
 ARG GIT_COMMIT
