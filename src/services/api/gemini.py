@@ -200,12 +200,9 @@ Maintain consistent analytical personality and technical precision regardless of
         """Initialize Gemini API resources"""
         await super().initialize()
         
-        # Configure the Gemini API with v1alpha version for Flash Thinking
-        self._client = genai.Client(
-            api_key=self.api_key,
-            http_options=genai.types.HttpOptions(api_version='v1alpha')
-        )
-
+        # Configure API key
+        genai.configure(api_key=self.api_key)
+        
         # Configure safety settings
         self._safety_settings = [
             SafetySetting(
@@ -233,12 +230,12 @@ Maintain consistent analytical personality and technical precision regardless of
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
         )
-
-        # Initialize text-only model using flash thinking model
-        self._model = self._client.models.generate_content(
-            model='gemini-2.0-flash-thinking-exp',
-            contents='test',
-            config=self._generation_config
+        
+        # Configure the Gemini API with v1alpha version for Flash Thinking
+        self._client = genai.GenerativeModel(
+            model_name='gemini-2.0-flash-thinking-exp',
+            generation_config=self._generation_config,
+            safety_settings=self._safety_settings
         )
         
         # Initialize chat history
@@ -258,8 +255,11 @@ Maintain consistent analytical personality and technical precision regardless of
             ValueError: If token counting fails
         """
         try:
-            # Use the model's count_tokens method
-            result = self._model.count_tokens(text)
+            # Use the client's count_tokens method
+            result = self._client.models.count_tokens(
+                model='gemini-2.0-flash-thinking-exp',
+                contents=text
+            )
             return result.total_tokens
         except Exception as e:
             logger.warning(f"Failed to count tokens accurately: {e}")
@@ -762,18 +762,18 @@ Maintain consistent analytical personality and technical precision regardless of
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new session with Ptilopsis context
-        self._chat_sessions[user_id] = self._client.chats.create(
+        # Create new chat session
+        chat = self._client.chat(
             model='gemini-2.0-flash-thinking-exp',
-            config=self._generation_config,
-            history=[]
+            config=self._generation_config
         )
         
         # Add role context with proper formatting
-        await self._chat_sessions[user_id].send_message(self.PTILOPSIS_CONTEXT)
+        chat.send_message(self.PTILOPSIS_CONTEXT)
         
+        self._chat_sessions[user_id] = chat
         self._last_interaction[user_id] = current_time
-        return self._chat_sessions[user_id]
+        return chat
 
     def _update_last_interaction(self, user_id: int) -> None:
         """Update last interaction time for user
@@ -825,8 +825,8 @@ Maintain consistent analytical personality and technical precision regardless of
             if self._is_slowed_down:
                 await asyncio.sleep(5)  # Add 5 second delay
             
-            # Existing validation
-            if not self._model:
+            # Check if client is initialized
+            if not self._client:
                 raise ValueError("Gemini API not initialized")
 
             # Check user rate limits
@@ -842,8 +842,8 @@ Maintain consistent analytical personality and technical precision regardless of
             # Get or create chat session
             chat = await self._get_or_create_chat_session(user_id)
 
-            # Send message and get response using async chat
-            response = await chat.send_message(prompt)
+            # Send message and get response using sync chat
+            response = chat.send_message(prompt)
 
             # Update last interaction time
             self._update_last_interaction(user_id)
@@ -1020,8 +1020,8 @@ Maintain consistent analytical personality and technical precision regardless of
                 config=genai.types.GenerateContentConfig()
             )
             
-            # Try a simple test request using async wrapper
-            response = await model.generate_content("test")
+            # Try a simple test request
+            response = model.generate_content("test")
             
             return bool(response.text)
             
