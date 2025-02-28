@@ -770,10 +770,7 @@ Maintain consistent analytical personality and technical precision regardless of
         # Create new chat session
         chat = self._client.aio.chats.create(
             model='gemini-2.0-flash-thinking-exp',
-            config=GenerateContentConfig(
-                generation_config=self._generation_config,
-                safety_settings=self._safety_settings
-            )
+            config=self._generation_config
         )
         
         # Add role context with proper formatting
