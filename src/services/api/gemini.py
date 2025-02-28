@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 import os
 import json
 
-import google.generativeai as genai
+from google import genai
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
@@ -199,7 +199,7 @@ Maintain consistent analytical personality and technical precision regardless of
         """Initialize Gemini API resources"""
         await super().initialize()
         
-        # Initialize the client with v1alpha API version
+        # Configure the Gemini API with v1alpha version
         self._client = genai.Client(
             api_key=self.api_key,
             http_options={'api_version': 'v1alpha'}
