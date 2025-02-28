@@ -233,7 +233,7 @@ Maintain consistent analytical personality and technical precision regardless of
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
         )
-
+        
         # Test the API connection
         response = self._client.models.generate_content(
             model='gemini-2.0-flash-thinking-exp',
