@@ -99,7 +99,7 @@ def mock_api_service(mock_genai_fixture) -> MagicMock:
             mock_genai_fixture.configure(api_key=gemini.api_key)
             
             # Get model
-            gemini._model = mock_genai_fixture.GenerativeModel('gemini-2.0-flash')
+            gemini._model = mock_genai_fixture.GenerativeModel('gemini-2.0-flash-thinking-exp')
             
             # Initialize locks
             gemini._session_lock = AsyncMock()

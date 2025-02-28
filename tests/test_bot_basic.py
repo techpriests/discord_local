@@ -249,7 +249,7 @@ class TestGeminiInitialization:
         mock_genai_fixture.configure.assert_called_once_with(api_key=gemini_api.api_key)
         
         # 3. Verify model initialization
-        mock_genai_fixture.GenerativeModel.assert_called_once_with('gemini-2.0-flash')
+        mock_genai_fixture.GenerativeModel.assert_called_once_with('gemini-2.0-flash-thinking-exp')
         
         # 4. Verify safety settings format
         gemini_api._safety_settings == [
