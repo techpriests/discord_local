@@ -694,6 +694,20 @@ Maintain consistent analytical personality and technical precision regardless of
         # Remove any leading/trailing whitespace
         response = response.strip()
         
+        # Convert HTML-style tags to Discord-friendly format
+        # Handle subscripts and superscripts
+        while '<sub>' in response and '</sub>' in response:
+            start = response.find('<sub>')
+            end = response.find('</sub>') + 6
+            sub_text = response[start + 5:end - 6]
+            response = response[:start] + '_' + sub_text + '_' + response[end:]
+            
+        while '<sup>' in response and '</sup>' in response:
+            start = response.find('<sup>')
+            end = response.find('</sup>') + 6
+            sup_text = response[start + 5:end - 6]
+            response = response[:start] + '^' + sup_text + response[end:]
+        
         # Process code blocks to ensure proper Discord formatting
         lines = response.split('\n')
         in_code_block = False
