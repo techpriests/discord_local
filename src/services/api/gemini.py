@@ -765,7 +765,7 @@ Maintain consistent analytical personality and technical precision regardless of
                 return self._chat_sessions[user_id]
         
         # Create new chat session
-        chat = self._client.start_chat(
+        chat = self._client.aio.chats.create(
             model='gemini-2.0-flash-thinking-exp',
             config=self._generation_config,
             safety_settings=self._safety_settings

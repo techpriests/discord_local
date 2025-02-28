@@ -39,7 +39,7 @@ mock_genai.GenerativeModel = MagicMock()
 mock_model = MagicMock()
 mock_model.generate_content = MagicMock(return_value=MagicMock(text="Test response"))
 mock_model.count_tokens = MagicMock(return_value=MagicMock(total_tokens=10))
-mock_model.start_chat = MagicMock(return_value=MagicMock())
+mock_model.aio.chats.create = MagicMock(return_value=MagicMock())
 mock_genai.GenerativeModel.return_value = mock_model
 
 # Mock psutil module
