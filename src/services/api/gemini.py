@@ -236,9 +236,9 @@ Maintain consistent analytical personality and technical precision regardless of
 
         # Initialize text-only model using flash thinking model
         self._model = self._client.models.generate_content(
-            model_name='gemini-2.0-flash-thinking-exp',
-            generation_config=self._generation_config,
-            safety_settings=self._safety_settings
+            model='gemini-2.0-flash-thinking-exp',
+            contents='test',
+            config=self._generation_config
         )
         
         # Initialize chat history
@@ -764,9 +764,8 @@ Maintain consistent analytical personality and technical precision regardless of
         
         # Create new session with Ptilopsis context
         self._chat_sessions[user_id] = self._client.chats.create(
-            model_name='gemini-2.0-flash-thinking-exp',
-            generation_config=self._generation_config,
-            safety_settings=self._safety_settings,
+            model='gemini-2.0-flash-thinking-exp',
+            config=self._generation_config,
             history=[]
         )
         
@@ -1016,26 +1015,9 @@ Maintain consistent analytical personality and technical precision regardless of
             
             # Try to create the model
             model = client.models.generate_content(
-                model_name='gemini-2.0-flash-thinking-exp',
-                generation_config=genai.types.GenerateContentConfig(),
-                safety_settings=[
-                    SafetySetting(
-                        category='HARM_CATEGORY_HARASSMENT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    SafetySetting(
-                        category='HARM_CATEGORY_HATE_SPEECH',
-                        threshold='BLOCK_NONE'
-                    ),
-                    SafetySetting(
-                        category='HARM_CATEGORY_SEXUALLY_EXPLICIT',
-                        threshold='BLOCK_NONE'
-                    ),
-                    SafetySetting(
-                        category='HARM_CATEGORY_DANGEROUS_CONTENT',
-                        threshold='BLOCK_NONE'
-                    )
-                ]
+                model='gemini-2.0-flash-thinking-exp',
+                contents='test',
+                config=genai.types.GenerateContentConfig()
             )
             
             # Try a simple test request using async wrapper
