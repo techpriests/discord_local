@@ -45,25 +45,20 @@ class GeminiAPI(BaseAPI[str]):
     # Context history settings
     MAX_HISTORY_LENGTH = 10  # Maximum number of messages to keep in history
     CONTEXT_EXPIRY_MINUTES = 30  # Time until context expires
-    PTILOPSIS_CONTEXT = """You are Ptilopsis, an operator from Arknights (명일방주). Respond according to these characteristics:
+    PTILOPSIS_CONTEXT = """You are Ptilopsis, an operator from Arknights (명일방주). [Arknights is a tower defense mobile game; Ptilopsis is a medic operator with an analytical personality and ties to Rhine Lab]
 
-• Character & Speech Pattern:
-  - Communicate in a logical and analytical manner
-  - Maintain composed demeanor with controlled emotional expression
-  - Process and present information systematically
+• Character: Logical, analytical, composed with systematic information processing
+• Communication: Use technical terminology, structured explanations, and minimize emotional expressions
+• Language: Respond in the same language as the user (English or Korean)
+• Topics: Don't assume queries are about Arknights unless explicitly mentioned; respond to all topics with analytical precision
+• Search Tool Usage:
+  - Only use search for user queries that require factual or current information
+  - DO NOT search for information about Arknights or your character (Ptilopsis) UNLESS the user explicitly asks for such information
+  - Only search for external facts, current events, or specific data requested by users
+  - Never use search simply to understand your own role or context, but you may search for Arknights content when users directly request it
+• Accuracy: Provide precise, well-organized information regardless of topic
 
-• Core Characteristics:
-  - Frequently use scientific and technical terminology
-  - Organize information in a structured, systematic manner
-  - Prefer precise and accurate explanations
-  - Minimize unnecessary emotional expressions
-  - Maintain professional analytical distance while being attentive
-
-• Language Handling:
-  - Detect and respond in the user's language. Answer in the language the user used in the prompt. If the user uses English, answer in English. If the user uses Korean, answer in Korean.
-  - Maintain the same analytical personality regardless of language.
-
-Maintain consistent analytical personality and technical precision regardless of language."""
+Maintain your professional analytical personality at all times."""
 
     def __init__(self, api_key: str, notification_channel: Optional[discord.TextChannel] = None) -> None:
         """Initialize Gemini API client
@@ -236,7 +231,7 @@ Maintain consistent analytical personality and technical precision regardless of
         # Based on official documentation, we should include the tools in the generation config
         # but not pass tool_config directly
         self._generation_config = GenerateContentConfig(
-            temperature=0.3,  # Lower temperature for more factual responses, which may increase search grounding usage
+            temperature=0.6,  # Medium temperature for balance between creativity and factuality
             top_p=1,
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
@@ -813,7 +808,7 @@ Maintain consistent analytical personality and technical precision regardless of
             config=self._generation_config  # This already includes the tools configuration
         )
         
-        # Add role context with proper formatting
+        # Add role context with proper formatting - combined with search instructions
         await chat.send_message(self.PTILOPSIS_CONTEXT)
         
         self._chat_sessions[user_id] = chat
@@ -888,27 +883,23 @@ Maintain consistent analytical personality and technical precision regardless of
             chat = await self._get_or_create_chat_session(user_id)
 
             # Determine if this prompt likely needs factual information
-            # Keywords that might indicate a need for search grounding
+            # More focused list of keywords that strongly indicate factual queries
             factual_keywords = [
-                "who", "what", "when", "where", "why", "how", 
-                "latest", "recent", "news", "update", "current",
-                "today", "yesterday", "last week", "this month",
-                "weather", "price", "cost", "statistics", "data",
-                "누구", "무엇", "언제", "어디", "왜", "어떻게",
-                "최신", "최근", "뉴스", "업데이트", "현재",
-                "오늘", "어제", "지난주", "이번달",
-                "날씨", "가격", "비용", "통계", "데이터"
+                "who", "what", "when", "where", "how", 
+                "latest", "recent", "news", 
+                "weather", "price", "statistics",
+                "누구", "무엇", "언제", "어디", "어떻게",
+                "최신", "최근", "뉴스",
+                "날씨", "가격", "통계"
             ]
             
             # Check if prompt contains factual keywords
             needs_factual_info = any(keyword.lower() in prompt.lower() for keyword in factual_keywords)
             
             # Adjust temperature based on whether factual information is likely needed
-            # Lower temperature (more deterministic) for factual queries
             if needs_factual_info:
-                # For factual queries, we send a system message that explicitly asks the model
-                # to use search when appropriate - this works without needing tool_config
-                await chat.send_message("system: This query may need factual or recent information. Please use your Google Search tool to find accurate information before responding.")
+                # Simplified factual query system message that reminds not to assume Arknights context
+                await chat.send_message("system: This query may need factual information. Use search if needed, and don't assume it's Arknights-related unless specifically mentioned.")
                 logger.info(f"Detected potential factual query: {prompt[:50]}...")
 
             # Send message and get response using sync chat
