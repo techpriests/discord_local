@@ -687,11 +687,12 @@ Maintain your professional analytical personality at all times."""
                     }
                 ))
 
-    def _process_response(self, response: str) -> str:
+    def _process_response(self, response: str, search_used: bool = False) -> str:
         """Process and format Gemini's response before sending
         
         Args:
             response: Raw response from Gemini
+            search_used: Whether the response contains search grounding results
 
         Returns:
             str: Processed response
@@ -699,8 +700,28 @@ Maintain your professional analytical personality at all times."""
         # Remove any leading/trailing whitespace
         response = response.strip()
         
+        # If response has search grounding, apply minimal formatting
+        if search_used:
+            # Only perform whitespace normalization and fix any broken code blocks
+            # Do not modify or intersperse content with the grounded results
+            lines = response.split('\n')
+            processed_lines = []
+            in_code_block = False
+            
+            for line in lines:
+                # Check for code block markers to ensure they're properly formatted
+                if '```' in line:
+                    in_code_block = not in_code_block
+                    # Ensure language is specified for code blocks
+                    if in_code_block and line.strip() == '```':
+                        line = '```text'
+                processed_lines.append(line)
+            
+            # Join lines with original spacing preserved
+            return '\n'.join(processed_lines)
+        
+        # For non-search grounded responses, continue with normal formatting
         # Process search grounding citations if present
-        # Look for citation patterns like [1], [2], etc.
         citation_pattern = r'\[\d+\]'
         has_citations = bool(re.search(citation_pattern, response))
         
@@ -896,6 +917,7 @@ Maintain your professional analytical personality at all times."""
             # Check if search grounding was used
             response_text = response.text
             search_used = False
+            search_suggestions = []
             
             # Method 1: Check for grounding_metadata (most reliable)
             if hasattr(response, 'candidates') and response.candidates:
@@ -903,6 +925,11 @@ Maintain your professional analytical personality at all times."""
                     if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
                         search_used = True
                         logger.info("Search grounding detected via grounding_metadata")
+                        
+                        # Extract search suggestions if available
+                        if hasattr(candidate.grounding_metadata, 'web_search_queries'):
+                            search_suggestions = candidate.grounding_metadata.web_search_queries
+                            logger.info(f"Found {len(search_suggestions)} search suggestions")
                         break
             
             # Method 2: Check for function calls as fallback
@@ -929,7 +956,15 @@ Maintain your professional analytical personality at all times."""
                 logger.info("Search grounding was used for the response")
 
             # Process the response
-            processed_response = self._process_response(response_text)
+            processed_response = self._process_response(response_text, search_used)
+            
+            # Add search suggestions if available (required by Google guidelines)
+            if search_used and search_suggestions:
+                suggestion_text = "\n\n**Related searches:**\n"
+                for suggestion in search_suggestions:
+                    suggestion_text += f"• {suggestion}\n"
+                processed_response += suggestion_text
+                logger.info("Added search suggestions to the response")
 
             # Track usage
             await self._track_request(prompt, processed_response)
