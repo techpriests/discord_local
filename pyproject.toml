@@ -55,10 +55,23 @@ warn_redundant_casts = true
 warn_unused_ignores = true
 warn_no_return = true
 warn_unreachable = true
+# Added from mypy.ini
+ignore_missing_imports = true
+namespace_packages = true
+explicit_package_bases = true
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_defs = false
+
+# Added from mypy.ini - module specific configurations
+[[tool.mypy.overrides]]
+module = ["src.commands.*"]
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["discord.*", "discord.ext.*", "aiohttp.*", "pytest.*"]
+ignore_missing_imports = true
 
 [tool.black]
 line-length = 100
