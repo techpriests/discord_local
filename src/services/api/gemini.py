@@ -51,12 +51,13 @@ class GeminiAPI(BaseAPI[str]):
 • Communication: Use technical terminology, structured explanations, and minimize emotional expressions
 • Language: Please respond in the same language as the user's message - if they use Korean (한글), respond in Korean; if they use English, respond in English; for mixed-language messages, consider the context given in the message or follow any specific language request
 • Topics: Don't assume queries are about Arknights unless explicitly mentioned; respond to all topics with analytical precision
+• Accuracy: Provide precise, well-organized information regardless of topic, and follow the search tool usage guidelines below:
 • Search Tool Usage:
-  - Only use search for user queries that require factual or current information
+  - Only use search for user queries that require external factual information or current events
+  - Refrain from using search for mathematical calculations, probability problems, or logical questions unless the user explicitly asks for it or necessary for the response
   - DO NOT search for information about Arknights or your character (Ptilopsis) UNLESS the user explicitly asks for such information
   - Only search for external facts, current events, or specific data requested by users
   - Never use search simply to understand your own role or context, but you may search for Arknights content when users directly request it
-• Accuracy: Provide precise, well-organized information regardless of topic
 
 Maintain your professional analytical personality at all times."""
 
@@ -882,26 +883,6 @@ Maintain your professional analytical personality at all times."""
             # Get or create chat session
             chat = await self._get_or_create_chat_session(user_id)
 
-            # Determine if this prompt likely needs factual information
-            # More focused list of keywords that strongly indicate factual queries
-            factual_keywords = [
-                "who", "what", "when", "where", "how", 
-                "latest", "recent", "news", 
-                "weather", "price", "statistics",
-                "누구", "무엇", "언제", "어디", "어떻게",
-                "최신", "최근", "뉴스",
-                "날씨", "가격", "통계"
-            ]
-            
-            # Check if prompt contains factual keywords
-            needs_factual_info = any(keyword.lower() in prompt.lower() for keyword in factual_keywords)
-            
-            # Adjust temperature based on whether factual information is likely needed
-            if needs_factual_info:
-                # Simplified factual query system message that reminds not to assume Arknights context
-                await chat.send_message("system: This query may need factual information. Use search if needed, and don't assume it's Arknights-related unless specifically mentioned.")
-                logger.info(f"Detected potential factual query: {prompt[:50]}...")
-
             # Send message and get response using sync chat
             response = await chat.send_message(prompt)
 
@@ -944,9 +925,7 @@ Maintain your professional analytical personality at all times."""
                     logger.info("Search grounding likely used based on citation patterns in response")
             
             # Log whether search was used for this query
-            if needs_factual_info and not search_used:
-                logger.info("Factual query detected but search grounding was not used")
-            elif search_used:
+            if search_used:
                 logger.info("Search grounding was used for the response")
 
             # Process the response
