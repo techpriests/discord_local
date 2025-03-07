@@ -915,8 +915,68 @@ Maintain your professional analytical personality at all times."""
             if not response or not response.text:
                 raise ValueError("Empty response from Gemini")
                 
-            # Check if search grounding was used
+            # Add detailed diagnostic logging
+            logger.info("==== RESPONSE DIAGNOSTIC START ====")
+            logger.info(f"Response type: {type(response)}")
+            logger.info(f"Response attributes: {dir(response)}")
+            
+            # Extract and log basic response info
             response_text = response.text
+            logger.info(f"Response text starts with: {response_text[:100]}...")
+            
+            # Check for candidates
+            has_candidates = hasattr(response, 'candidates')
+            logger.info(f"Has candidates: {has_candidates}")
+            
+            if has_candidates and response.candidates:
+                logger.info(f"Number of candidates: {len(response.candidates)}")
+                
+                # Log first candidate details
+                candidate = response.candidates[0]
+                logger.info(f"Candidate type: {type(candidate)}")
+                logger.info(f"Candidate attributes: {dir(candidate)}")
+                
+                # Check for grounding_metadata
+                has_grounding = hasattr(candidate, 'grounding_metadata')
+                logger.info(f"Has grounding_metadata: {has_grounding}")
+                
+                if has_grounding and candidate.grounding_metadata:
+                    metadata = candidate.grounding_metadata
+                    logger.info(f"Grounding metadata type: {type(metadata)}")
+                    logger.info(f"Grounding metadata attributes: {dir(metadata)}")
+                    
+                    # Check for web_search_queries
+                    has_queries = hasattr(metadata, 'web_search_queries')
+                    logger.info(f"Has web_search_queries: {has_queries}")
+                    
+                    if has_queries and metadata.web_search_queries:
+                        logger.info(f"Web search queries: {metadata.web_search_queries}")
+                    else:
+                        logger.info("Web search queries is None or empty")
+                    
+                    # Check for search_entry_point
+                    has_entry_point = hasattr(metadata, 'search_entry_point')
+                    logger.info(f"Has search_entry_point: {has_entry_point}")
+                    
+                    if has_entry_point and metadata.search_entry_point:
+                        entry_point = metadata.search_entry_point
+                        logger.info(f"Search entry point type: {type(entry_point)}")
+                        logger.info(f"Search entry point attributes: {dir(entry_point)}")
+                        
+                        has_rendered = hasattr(entry_point, 'rendered_content')
+                        logger.info(f"Has rendered_content: {has_rendered}")
+                        
+                        if has_rendered and entry_point.rendered_content:
+                            logger.info(f"Rendered content preview: {entry_point.rendered_content[:100]}...")
+                        else:
+                            logger.info("Rendered content is None or empty")
+                    else:
+                        logger.info("Search entry point is None or empty")
+                else:
+                    logger.info("Grounding metadata is None or empty")
+            logger.info("==== RESPONSE DIAGNOSTIC END ====")
+            
+            # Check if search grounding was used
             search_used = False
             search_suggestions = []
             rendered_content = None
@@ -967,6 +1027,8 @@ Maintain your professional analytical personality at all times."""
             # Log whether search was used for this query
             if search_used:
                 logger.info("Search grounding was used for the response")
+            else:
+                logger.info("No search grounding was detected for this response")
 
             # Process the response
             processed_response = self._process_response(response_text, search_used)
@@ -991,6 +1053,8 @@ Maintain your professional analytical personality at all times."""
                         suggestion_text += f"• [{suggestion}]({search_url})\n"
                     processed_response += suggestion_text
                     logger.info("Added search suggestions with clickable links to the response")
+                else:
+                    logger.info("Search was used but no suggestions were available to display")
 
             # Track usage
             await self._track_request(prompt, processed_response)
