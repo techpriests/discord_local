@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import os
 import json
 import re
+import urllib.parse
 
 import google.genai as genai
 from google.genai.types import SafetySetting, GenerateContentConfig, HttpOptions, Tool, GoogleSearch
@@ -918,6 +919,7 @@ Maintain your professional analytical personality at all times."""
             response_text = response.text
             search_used = False
             search_suggestions = []
+            rendered_content = None
             
             # Method 1: Check for grounding_metadata (most reliable)
             if hasattr(response, 'candidates') and response.candidates:
@@ -926,7 +928,18 @@ Maintain your professional analytical personality at all times."""
                         search_used = True
                         logger.info("Search grounding detected via grounding_metadata")
                         
-                        # Extract search suggestions if available
+                        # Log the entire grounding_metadata for debugging
+                        logger.debug(f"Grounding metadata structure: {dir(candidate.grounding_metadata)}")
+                        
+                        # Extract search entry point if available - this is the preferred way
+                        if hasattr(candidate.grounding_metadata, 'search_entry_point') and candidate.grounding_metadata.search_entry_point:
+                            search_entry_point = candidate.grounding_metadata.search_entry_point
+                            logger.info("Found search entry point")
+                            if hasattr(search_entry_point, 'rendered_content') and search_entry_point.rendered_content:
+                                rendered_content = search_entry_point.rendered_content
+                                logger.info("Found rendered content for search suggestions")
+                        
+                        # Extract search suggestions as fallback
                         if hasattr(candidate.grounding_metadata, 'web_search_queries'):
                             search_suggestions = candidate.grounding_metadata.web_search_queries
                             logger.info(f"Found {len(search_suggestions)} search suggestions")
@@ -959,12 +972,25 @@ Maintain your professional analytical personality at all times."""
             processed_response = self._process_response(response_text, search_used)
             
             # Add search suggestions if available (required by Google guidelines)
-            if search_used and search_suggestions:
-                suggestion_text = "\n\n**Related searches:**\n"
-                for suggestion in search_suggestions:
-                    suggestion_text += f"• {suggestion}\n"
-                processed_response += suggestion_text
-                logger.info("Added search suggestions to the response")
+            if search_used:
+                # Preferred method: Use the rendered content if available
+                if rendered_content:
+                    # The rendered_content is pre-formatted HTML that should be used as-is
+                    # For Discord, we might need to convert HTML to Discord's markdown
+                    processed_response += "\n\n**Google Search Suggestions:**\n"
+                    processed_response += rendered_content
+                    logger.info("Added pre-formatted search suggestions from rendered_content")
+                
+                # Fallback method: Use web_search_queries if available
+                elif search_suggestions:
+                    suggestion_text = "\n\n**Related searches:**\n"
+                    for suggestion in search_suggestions:
+                        # Format as a clickable link
+                        query_param = urllib.parse.quote(suggestion)
+                        search_url = f"https://www.google.com/search?q={query_param}"
+                        suggestion_text += f"• [{suggestion}]({search_url})\n"
+                    processed_response += suggestion_text
+                    logger.info("Added search suggestions with clickable links to the response")
 
             # Track usage
             await self._track_request(prompt, processed_response)
