@@ -5,6 +5,7 @@ import os
 import json
 import re
 import urllib.parse
+from urllib.parse import urlparse
 
 import google.genai as genai
 from google.genai.types import SafetySetting, GenerateContentConfig, HttpOptions, Tool, GoogleSearch
@@ -1032,18 +1033,22 @@ Maintain your professional analytical personality at all times."""
                                     if hasattr(chunk.web, 'title') and hasattr(chunk.web, 'uri'):
                                         title = chunk.web.title or "Source"
                                         uri = chunk.web.uri
+                                        # Extract domain for display
+                                        domain = urlparse(uri).netloc if uri else ""
                                         if uri:
-                                            source_links.append((title, uri))
-                                            logger.info(f"Added web source: {title} - {uri}")
+                                            source_links.append((title, uri, domain))
+                                            logger.info(f"Added web source: {title} - {uri} ({domain})")
                                 
                                 # Extract from retrieved_context chunks
                                 if hasattr(chunk, 'retrieved_context') and chunk.retrieved_context:
                                     if hasattr(chunk.retrieved_context, 'title') and hasattr(chunk.retrieved_context, 'uri'):
                                         title = chunk.retrieved_context.title or "Source"
                                         uri = chunk.retrieved_context.uri
+                                        # Extract domain for display
+                                        domain = urlparse(uri).netloc if uri else ""
                                         if uri:
-                                            source_links.append((title, uri))
-                                            logger.info(f"Added context source: {title} - {uri}")
+                                            source_links.append((title, uri, domain))
+                                            logger.info(f"Added context source: {title} - {uri} ({domain})")
                         
                         # Extract search entry point if available - this is the preferred way
                         if hasattr(candidate.grounding_metadata, 'search_entry_point') and candidate.grounding_metadata.search_entry_point:
@@ -1090,33 +1095,29 @@ Maintain your professional analytical personality at all times."""
             # Add source links from grounding chunks if available
             if source_links:
                 sources_text = "\n\n**Sources:**\n"
-                for i, (title, uri) in enumerate(source_links):
-                    sources_text += f"{i+1}. [{title}]({uri})\n"
+                for i, (title, uri, domain) in enumerate(source_links):
+                    # Format to show both title and domain for relevance assessment
+                    sources_text += f"{i+1}. **{title}**\n   {domain}\n   [{uri}]({uri})\n"
                 processed_response += sources_text
                 logger.info(f"Added {len(source_links)} source links from grounding chunks")
             
-            # Add search suggestions if available (required by Google guidelines)
+            # Always add search suggestions if available (not just as fallback)
+            if search_used and search_suggestions:
+                suggestion_text = "\n\n**Search on Google:**\n"
+                for suggestion in search_suggestions:
+                    # Format as a clickable link with Google icon approximation
+                    query_param = urllib.parse.quote(suggestion)
+                    search_url = f"https://www.google.com/search?q={query_param}"
+                    suggestion_text += f"🔍 [{suggestion}]({search_url})\n"
+                processed_response += suggestion_text
+                logger.info("Added search suggestions with clickable links")
+            elif search_used and rendered_content:
+                # Use rendered content if available and no search suggestions
+                processed_response += "\n\n**Google Search Suggestions:**\n"
+                processed_response += rendered_content
+                logger.info("Added pre-formatted search suggestions from rendered_content")
             elif search_used:
-                # Preferred method: Use the rendered content if available
-                if rendered_content:
-                    # The rendered_content is pre-formatted HTML that should be used as-is
-                    # For Discord, we might need to convert HTML to Discord's markdown
-                    processed_response += "\n\n**Google Search Suggestions:**\n"
-                    processed_response += rendered_content
-                    logger.info("Added pre-formatted search suggestions from rendered_content")
-                
-                # Fallback method: Use web_search_queries if available
-                elif search_suggestions:
-                    suggestion_text = "\n\n**Related searches:**\n"
-                    for suggestion in search_suggestions:
-                        # Format as a clickable link
-                        query_param = urllib.parse.quote(suggestion)
-                        search_url = f"https://www.google.com/search?q={query_param}"
-                        suggestion_text += f"• [{suggestion}]({search_url})\n"
-                    processed_response += suggestion_text
-                    logger.info("Added search suggestions with clickable links to the response")
-                else:
-                    logger.info("Search was used but no suggestions were available to display")
+                logger.info("Search was used but no suggestions were available to display")
 
             # Track usage
             await self._track_request(prompt, processed_response)
