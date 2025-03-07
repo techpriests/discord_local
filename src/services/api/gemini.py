@@ -234,7 +234,7 @@ Maintain consistent analytical personality and technical precision regardless of
 
         # Configure generation settings
         self._generation_config = GenerateContentConfig(
-            temperature=0.3,  # More precise responses
+            temperature=0.2,  # Lower temperature for more factual responses
             top_p=1,
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
@@ -817,7 +817,6 @@ Maintain consistent analytical personality and technical precision regardless of
         chat = self._client.aio.chats.create(
             model='gemini-2.0-flash',
             config=self._generation_config,
-            tools=[self._google_search_tool],  # Enable search grounding by adding the tool here
             tool_config=self._tool_config  # Add tool configuration
         )
         
@@ -928,15 +927,11 @@ Maintain consistent analytical personality and technical precision regardless of
             if not response or not response.text:
                 raise ValueError("Empty response from Gemini")
                 
-            # Check if search grounding was used - we have three methods to detect this:
-            # 1. Check for grounding_metadata - most reliable, direct method
-            # 2. Check for function_call with name "google_search" - backup method
-            # 3. Look for citation patterns like [1], [2] in text - least reliable but catches most cases
+            # Check if search grounding was used
             response_text = response.text
             search_used = False
             
             # Method 1: Check for grounding_metadata (most reliable)
-            # This is the official way to detect search grounding according to the documentation
             if hasattr(response, 'candidates') and response.candidates:
                 for candidate in response.candidates:
                     if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
@@ -945,7 +940,6 @@ Maintain consistent analytical personality and technical precision regardless of
                         break
             
             # Method 2: Check for function calls as fallback
-            # If the model used the google_search function call, it used search grounding
             if not search_used and hasattr(response, 'candidates') and response.candidates:
                 for candidate in response.candidates:
                     if hasattr(candidate, 'content') and candidate.content:
@@ -958,7 +952,6 @@ Maintain consistent analytical personality and technical precision regardless of
                                     break
             
             # Method 3: Check for citation patterns in the text as last resort
-            # If we see citation patterns like [1], [2], etc., this likely indicates search grounding
             if not search_used:
                 citation_pattern = r'\[\d+\]'
                 if re.search(citation_pattern, response_text):
