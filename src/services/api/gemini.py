@@ -945,6 +945,35 @@ Maintain your professional analytical personality at all times."""
                     logger.info(f"Grounding metadata type: {type(metadata)}")
                     logger.info(f"Grounding metadata attributes: {dir(metadata)}")
                     
+                    # Check for grounding_chunks
+                    has_chunks = hasattr(metadata, 'grounding_chunks')
+                    logger.info(f"Has grounding_chunks: {has_chunks}")
+                    
+                    if has_chunks and metadata.grounding_chunks:
+                        logger.info(f"Found {len(metadata.grounding_chunks)} grounding chunks")
+                        # Log first chunk to understand structure
+                        chunk = metadata.grounding_chunks[0]
+                        logger.info(f"Chunk type: {type(chunk)}")
+                        logger.info(f"Chunk attributes: {dir(chunk)}")
+                        
+                        # Check for web info in chunk
+                        if hasattr(chunk, 'web') and chunk.web:
+                            logger.info(f"Chunk has web info: {chunk.web}")
+                            if hasattr(chunk.web, 'title'):
+                                logger.info(f"Web chunk title: {chunk.web.title}")
+                            if hasattr(chunk.web, 'uri'):
+                                logger.info(f"Web chunk URI: {chunk.web.uri}")
+                        
+                        # Check for retrieved_context in chunk
+                        if hasattr(chunk, 'retrieved_context') and chunk.retrieved_context:
+                            logger.info(f"Chunk has retrieved_context: {chunk.retrieved_context}")
+                            if hasattr(chunk.retrieved_context, 'title'):
+                                logger.info(f"Context title: {chunk.retrieved_context.title}")
+                            if hasattr(chunk.retrieved_context, 'uri'):
+                                logger.info(f"Context URI: {chunk.retrieved_context.uri}")
+                        else:
+                            logger.info("No grounding_chunks found")
+                    
                     # Check for web_search_queries
                     has_queries = hasattr(metadata, 'web_search_queries')
                     logger.info(f"Has web_search_queries: {has_queries}")
@@ -980,6 +1009,7 @@ Maintain your professional analytical personality at all times."""
             search_used = False
             search_suggestions = []
             rendered_content = None
+            source_links = []
             
             # Method 1: Check for grounding_metadata (most reliable)
             if hasattr(response, 'candidates') and response.candidates:
@@ -990,6 +1020,30 @@ Maintain your professional analytical personality at all times."""
                         
                         # Log the entire grounding_metadata for debugging
                         logger.info(f"Grounding metadata structure: {dir(candidate.grounding_metadata)}")
+                        
+                        # Extract source links from grounding_chunks
+                        if hasattr(candidate.grounding_metadata, 'grounding_chunks') and candidate.grounding_metadata.grounding_chunks:
+                            chunks = candidate.grounding_metadata.grounding_chunks
+                            logger.info(f"Extracting sources from {len(chunks)} grounding chunks")
+                            
+                            for chunk in chunks:
+                                # Extract from web chunks
+                                if hasattr(chunk, 'web') and chunk.web:
+                                    if hasattr(chunk.web, 'title') and hasattr(chunk.web, 'uri'):
+                                        title = chunk.web.title or "Source"
+                                        uri = chunk.web.uri
+                                        if uri:
+                                            source_links.append((title, uri))
+                                            logger.info(f"Added web source: {title} - {uri}")
+                                
+                                # Extract from retrieved_context chunks
+                                if hasattr(chunk, 'retrieved_context') and chunk.retrieved_context:
+                                    if hasattr(chunk.retrieved_context, 'title') and hasattr(chunk.retrieved_context, 'uri'):
+                                        title = chunk.retrieved_context.title or "Source"
+                                        uri = chunk.retrieved_context.uri
+                                        if uri:
+                                            source_links.append((title, uri))
+                                            logger.info(f"Added context source: {title} - {uri}")
                         
                         # Extract search entry point if available - this is the preferred way
                         if hasattr(candidate.grounding_metadata, 'search_entry_point') and candidate.grounding_metadata.search_entry_point:
@@ -1033,8 +1087,16 @@ Maintain your professional analytical personality at all times."""
             # Process the response
             processed_response = self._process_response(response_text, search_used)
             
+            # Add source links from grounding chunks if available
+            if source_links:
+                sources_text = "\n\n**Sources:**\n"
+                for i, (title, uri) in enumerate(source_links):
+                    sources_text += f"{i+1}. [{title}]({uri})\n"
+                processed_response += sources_text
+                logger.info(f"Added {len(source_links)} source links from grounding chunks")
+            
             # Add search suggestions if available (required by Google guidelines)
-            if search_used:
+            elif search_used:
                 # Preferred method: Use the rendered content if available
                 if rendered_content:
                     # The rendered_content is pre-formatted HTML that should be used as-is
