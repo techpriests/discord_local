@@ -396,7 +396,7 @@ Maintain your professional analytical personality at all times."""
         asyncio.create_task(self._schedule_save())
 
         # Log token details at debug level
-        logger.debug(
+        logger.info(
             f"Token usage for request:\n"
             f"- Prompt tokens: {prompt_tokens:,}\n"
             f"- Response tokens: {response_tokens:,}\n"
@@ -564,7 +564,7 @@ Maintain your professional analytical personality at all times."""
             self._last_performance_check = current_time
             
             # Log system metrics at debug level with more detail
-            logger.debug(
+            logger.info(
                 f"System metrics:\n"
                 f"- CPU Usage: {self._cpu_usage:.1f}%\n"
                 f"- Memory Usage: {memory_percent:.1f}% ({memory.used / 1024 / 1024:.0f}MB / {memory.total / 1024 / 1024:.0f}MB)\n"
@@ -989,7 +989,7 @@ Maintain your professional analytical personality at all times."""
                         logger.info("Search grounding detected via grounding_metadata")
                         
                         # Log the entire grounding_metadata for debugging
-                        logger.debug(f"Grounding metadata structure: {dir(candidate.grounding_metadata)}")
+                        logger.info(f"Grounding metadata structure: {dir(candidate.grounding_metadata)}")
                         
                         # Extract search entry point if available - this is the preferred way
                         if hasattr(candidate.grounding_metadata, 'search_entry_point') and candidate.grounding_metadata.search_entry_point:
