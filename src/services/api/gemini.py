@@ -232,22 +232,16 @@ Maintain consistent analytical personality and technical precision regardless of
             )
         ]
 
-        # Configure generation settings
+        # Configure generation settings - include search tool but not tool_config
+        # Based on official documentation, we should include the tools in the generation config
+        # but not pass tool_config directly
         self._generation_config = GenerateContentConfig(
-            temperature=0.2,  # Lower temperature for more factual responses
+            temperature=0.3,  # Lower temperature for more factual responses, which may increase search grounding usage
             top_p=1,
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
             tools=[self._google_search_tool]  # Add the Google Search tool to the generation config
         )
-        
-        # Configure tool config for search grounding
-        self._tool_config = {
-            "function_calling_config": {
-                "mode": "auto",  # Let the model decide when to use search
-                "allowed_function_names": ["google_search"]
-            }
-        }
         
         # Test the API connection
         response = self._client.models.generate_content(
@@ -813,11 +807,10 @@ Maintain consistent analytical personality and technical precision regardless of
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new chat session with search grounding enabled
+        # Create new chat session with search grounding enabled via generation_config
         chat = self._client.aio.chats.create(
             model='gemini-2.0-flash',
-            config=self._generation_config,
-            tool_config=self._tool_config  # Add tool configuration
+            config=self._generation_config  # This already includes the tools configuration
         )
         
         # Add role context with proper formatting
@@ -913,8 +906,9 @@ Maintain consistent analytical personality and technical precision regardless of
             # Adjust temperature based on whether factual information is likely needed
             # Lower temperature (more deterministic) for factual queries
             if needs_factual_info:
-                # Use a lower temperature for factual queries to encourage search grounding
-                await chat.send_message("system: The next user query may require factual or up-to-date information. Please consider using search grounding if appropriate.")
+                # For factual queries, we send a system message that explicitly asks the model
+                # to use search when appropriate - this works without needing tool_config
+                await chat.send_message("system: This query may need factual or recent information. Please use your Google Search tool to find accurate information before responding.")
                 logger.info(f"Detected potential factual query: {prompt[:50]}...")
 
             # Send message and get response using sync chat
