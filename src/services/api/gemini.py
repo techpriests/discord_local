@@ -1097,7 +1097,7 @@ Maintain your professional analytical personality at all times."""
                 sources_text = "\n\n**Sources:**\n"
                 for i, (title, uri, domain) in enumerate(source_links):
                     # Format to show both title and domain for relevance assessment
-                    sources_text += f"{i+1}. **{title}**\n   {domain}\n   [{uri}]({uri})\n"
+                    sources_text += f"{i+1}. **[{title}]({uri})**\n   {domain}\n\n"
                 processed_response += sources_text
                 logger.info(f"Added {len(source_links)} source links from grounding chunks")
             
