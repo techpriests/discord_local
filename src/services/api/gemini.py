@@ -3,9 +3,10 @@ from typing import Dict, Any, List, Optional, Tuple
 from datetime import datetime, timedelta
 import os
 import json
+import re
 
 import google.genai as genai
-from google.genai.types import SafetySetting, GenerateContentConfig, HttpOptions
+from google.genai.types import SafetySetting, GenerateContentConfig, HttpOptions, Tool, GoogleSearch
 from .base import BaseAPI, RateLimitConfig
 import psutil
 import asyncio
@@ -206,6 +207,11 @@ Maintain consistent analytical personality and technical precision regardless of
             http_options=genai.types.HttpOptions(api_version='v1alpha')
         )
 
+        # Set up Google Search tool for search grounding
+        self._google_search_tool = Tool(
+            google_search = GoogleSearch()
+        )
+
         # Configure safety settings
         self._safety_settings = [
             SafetySetting(
@@ -228,15 +234,24 @@ Maintain consistent analytical personality and technical precision regardless of
 
         # Configure generation settings
         self._generation_config = GenerateContentConfig(
-            temperature=0.9,  # More creative responses
+            temperature=0.3,  # More precise responses
             top_p=1,
             top_k=40,
-            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS
+            max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
+            tools=[self._google_search_tool]  # Add the Google Search tool to the generation config
         )
+        
+        # Configure tool config for search grounding
+        self._tool_config = {
+            "function_calling_config": {
+                "mode": "auto",  # Let the model decide when to use search
+                "allowed_function_names": ["google_search"]
+            }
+        }
         
         # Test the API connection
         response = self._client.models.generate_content(
-            model='gemini-2.0-flash-thinking-exp',
+            model='gemini-2.0-flash',
             contents='test',
             config=self._generation_config
         )
@@ -262,7 +277,7 @@ Maintain consistent analytical personality and technical precision regardless of
         try:
             # Use the model's count_tokens method
             response = await self._client.aio.models.count_tokens(
-                model='gemini-2.0-flash-thinking-exp',
+                model='gemini-2.0-flash',
                 contents=text
             )
             return response.total_tokens
@@ -694,6 +709,23 @@ Maintain consistent analytical personality and technical precision regardless of
         # Remove any leading/trailing whitespace
         response = response.strip()
         
+        # Process search grounding citations if present
+        # Look for citation patterns like [1], [2], etc.
+        citation_pattern = r'\[\d+\]'
+        has_citations = bool(re.search(citation_pattern, response))
+        
+        # If citations are present, format them for better readability
+        if has_citations:
+            # Add a separator before citations section if not already present
+            if "\nSources:" not in response and "\n출처:" not in response:
+                # Find the last citation reference
+                last_citation_match = list(re.finditer(citation_pattern, response))
+                if last_citation_match:
+                    last_pos = last_citation_match[-1].end()
+                    # Add sources section if it doesn't exist
+                    if "Sources:" not in response[last_pos:] and "출처:" not in response[last_pos:]:
+                        response += "\n\n**Sources:**"
+        
         # Convert HTML-style tags to Discord-friendly format
         # Handle subscripts and superscripts
         while '<sub>' in response and '</sub>' in response:
@@ -781,10 +813,12 @@ Maintain consistent analytical personality and technical precision regardless of
             if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
                 return self._chat_sessions[user_id]
         
-        # Create new chat session
+        # Create new chat session with search grounding enabled
         chat = self._client.aio.chats.create(
-            model='gemini-2.0-flash-thinking-exp',
-            config=self._generation_config
+            model='gemini-2.0-flash',
+            config=self._generation_config,
+            tools=[self._google_search_tool],  # Enable search grounding by adding the tool here
+            tool_config=self._tool_config  # Add tool configuration
         )
         
         # Add role context with proper formatting
@@ -861,6 +895,29 @@ Maintain consistent analytical personality and technical precision regardless of
             # Get or create chat session
             chat = await self._get_or_create_chat_session(user_id)
 
+            # Determine if this prompt likely needs factual information
+            # Keywords that might indicate a need for search grounding
+            factual_keywords = [
+                "who", "what", "when", "where", "why", "how", 
+                "latest", "recent", "news", "update", "current",
+                "today", "yesterday", "last week", "this month",
+                "weather", "price", "cost", "statistics", "data",
+                "누구", "무엇", "언제", "어디", "왜", "어떻게",
+                "최신", "최근", "뉴스", "업데이트", "현재",
+                "오늘", "어제", "지난주", "이번달",
+                "날씨", "가격", "비용", "통계", "데이터"
+            ]
+            
+            # Check if prompt contains factual keywords
+            needs_factual_info = any(keyword.lower() in prompt.lower() for keyword in factual_keywords)
+            
+            # Adjust temperature based on whether factual information is likely needed
+            # Lower temperature (more deterministic) for factual queries
+            if needs_factual_info:
+                # Use a lower temperature for factual queries to encourage search grounding
+                await chat.send_message("system: The next user query may require factual or up-to-date information. Please consider using search grounding if appropriate.")
+                logger.info(f"Detected potential factual query: {prompt[:50]}...")
+
             # Send message and get response using sync chat
             response = await chat.send_message(prompt)
 
@@ -870,15 +927,58 @@ Maintain consistent analytical personality and technical precision regardless of
             # Validate response
             if not response or not response.text:
                 raise ValueError("Empty response from Gemini")
+                
+            # Check if search grounding was used - we have three methods to detect this:
+            # 1. Check for grounding_metadata - most reliable, direct method
+            # 2. Check for function_call with name "google_search" - backup method
+            # 3. Look for citation patterns like [1], [2] in text - least reliable but catches most cases
+            response_text = response.text
+            search_used = False
+            
+            # Method 1: Check for grounding_metadata (most reliable)
+            # This is the official way to detect search grounding according to the documentation
+            if hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'grounding_metadata') and candidate.grounding_metadata:
+                        search_used = True
+                        logger.info("Search grounding detected via grounding_metadata")
+                        break
+            
+            # Method 2: Check for function calls as fallback
+            # If the model used the google_search function call, it used search grounding
+            if not search_used and hasattr(response, 'candidates') and response.candidates:
+                for candidate in response.candidates:
+                    if hasattr(candidate, 'content') and candidate.content:
+                        for part in candidate.content.parts:
+                            if hasattr(part, 'function_call') and part.function_call:
+                                # This indicates a tool was used (like Google Search)
+                                if part.function_call.name == "google_search":
+                                    search_used = True
+                                    logger.info("Search grounding detected via function_call")
+                                    break
+            
+            # Method 3: Check for citation patterns in the text as last resort
+            # If we see citation patterns like [1], [2], etc., this likely indicates search grounding
+            if not search_used:
+                citation_pattern = r'\[\d+\]'
+                if re.search(citation_pattern, response_text):
+                    search_used = True
+                    logger.info("Search grounding likely used based on citation patterns in response")
+            
+            # Log whether search was used for this query
+            if needs_factual_info and not search_used:
+                logger.info("Factual query detected but search grounding was not used")
+            elif search_used:
+                logger.info("Search grounding was used for the response")
 
             # Process the response
-            processed_response = self._process_response(response.text)
+            processed_response = self._process_response(response_text)
 
             # Track usage
             await self._track_request(prompt, processed_response)
 
             return processed_response
-
+            
         except Exception as e:
             # Track error for degradation
             self._track_error()
@@ -1034,7 +1134,7 @@ Maintain consistent analytical personality and technical precision regardless of
             
             # Try to create the model
             model = client.models.generate_content(
-                model='gemini-2.0-flash-thinking-exp',
+                model='gemini-2.0-flash',
                 contents='test',
                 config=genai.types.GenerateContentConfig()
             )
