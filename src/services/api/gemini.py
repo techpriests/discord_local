@@ -1061,7 +1061,10 @@ Maintain your professional analytical personality at all times."""
                         # Extract search suggestions as fallback
                         if hasattr(candidate.grounding_metadata, 'web_search_queries'):
                             search_suggestions = candidate.grounding_metadata.web_search_queries
-                            logger.info(f"Found {len(search_suggestions)} search suggestions")
+                            if search_suggestions is not None:
+                                logger.info(f"Found {len(search_suggestions)} search suggestions")
+                            else:
+                                logger.info("Web search queries attribute exists but is None")
                         break
             
             # Method 2: Check for function calls as fallback
@@ -1102,7 +1105,7 @@ Maintain your professional analytical personality at all times."""
                 logger.info(f"Added {len(source_links)} source links from grounding chunks")
             
             # Always add search suggestions if available (not just as fallback)
-            if search_used and search_suggestions:
+            if search_used and search_suggestions and isinstance(search_suggestions, list):
                 suggestion_text = "\n\n**Search on Google:**\n"
                 for suggestion in search_suggestions:
                     # Format as a clickable link with Google icon approximation
