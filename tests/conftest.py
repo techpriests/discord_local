@@ -102,7 +102,7 @@ def mock_api_service(mock_genai_fixture) -> MagicMock:
             
             # Get model
             gemini._model = mock_genai_fixture.GenerativeModel(
-                model_name='gemini-2.5-pro-preview-03-25'
+                model_name='gemini-2.5.pro-exp-03-25'
             )
             
             # Initialize locks
