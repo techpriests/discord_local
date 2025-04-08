@@ -250,7 +250,7 @@ class TestGeminiInitialization:
         
         # 3. Verify model initialization
         mock_genai_fixture.GenerativeModel.assert_called_once_with(
-            model_name='gemini-2.0-flash-thinking-exp'
+            model_name='gemini-2.5-pro-preview-03-25'
         )
         
         # 4. Verify safety settings format
