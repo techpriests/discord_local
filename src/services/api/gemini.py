@@ -199,10 +199,10 @@ Maintain your professional analytical personality at all times."""
         """Initialize Gemini API resources"""
         await super().initialize()
         
-        # Initialize the client with v1alpha version for Flash Thinking
+        # Initialize the client with v1beta version for Flash Thinking
         self._client = genai.Client(
             api_key=self.api_key,
-            http_options=genai.types.HttpOptions(api_version='v1alpha')
+            http_options=genai.types.HttpOptions(api_version='v1beta')
         )
 
         # Set up Google Search tool for search grounding
@@ -243,7 +243,7 @@ Maintain your professional analytical personality at all times."""
         
         # Test the API connection
         response = self._client.models.generate_content(
-            model='gemini-2.5.pro-exp-03-25',
+            model='gemini-2.5-pro-exp-03-25',
             contents='test',
             config=self._generation_config
         )
@@ -269,7 +269,7 @@ Maintain your professional analytical personality at all times."""
         try:
             # Use the model's count_tokens method
             response = await self._client.aio.models.count_tokens(
-                model='gemini-2.5.pro-exp-03-25',
+                model='gemini-2.5-pro-exp-03-25',
                 contents=text
             )
             return response.total_tokens
@@ -828,7 +828,7 @@ Maintain your professional analytical personality at all times."""
         
         # Create new chat session with search grounding enabled via generation_config
         chat = self._client.aio.chats.create(
-            model='gemini-2.5.pro-exp-03-25',
+            model='gemini-2.5-pro-exp-03-25',
             config=self._generation_config  # This already includes the tools configuration
         )
         
@@ -1274,15 +1274,15 @@ Maintain your professional analytical personality at all times."""
             if not self.api_key:
                 return False
                 
-            # Initialize the client with v1alpha API version
+            # Initialize the client with v1beta API version
             client = genai.Client(
                 api_key=self.api_key,
-                http_options=genai.types.HttpOptions(api_version='v1alpha')
+                http_options=genai.types.HttpOptions(api_version='v1beta')
             )
             
             # Try to create the model
             model = client.models.generate_content(
-                model='gemini-2.5.pro-exp-03-25',
+                model='gemini-2.5-pro-exp-03-25',
                 contents='test',
                 config=genai.types.GenerateContentConfig()
             )
