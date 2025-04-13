@@ -56,16 +56,21 @@ class EntertainmentCommands(BaseCommands):
         """Choose one option from multiple choices"""
         try:
             self._validate_choices(args)
+            
+            # 25% chance of refusing to choose
+            if random.random() < 0.25:
+                await ctx.send("그 정도는 스스로 골라줘.")
+                return
+                
             choice = self._make_random_choice(args)
-            user_name = self.get_user_name(ctx)
-            await ctx.send(f"{user_name}님, 저는 '{choice}'을(를) 선택합니다!")
+            await ctx.send(f"나는 '{choice}'를 고를래.")
         except discord.Forbidden:
             raise commands.BotMissingPermissions(["send_messages"])
         except ValueError as e:
             raise e
         except Exception as e:
             logger.error(f"Error in choose command: {e}")
-            raise ValueError("선택에 실패했습니다") from e
+            raise ValueError("뭔가 잘못된 것 같아.") from e
 
     def _validate_choices(self, choices: tuple[str, ...]) -> None:
         """Validate choice options
@@ -78,14 +83,14 @@ class EntertainmentCommands(BaseCommands):
         """
         if len(choices) < 2:
             raise ValueError(
-                "최소 두 가지 이상의 선택지를 입력해주세요. " "(예시: !!투표 피자 치킨 햄버거)"
+                "최소 두 가지 이상의 선택지를 입력해줘. " "(예시: !!투표 피자 치킨 햄버거)"
             )
 
         if any(len(choice) > 100 for choice in choices):
-            raise ValueError("선택지는 100자를 넘을 수 없습니다")
+            raise ValueError("선택지는 100자를 넘을 수 없어")
 
         if len(choices) > 20:
-            raise ValueError("선택지는 최대 20개까지 입력할 수 있습니다")
+            raise ValueError("선택지는 최대 20개까지 입력할 수 있어")
 
     def _make_random_choice(self, choices: tuple[str, ...]) -> str:
         """Make random choice from options
@@ -129,7 +134,7 @@ class EntertainmentCommands(BaseCommands):
             await self.send_error(ctx, str(e))
         except Exception as e:
             logger.error(f"Error in roll_dice: {e}")
-            await self.send_error(ctx, "주사위 굴리기에 실패했습니다")
+            await self.send_error(ctx, "명령어 실행에 실패했어")
 
     def _parse_dice_str(self, dice_str: str) -> Tuple[int, int]:
         """Parse dice string into number and sides
@@ -145,7 +150,7 @@ class EntertainmentCommands(BaseCommands):
         """
         match = self.dice_pattern.match(dice_str)
         if not match:
-            raise ValueError("올바른 주사위 형식이 아닙니다. 예시: 2d6, 1d20")
+            raise ValueError("올바른 주사위 형식이 아니야. 예시: 2d6, 1d20")
         
         return int(match.group(1)), int(match.group(2))
 
@@ -160,9 +165,9 @@ class EntertainmentCommands(BaseCommands):
             ValueError: If parameters are invalid
         """
         if not 1 <= num_dice <= 100:
-            raise ValueError("주사위 개수는 1-100개 사이여야 합니다")
+            raise ValueError("주사위 개수는 1-100개 사이여야 해")
         if not 2 <= sides <= 100:
-            raise ValueError("주사위 면의 수는 2-100 사이여야 합니다")
+            raise ValueError("주사위 면의 수는 2-100 사이여야 해")
 
     async def _send_dice_results(self, ctx: commands.Context, results: list[int], total: int) -> None:
         """Send dice roll results
@@ -201,12 +206,12 @@ class EntertainmentCommands(BaseCommands):
         elif sides < 2:
             return await self.send_response(
                 ctx_or_interaction,
-                "주사위는 최소 2면이어야 합니다"
+                "주사위는 최소 2면이어야 해"
             )
         elif sides > 100:
             return await self.send_response(
                 ctx_or_interaction,
-                "주사위는 최대 100면까지만 가능합니다"
+                "주사위는 최대 100면까지만 가능해"
             )
 
         result = random.randint(1, sides)
@@ -221,7 +226,7 @@ class EntertainmentCommands(BaseCommands):
         """Send dice roll result"""
         embed = discord.Embed(
             title="🎲 주사위 결과",
-            description=f"{sides}면 주사위를 굴려서...\n**{result}**이(가) 나왔습니다!",
+            description=f"{sides}면 주사위를 굴려서...\n**{result}**이(가) 나왔어.",
             color=INFO_COLOR
         )
         await self.send_response(ctx_or_interaction, embed=embed)
@@ -251,14 +256,14 @@ class EntertainmentCommands(BaseCommands):
         if channel_id in self.active_polls:
             return await self.send_response(
                 ctx_or_interaction,
-                "이 채널에 이미 진행 중인 투표가 있습니다"
+                "이 채널에 이미 진행 중인 투표가 있어"
             )
 
         options = self._parse_poll_options(options_str)
         if not self._validate_poll_options(options):
             return await self.send_response(
                 ctx_or_interaction,
-                "투표 옵션은 2개 이상 10개 이하여야 합니다"
+                "투표 옵션은 2개 이상 10개 이하여야 해"
             )
 
         poll = self._create_poll(title, options, max_votes)
@@ -317,7 +322,7 @@ class EntertainmentCommands(BaseCommands):
                 inline=False
             )
 
-        footer_text = "투표하려면 번호를 입력하세요"
+        footer_text = "투표하려면 번호를 입력해줘"
         if poll['max_votes']:
             footer_text += f" (최대 {poll['max_votes']}표)"
         embed.set_footer(text=footer_text)
@@ -422,7 +427,7 @@ class EntertainmentCommands(BaseCommands):
         if channel_id not in self.active_polls:
             return await self.send_response(
                 ctx_or_interaction,
-                "이 채널에 진행 중인 투표가 없습니다"
+                "이 채널에 진행 중인 투표가 없어"
             )
             
         poll = self.active_polls[channel_id]
@@ -488,7 +493,7 @@ class EntertainmentCommands(BaseCommands):
             raise e
         except Exception as e:
             logger.error(f"Error in dice roll: {e}")
-            raise ValueError("주사위 굴리기에 실패했습니다") from e
+            raise ValueError("주사위 굴리기에 실패했어") from e
 
     def _parse_dice_string(self, dice_str: str) -> tuple[int, int]:
         """Parse dice string into number of dice and sides
@@ -504,7 +509,7 @@ class EntertainmentCommands(BaseCommands):
         """
         match = self.dice_pattern.match(dice_str.lower())
         if not match:
-            raise ValueError("올바른 주사위 형식이 아닙니다. " "예시: 2d6, 1d20, 3d4")
+            raise ValueError("올바른 주사위 형식이 아니야. " "예시: 2d6, 1d20, 3d4")
 
         return int(match.group(1)), int(match.group(2))
 

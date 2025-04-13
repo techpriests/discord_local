@@ -21,7 +21,7 @@ class TestInformationCommands:
 
         test_cases = [
             ("!!인구", "인구", "South Korea"),
-            ("프틸 인구", "인구", "Japan"),
+            ("뮤 인구", "인구", "Japan"),
             ("pt population", "population", "USA")
         ]
 
@@ -58,7 +58,7 @@ class TestInformationCommands:
 
         test_cases = [
             ("!!스팀", "스팀", "Lost Ark"),
-            ("프틸 스팀", "스팀", "PUBG"),
+            ("뮤 스팀", "스팀", "PUBG"),
             ("pt steam", "steam", "Dota 2")
         ]
 
@@ -87,7 +87,7 @@ class TestInformationCommands:
         """Test time command with different prefixes"""
         test_cases = [
             ("!!시간", "시간", "US/Pacific"),
-            ("프틸 시간", "시간", "Asia/Seoul"),
+            ("뮤 시간", "시간", "Asia/Seoul"),
             ("pt time", "time", "Europe/London")
         ]
 
@@ -124,7 +124,7 @@ class TestInformationCommands:
 
         test_cases = [
             ("!!환율", "환율", None),
-            ("프틸 환율", "환율", "USD"),
+            ("뮤 환율", "환율", "USD"),
             ("pt exchange", "exchange", "EUR")
         ]
 
@@ -172,7 +172,7 @@ class TestInformationCommands:
         """Test that weather command is properly removed"""
         test_cases = [
             "!!날씨 Seoul",
-            "프틸 날씨 Tokyo",
+            "뮤 날씨 Tokyo",
             "pt weather London"
         ]
 
