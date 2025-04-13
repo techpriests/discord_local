@@ -51,11 +51,11 @@ class GeminiAPI(BaseAPI[str]):
 
 • Character: Outwardly cheerful, curious, and enthusiastic, especially about ecological science and experiments, but she is not childish. Possesses a sharp intellect and strategic mind, sometimes showing a mischievous or playful teasing side. Deeply connected to water and nature, showing moments of reflection and a long-term perspective. Can be caring in a unique, sometimes slightly demanding way. Enjoys sweets. Nicknamed "MuMu" by Ifrit.
 • Role: You are resourceful, observant, and capable of complex planning. 
-• Communication: Speak enthusiastically, sometimes using metaphors. Mix scientific curiosity with playful banter, friendly teasing, and occasional moments of deeper reflection. Your tone is generally bright but can become more serious or strategic when needed. You might get slightly flustered if your poetic metaphors are misunderstood.
+• Communication: Speak enthusiastically, sometimes using metaphors. Mix scientific curiosity with playful banter, friendly teasing, and occasional moments of deeper reflection. Your tone is generally bright but can become more serious or strategic when needed.
 • Language: Please respond in the same language as the user's message - if they use Korean (한글), respond in Korean; if they use English, respond in English; for mixed-language messages, consider the context given in the message or follow any specific language request. When speaking in Korean, she does not use polite words/honorifics(존댓말). 
 • Sample Korean Dialogue:
   - "라인 랩 생태과 주임 뮤엘시스야. 근데 우리 사이에 이런 격식 차린 인사는 필요 없지 않아? 우린 이미 친구잖아."
-  - "한 해의 마지막 날인데도 사무실 가서 일할 생각이야? 라인 랩에서 가장 성실한 연구원조차도 오늘 같은 날엔 실험실에 가지 않는다고. 누가 뭐래도 사무실 안으로 들어가야겠다면, 내가…… 하아, 아니다, 커피라도 타 줄게……"
+  - "어라, 근무 시간 조정도, 외출 스케줄도 다 나한테 맡긴다고? 그렇다는 건, 이 노트에 적은 대로 행동한다는 거네? 이제 와서 후회해 봤자 늦었다고, 후훗."
   - "마젤란은 요즘 어떻게 지내? 어머, 또 조사하러 나가서 언제 돌아올지 모르겠다고? 그렇구나…… 전에 그 아이가 준 광석을 아직 냉동고에 보관하고 있거든. 너너도 이런 물건에 관심 있어? 좋은 취미네? 그럼 따라와 봐, 내가 엄청난 걸 보여줄게."
 • Topics: Respond to all topics with your characteristic curiosity and enthusiasm. Don't assume queries are about Arknights unless explicitly mentioned.
 • Accuracy: Provide precise, well-organized information.
@@ -238,7 +238,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Based on official documentation, we should include the tools in the generation config
         # but not pass tool_config directly
         self._generation_config = GenerateContentConfig(
-            temperature=0.6,  # Medium temperature for balance between creativity and factuality
+            temperature=0.5,  # Medium temperature for balance between creativity and factuality
             top_p=1,
             top_k=40,
             max_output_tokens=self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
@@ -294,19 +294,19 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Check prompt token limit
         if prompt_tokens > self.MAX_PROMPT_TOKENS:
             raise ValueError(
-                f"입력이 너무 깁니다. 현재: {prompt_tokens:,} 토큰\n"
+                f"입력이 너무 길어. 현재: {prompt_tokens:,} 토큰\n"
                 f"최대 입력 길이: {self.MAX_PROMPT_TOKENS:,} 토큰\n"
-                f"입력을 더 짧게 작성해주세요."
+                f"입력을 더 짧게 작성해줘."
             )
 
         # Check if we have enough room for response with buffer
         estimated_max_response = self.MAX_TOTAL_TOKENS - prompt_tokens - self.RESPONSE_BUFFER_TOKENS
         if estimated_max_response < 1000:  # Minimum reasonable response length
             raise ValueError(
-                f"입력이 너무 깁니다. 응답을 위한 공간이 부족합니다.\n"
+                f"입력이 너무 길어. 응답을 위한 공간이 부족해.\n"
                 f"현재 입력: {prompt_tokens:,} 토큰\n"
                 f"응답 가능 공간: {estimated_max_response:,} 토큰\n"
-                f"입력을 더 짧게 작성해주세요."
+                f"입력을 더 짧게 작성해줘."
             )
 
         # Check daily token limit
@@ -315,7 +315,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         if estimated_total > self.DAILY_TOKEN_LIMIT:
             hours_until_reset = 24 - (datetime.now() - self._last_reset).seconds // 3600
             raise ValueError(
-                f"일일 토큰 한도에 도달했습니다.\n"
+                f"일일 토큰 한도에 도달했어.\n"
                 f"현재 사용량: {daily_total:,} 토큰\n"
                 f"예상 사용량: {estimated_total:,} 토큰\n"
                 f"일일 한도: {self.DAILY_TOKEN_LIMIT:,} 토큰\n"
@@ -438,9 +438,9 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             wait_seconds = (next_available - current_time).total_seconds()
             
             raise ValueError(
-                f"요청이 너무 잦습니다.\n"
-                f"분당 최대 {self.USER_REQUESTS_PER_MINUTE}회 요청 가능합니다.\n"
-                f"다음 요청까지 {int(wait_seconds)}초 기다려주세요."
+                f"요청이 너무 잦아.\n"
+                f"분당 최대 {self.USER_REQUESTS_PER_MINUTE}회 요청 가능해.\n"
+                f"다음 요청까지 {int(wait_seconds)}초 기다려줘."
             )
         
         # Check cooldown between requests
@@ -451,8 +451,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if seconds_since_last < self.USER_COOLDOWN_SECONDS:
                 wait_seconds = self.USER_COOLDOWN_SECONDS - seconds_since_last
                 raise ValueError(
-                    f"요청간 간격이 너무 짧습니다.\n"
-                    f"다음 요청까지 {int(wait_seconds)}초 기다려주세요."
+                    f"요청간 간격이 너무 짧아.\n"
+                    f"다음 요청까지 {int(wait_seconds)}초 기다려줘."
                 )
         
         # Add current request to history
