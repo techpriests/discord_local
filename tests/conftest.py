@@ -229,7 +229,7 @@ async def bot(mock_config, mock_api_service, mock_command_tree) -> AsyncGenerato
         intents = discord.Intents.default()
         intents.message_content = True
         bot = DiscordBot(mock_config)
-        commands.Bot.__init__(bot, command_prefix=["!!", "프틸 ", "pt "], intents=intents)
+        commands.Bot.__init__(bot, command_prefix=["!!", "뮤 ", "pt "], intents=intents)
         
         # Set up internal bot state
         bot._connection = MagicMock()
@@ -257,7 +257,7 @@ async def bot(mock_config, mock_api_service, mock_command_tree) -> AsyncGenerato
         bot.memory_db = memory_db
         
         # Set up command prefix
-        bot.command_prefix = ["!!", "프틸 ", "pt "]
+        bot.command_prefix = ["!!", "뮤 ", "pt "]
         
         # Create a mock help command function
         async def mock_help_command(self, ctx):
@@ -266,7 +266,7 @@ async def bot(mock_config, mock_api_service, mock_command_tree) -> AsyncGenerato
                 description=(
                     "명령어 사용법:\n"
                     "• !!명령어 - 기본 접두사\n"
-                    "• 프틸 명령어 - 한글 접두사\n"
+                    "• 뮤 명령어 - 한글 접두사\n"
                     "• pt command - 영문 접두사\n\n"
                     "AI 명령어:\n"
                     "• 대화 - Gemini AI와 대화하기"

@@ -173,11 +173,11 @@ class SystemCommands(BaseCommands):
         name="help",
         help="봇의 도움말을 보여줍니다",
         brief="도움말 보기",
-        aliases=["pthelp", "도움말", "도움", "명령어"],
+        aliases=["muhelp", "도움말", "도움", "명령어"],
         description="봇의 모든 명령어와 사용법을 보여줍니다.\n"
         "사용법:\n"
         "• !!help\n"
-        "• 프틸 help\n"
+        "• 뮤 help\n"
         "• pt help"
     )
     async def help_prefix(self, ctx: commands.Context) -> None:
@@ -198,13 +198,12 @@ class SystemCommands(BaseCommands):
         try:
             # Create help embed
             embed = discord.Embed(
-                title="🤖 프틸롭시스 도움말",
+                title="🤖 뮤엘시스 도움말",
                 description=(
-                    "프틸롭시스는 다양한 기능을 제공하는 디스코드 봇입니다.\n"
-                    "모든 명령어는 다음 세 가지 방식으로 사용할 수 있습니다:\n\n"
+                    "모든 명령어는 다음 세 가지 방식으로 사용할 수 있어:\n\n"
                     "1. !!명령어 - 기본 접두사\n"
-                    "2. 프틸 명령어 - 한글 접두사\n"
-                    "3. pt command - 영문 접두사\n"
+                    "2. 뮤 명령어 - 한글 접두사\n"
+                    "3. mu command - 영문 접두사\n"
                     "4. /command - 슬래시 명령어"
                 ),
                 color=discord.Color.blue()

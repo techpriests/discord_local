@@ -271,7 +271,7 @@ class DiscordBot(commands.Bot):
             logger.info("Setting bot presence...")
             await cast(discord.Client, self).change_presence(
                 activity=discord.Game(
-                    name=f"프틸 도움말 | /pthelp | {self.version_info.commit}"
+                    name=f"뮤 도움말 | /muhelp | {self.version_info.commit}"
                 )
             )
             logger.info("Bot initialization complete")
@@ -806,11 +806,11 @@ class DiscordBot(commands.Bot):
         name="help",
         help="봇의 도움말을 보여줍니다",
         brief="도움말 보기",
-        aliases=["pthelp", "도움말", "도움", "명령어"],
+        aliases=["muhelp", "도움말", "도움", "명령어"],
         description="봇의 모든 명령어와 사용법을 보여줍니다.\n"
         "사용법:\n"
         "• !!help\n"
-        "• 프틸 help\n"
+        "• 뮤 help\n"
         "• pt help"
     )
     async def help_prefix(self, ctx: commands.Context) -> None:
@@ -1007,7 +1007,7 @@ class DiscordBot(commands.Bot):
             ctx_or_interaction: Command context or interaction
             processing_msg: Optional processing message to delete
         """
-        message = "올바른 형식이 아닙니다. '!!pthelp'를 참고해주세요."
+        message = "올바른 형식이 아닙니다. '!!muhelp'를 참고해주세요."
         await self._send_response(ctx_or_interaction, message)
         if processing_msg:
             await processing_msg.delete()
@@ -1023,4 +1023,4 @@ class DiscordBot(commands.Bot):
             List[str]: List of valid prefixes
         """
         # Return multiple prefix options
-        return ['!!', '프틸 ', 'pt ']  # Note the space after 프틸 and pt
+        return ['!!', '뮤 ', 'pt ']  # Note the space after 뮤 and pt

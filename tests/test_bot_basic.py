@@ -51,14 +51,14 @@ class TestBotBasic:
         
         # Check that status contains help commands and commit SHA
         status_name = kwargs['activity'].name
-        assert "프틸 도움말 | /pthelp |" in status_name  # Should contain help commands
+        assert "뮤 도움말 | /muhelp |" in status_name  # Should contain help commands
         assert len(status_name.split(" | ")) == 3  # Should have three parts
         
         # Verify prefix system
         prefixes = await bot._get_prefix(bot, None)
         assert isinstance(prefixes, list)
         assert "!!" in prefixes
-        assert "프틸 " in prefixes
+        assert "뮤 " in prefixes
         assert "pt " in prefixes
 
     async def test_bot_help_command(self, bot, mock_context):
@@ -82,7 +82,7 @@ class TestBotBasic:
         # Verify help content includes all prefixes
         description = embed.description
         assert "!!" in description
-        assert "프틸" in description
+        assert "뮤" in description
         assert "pt" in description
         assert "AI 명령어" in description  # Verify AI section exists
         assert "대화" in description  # Verify chat command exists

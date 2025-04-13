@@ -16,10 +16,10 @@ A Discord bot with various utility commands including:
 - `/recall [nickname]` - Recall stored information
 - `/forget [nickname]` - Delete stored information
 
-### Prefix Commands (using !!, 프틸, pt)
+### Prefix Commands (using !!, 뮤, pt)
 Same functionality as slash commands with prefixes:
 - `!!command`
-- `프틸 command`
+- `뮤 command`
 - `pt command`
 
 ## Development

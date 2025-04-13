@@ -12,14 +12,14 @@ class TestPrefixSystem:
         prefixes = await bot._get_prefix(bot, mock_context.message)
         assert isinstance(prefixes, list)
         assert "!!" in prefixes
-        assert "프틸 " in prefixes  # Note the space
+        assert "뮤 " in prefixes  # Note the space
         assert "pt " in prefixes    # Note the space
 
     async def test_command_with_different_prefixes(self, bot, mock_context):
         """Test commands work with different prefixes"""
         test_messages = [
             ("!!핑", "핑"),
-            ("프틸 핑", "핑"),
+            ("뮤 핑", "핑"),
             ("pt ping", "ping")
         ]
 
@@ -45,9 +45,9 @@ class TestPrefixSystem:
             mock_context.send.assert_called_once()
 
     async def test_space_requirement(self, bot, mock_context):
-        """Test that 프틸 and pt require a space after them"""
+        """Test that 뮤 and pt require a space after them"""
         invalid_messages = [
-            "프틸핑",  # No space
+            "뮤핑",  # No space
             "pt핑",   # No space
         ]
 
@@ -66,7 +66,7 @@ class TestPrefixSystem:
         test_messages = [
             ("PT ping", "ping"),    # Should work (case insensitive)
             ("Pt Ping", "ping"),    # Should work (case insensitive)
-            ("프틸 핑", "핑"),     # Should work (no case sensitivity for Korean)
+            ("뮤 핑", "핑"),     # Should work (no case sensitivity for Korean)
         ]
 
         for msg, cmd in test_messages:
@@ -94,10 +94,10 @@ class TestPrefixSystem:
         """Test that aliases work with all prefixes"""
         test_cases = [
             ("!!인구", "인구", ["인구", "population"]),
-            ("프틸 인구", "인구", ["인구", "population"]),
+            ("뮤 인구", "인구", ["인구", "population"]),
             ("pt population", "population", ["인구", "population"]),
             ("!!스팀", "스팀", ["스팀", "steam"]),
-            ("프틸 스팀", "스팀", ["스팀", "steam"]),
+            ("뮤 스팀", "스팀", ["스팀", "steam"]),
             ("pt steam", "steam", ["스팀", "steam"]),
         ]
 
@@ -126,11 +126,11 @@ class TestPrefixSystem:
     async def test_prefix_in_conversation(self, bot, mock_context):
         """Test that prefixes are only recognized at the start of messages"""
         test_messages = [
-            "내가 프틸 보내야 할까?",  # 프틸 in middle of Korean sentence
+            "내가 뮤 보내야 할까?",  # 뮤 in middle of Korean sentence
             "I need to pt this exercise",  # pt in middle of English sentence
             "이것은 !!아닙니다",  # !! in middle of Korean word
             "Let's!! do this",  # !! in middle of English sentence
-            "프틸스팀",  # 프틸 without space
+            "뮤스팀",  # 뮤 without space
             "ptping",   # pt without space
         ]
 
