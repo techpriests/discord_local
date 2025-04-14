@@ -137,10 +137,9 @@ class MessageHandler(commands.Cog):
             message: Discord message object
         """
         responses = [
-            "네, 부르셨나요?",
-            "안녕하세요!",
-            "무엇을 도와드릴까요?",
-            "명령어 목록은 !!muhelp 를 입력해주세요!",
+            "불럿어?",
+            "반가워.",
+            "왜 그래?",
         ]
         await message.channel.send(random.choice(responses))
 
@@ -152,9 +151,9 @@ class MessageHandler(commands.Cog):
         """
         content = message.content.lower()
         if "안녕" in content:
-            await message.channel.send("안녕하세요!")
+            await message.channel.send("안녕!")
         elif "굿모닝" in content:
-            await message.channel.send("좋은 아침이에요!")
+            await message.channel.send("좋은 아침이야!")
 
     async def _handle_reactions(self, message: discord.Message) -> None:
         """Handle message reactions
@@ -180,7 +179,7 @@ class MessageHandler(commands.Cog):
         try:
             # Basic message handling logic
             if message.lower().startswith("안녕"):
-                return "안녕하세요!"
+                return "안녕!"
             return None
         except Exception as e:
             logger.error(f"Error handling message: {e}")

@@ -34,20 +34,20 @@ class EntertainmentCommands(BaseCommands):
     async def hello(self, ctx: commands.Context) -> None:
         """Greet the user"""
         try:
-            responses = ["안녕하세요", "안녕", "네, 안녕하세요"]
+            responses = ["안녕~", "안녕!", "반가워."]
             await ctx.send(random.choice(responses))
         except discord.Forbidden:
             raise commands.BotMissingPermissions(["send_messages"])
         except Exception as e:
             logger.error(f"Error in hello command: {e}")
-            raise ValueError("인사하기에 실패했습니다") from e
+            raise ValueError("인사하기에 실패했어") from e
 
     @commands.command(
         name="투표",
-        help="여러 선택지 중 하나를 무작위로 선택합니다",
+        help="여러 선택지 중 하나를 무작위로 선택해",
         brief="선택하기",
         aliases=["choice", "골라줘"],
-        description="여러 선택지 중 하나를 무작위로 선택해주는 명령어입니다.\n"
+        description="여러 선택지 중 하나를 무작위로 선택해주는 명령어야.\n"
         "사용법: !!투표 [선택지1] [선택지2] ...\n"
         "또는: !!골라줘 [선택지1] [선택지2] ...\n"
         "예시: !!투표 피자 치킨 햄버거",
