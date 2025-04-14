@@ -392,7 +392,7 @@ class InformationCommands(BaseCommands):
         help="세계 시간을 변환해줘",
         brief="시간 변환",
         aliases=["time"],
-        description="한국 시간과 세계 각국의 시간을 변환해.\n"
+        description="한국 시간과 세계 각국의 시간을 비교해서 알려줄거야.\n"
         "사용법:\n"
         "• !!시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
         "• 뮤 시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
