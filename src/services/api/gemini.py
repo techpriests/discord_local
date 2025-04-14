@@ -1001,7 +1001,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                             for chunk in chunks:
                                 # Extract from web chunks
                                 if hasattr(chunk, 'web') and chunk.web:
-                                    if hasattr(chunk.web, 'title') and hasattr(chunk.web, 'uri'):
+                                    if hasattr(chunk.web, 'title') and hasattr(chunk.web, 'uri') and chunk.web.uri:
                                         title = chunk.web.title or "Source"
                                         uri = chunk.web.uri
                                         # Extract domain for display
@@ -1012,7 +1012,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                                 
                                 # Extract from retrieved_context chunks
                                 if hasattr(chunk, 'retrieved_context') and chunk.retrieved_context:
-                                    if hasattr(chunk.retrieved_context, 'title') and hasattr(chunk.retrieved_context, 'uri'):
+                                    if hasattr(chunk.retrieved_context, 'title') and hasattr(chunk.retrieved_context, 'uri') and chunk.retrieved_context.uri:
                                         title = chunk.retrieved_context.title or "Source"
                                         uri = chunk.retrieved_context.uri
                                         # Extract domain for display
@@ -1038,7 +1038,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                                                 
                                                 # Extract from web chunks
                                                 if hasattr(chunk, 'web') and chunk.web:
-                                                    if hasattr(chunk.web, 'title') and hasattr(chunk.web, 'uri'):
+                                                    if hasattr(chunk.web, 'title') and hasattr(chunk.web, 'uri') and chunk.web.uri:
                                                         title = chunk.web.title or "Source"
                                                         uri = chunk.web.uri
                                                         domain = urlparse(uri).netloc if uri else ""
@@ -1048,7 +1048,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                                                 
                                                 # Extract from retrieved_context chunks
                                                 if hasattr(chunk, 'retrieved_context') and chunk.retrieved_context:
-                                                    if hasattr(chunk.retrieved_context, 'title') and hasattr(chunk.retrieved_context, 'uri'):
+                                                    if hasattr(chunk.retrieved_context, 'title') and hasattr(chunk.retrieved_context, 'uri') and chunk.retrieved_context.uri:
                                                         title = chunk.retrieved_context.title or "Source"
                                                         uri = chunk.retrieved_context.uri
                                                         domain = urlparse(uri).netloc if uri else ""
@@ -1097,6 +1097,18 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 logger.info("Search grounding was used for the response")
             else:
                 logger.info("No search grounding was detected for this response")
+            
+            # Check for URLs in text as last resort if no sources were extracted
+            if search_used and not source_links:
+                logger.info("Search was used but no source links were extracted, looking for URLs in text")
+                # Extract URLs from text content
+                url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
+                urls = re.findall(url_pattern, response_text)
+                for url in urls:
+                    domain = urlparse(url).netloc
+                    title = f"Source from {domain}"
+                    source_links.append((title, url, domain))
+                    logger.info(f"Added URL from text: {url}")
 
             # Process the response
             processed_response = self._process_response(response_text, search_used)
@@ -1365,4 +1377,16 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if user_id in self._chat_sessions:
                 del self._chat_sessions[user_id]
             if user_id in self._last_interaction:
-                del self._last_interaction[user_id] 
+                del self._last_interaction[user_id]
+
+            # If no sources found from direct chunks, try looking at the actual content for URLs
+            if not source_links and hasattr(response, 'text'):
+                logger.info("No sources found in chunks, looking for URLs in text")
+                # Look for URLs in the text using a regex pattern
+                url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
+                urls = re.findall(url_pattern, response.text)
+                for url in urls:
+                    domain = urlparse(url).netloc
+                    title = f"Source from {domain}"
+                    source_links.append((title, url, domain))
+                    logger.info(f"Added URL from text: {url}") 
