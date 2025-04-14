@@ -136,7 +136,6 @@ jobs:
             
             # Create update file for notification
             echo "Hot reload updates available ($(date))" > ~/discord_local/updates.txt
-            echo "Changes by: ${{ github.actor }}" >> ~/discord_local/updates.txt
             git_message=$(git log -1 --pretty=%B)
             echo "Commit message: $git_message" >> ~/discord_local/updates.txt
             
