@@ -99,14 +99,6 @@ jobs:
             cd ~/discord_local
             
             # Check for active CI/CD processes
-            # First, check if Docker Compose is actively restarting containers
-            docker_busy=$(docker ps -a --filter "status=restarting" --filter "name=discord_" | wc -l)
-            
-            if [ "$docker_busy" -gt 0 ]; then
-                echo "CI/CD deployment in progress (Docker containers restarting). Hot-reload will be skipped."
-                exit 0
-            fi
-            
             # Check for CI/CD lock marker
             if [ -f "ci_cd.lock" ]; then
                 # Check if lock is recent (within last 5 minutes)
