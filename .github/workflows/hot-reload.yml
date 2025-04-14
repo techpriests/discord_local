@@ -63,15 +63,22 @@ jobs:
     - name: Add PR comment
       if: github.event_name == 'pull_request'
       uses: actions/github-script@v6
+      continue-on-error: true
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
-          github.rest.issues.createComment({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            body: '✅ Hot-reload eligible changes detected. When merged, these changes can be applied using `!!리로드` command without a full restart.'
-          })
+          try {
+            await github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ Hot-reload eligible changes detected. When merged, these changes can be applied using `!!리로드` command without a full restart.'
+            });
+            console.log('Successfully added comment to PR');
+          } catch (error) {
+            console.log('Error posting comment to PR:', error.message);
+            console.log('This is non-critical - continuing workflow');
+          }
 
   deploy-changes:
     needs: test
