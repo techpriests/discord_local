@@ -465,7 +465,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx_or_interaction)
         embed = discord.Embed(
             title="🕒 세계 시간",
-            description=f"{user_name}가 요청한 현재 시간 정보야. 테스트중",
+            description=f"{user_name}가 요청한 현재 시간 정보야.",
             color=INFO_COLOR
         )
         embed.add_field(name="시간대", value=timezone, inline=True)
