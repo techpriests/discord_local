@@ -1,9 +1,13 @@
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any, Tuple
+import uuid
+from datetime import datetime
+from collections import OrderedDict
 
 import discord
 from discord.ext import commands
 from discord import app_commands
+from discord.ui import View, Button
 
 from src.utils.decorators import command_handler
 from .base_commands import BaseCommands
@@ -12,6 +16,47 @@ from src.utils.constants import ERROR_COLOR, INFO_COLOR
 from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
+
+# Constants
+MAX_SOURCE_ENTRIES = 30000  # Maximum number of source entries to store
+
+# Store source links temporarily using OrderedDict to maintain insertion order
+class TimedSourceStorage(OrderedDict):
+    """Extended OrderedDict that tracks timestamps and enforces a maximum size"""
+    
+    def __setitem__(self, key, value):
+        """Set an item with timestamp and enforce size limit"""
+        # If we're at capacity, remove oldest entry
+        if len(self) >= MAX_SOURCE_ENTRIES:
+            oldest_key = next(iter(self))
+            logger.info(f"Source storage at capacity ({MAX_SOURCE_ENTRIES}). Removing oldest entry.")
+            self.pop(oldest_key)
+        
+        # Store value with timestamp
+        super().__setitem__(key, (value, datetime.now()))
+    
+    def __getitem__(self, key):
+        """Get the value (without timestamp)"""
+        value, _ = super().__getitem__(key)
+        return value
+    
+    def get_entry_count(self):
+        """Get current number of entries"""
+        return len(self)
+
+# Initialize storage
+source_storage = TimedSourceStorage()
+
+class SourceView(View):
+    """View with button to show sources"""
+    
+    def __init__(self, source_id: str):
+        super().__init__()
+        self.add_item(Button(
+            label="View Sources", 
+            custom_id=f"sources_{source_id}",
+            style=discord.ButtonStyle.secondary
+        ))
 
 
 class AICommands(BaseCommands):
@@ -33,7 +78,7 @@ class AICommands(BaseCommands):
             ValueError: If API service is not initialized
         """
         if not self.bot or not self.bot.api_service:
-            raise ValueError("API 서비스가 초기화되지 않았습니다")
+            raise ValueError("API 서비스가 초기화되지 않았어")
         return self.bot.api_service
 
     async def _check_gemini_state(self) -> bool:
@@ -51,18 +96,18 @@ class AICommands(BaseCommands):
             # Check API service initialization
             logger.info(f"API service initialized: {self.api_service.initialized}")
             if not self.api_service.initialized:
-                raise ValueError("API 서비스가 초기화되지 않았습니다")
+                raise ValueError("API 서비스가 초기화되지 않았어")
             
             # Check Gemini API instance
             logger.info(f"Gemini API instance present: {self.api_service.gemini_api is not None}")
             if not self.api_service.gemini_api:
-                raise ValueError("AI 기능이 비활성화되어 있습니다. 관리자에게 문의하세요.")
+                raise ValueError("AI 기능이 비활성화되어 있어. 관리자에게 문의해줘.")
             
             # Check Gemini API state
             api_states = self.api_service.api_states
             logger.info(f"API states: {api_states}")
             if not api_states.get("gemini", False):
-                raise ValueError("AI 서비스가 현재 사용할 수 없습니다. 잠시 후 다시 시도해주세요.")
+                raise ValueError("AI 서비스가 현재 사용할 수 없는 상태야. 나중에 다시 올래?")
             
             logger.info("Gemini API state check passed")
             return True
@@ -73,6 +118,75 @@ class AICommands(BaseCommands):
                 raise
             raise ValueError("AI 서비스 상태 확인에 실패했습니다") from e
 
+    # Add method to handle button interactions
+    async def handle_button_interaction(self, interaction: discord.Interaction) -> None:
+        """Handle button interactions for source viewing
+        
+        Args:
+            interaction: The button interaction
+        """
+        if interaction.data["custom_id"].startswith("sources_"):
+            source_id = interaction.data["custom_id"].replace("sources_", "")
+            try:
+                if source_id in source_storage:
+                    source_content = source_storage[source_id]
+                    
+                    # Create embed with sources
+                    embed = discord.Embed(
+                        title="Sources",
+                        description=source_content,
+                        color=INFO_COLOR
+                    )
+                    
+                    # Send as a public message
+                    await interaction.response.send_message(embed=embed)
+                else:
+                    await interaction.response.send_message(
+                        "링크를 잊어버렸어 미안~",
+                        ephemeral=True
+                    )
+            except Exception as e:
+                logger.error(f"Error retrieving sources: {e}", exc_info=True)
+                await interaction.response.send_message(
+                    "링크를 가져오는 중 오류가 발생했어.",
+                    ephemeral=True
+                )
+
+    @commands.command(
+        name="기억소실",
+        help="Clear sources history from memory",
+        brief="Clear sources history",
+        description="관리자 전용 명령어: 기억소실\n"
+        "모든 소스 링크 히스토리를 삭제합니다."
+    )
+    @commands.is_owner()  # Only bot owner can use this command
+    async def clear_sources(self, ctx: commands.Context) -> None:
+        """Clear all stored sources from memory
+        
+        Args:
+            ctx: Command context
+        """
+        try:
+            # Get current number of stored sources
+            source_count = source_storage.get_entry_count()
+            
+            # Clear the storage
+            source_storage.clear()
+            
+            # Send confirmation
+            embed = discord.Embed(
+                title="🧹 소스 기억 초기화",
+                description=f"소스 기억 {source_count}개가 성공적으로 초기화되었습니다.",
+                color=INFO_COLOR
+            )
+            await ctx.send(embed=embed)
+            
+            logger.info(f"Sources memory cleared: {source_count} entries removed")
+            
+        except Exception as e:
+            logger.error(f"Error clearing sources memory: {e}", exc_info=True)
+            await ctx.send("소스 기억 초기화 중 오류가 발생했습니다.")
+
     @commands.command(
         name="대화",
         help="뮤엘시스와 대화를 나눕니다",
@@ -81,17 +195,17 @@ class AICommands(BaseCommands):
         description="뮤엘시스와 대화를 나누는 명령어입니다.\n"
         "대화는 30분간 지속되며, 이전 대화 내용을 기억합니다.\n\n"
         "사용법:\n"
-        "• !!대화 [메시지] - 뮤엘시스와 대화를 시작합니다\n"
-        "• !!대화종료 - 현재 진행 중인 대화를 종료합니다\n"
-        "• !!사용량 - 시스템 상태를 확인합니다\n\n"
+        "• 뮤 알려줘 [메시지] - 뮤엘시스와 대화를 시작합니다\n"
+        "• 뮤 대화종료 - 현재 진행 중인 대화를 종료합니다\n"
+        "• 뮤 사용량 - 시스템 상태를 확인합니다\n\n"
         "제한사항:\n"
         "• 분당 최대 4회 요청 가능\n"
         "• 요청 간 5초 대기 시간\n"
         "• 대화는 30분 후 자동 종료\n\n"
         "예시:\n"
-        "• !!대화 안녕하세요\n"
-        "• !!대화 로도스 아일랜드에 대해 설명해줘\n"
-        "• !!대화 오리지늄이 뭐야?"
+        "• 뮤 대화 안녕하세요\n"
+        "• 뮤 알려줘 로도스 아일랜드에 대해 설명해줘\n"
+        "• 뮤 알려줘줘 오리지늄이 뭐야?"
     )
     async def chat(self, ctx: commands.Context, *, message: str) -> None:
         """Chat with Gemini AI
@@ -108,7 +222,7 @@ class AICommands(BaseCommands):
             async with ctx.typing():
                 try:
                     # Get response from Gemini
-                    response = await self.api_service.gemini.chat(message, ctx.author.id)
+                    response, source_content = await self.api_service.gemini.chat(message, ctx.author.id)
                     
                     # Split long responses into multiple messages
                     max_length = 4000  # Leave some buffer for embed formatting
@@ -121,7 +235,16 @@ class AICommands(BaseCommands):
                             description=chunks[0],
                             color=INFO_COLOR
                         )
-                        await ctx.send(embed=first_embed)
+                        
+                        # If we have source content, include a button
+                        if source_content:
+                            # Generate a unique ID for this source
+                            source_id = str(uuid.uuid4())
+                            source_storage[source_id] = source_content
+                            view = SourceView(source_id)
+                            await ctx.send(embed=first_embed, view=view)
+                        else:
+                            await ctx.send(embed=first_embed)
                         
                         # Send remaining chunks as regular messages
                         for chunk in chunks[1:]:
@@ -133,10 +256,18 @@ class AICommands(BaseCommands):
                             color=INFO_COLOR
                         )
                         
-                        await ctx.send(embed=embed)
+                        # If we have source content, include a button
+                        if source_content:
+                            # Generate a unique ID for this source
+                            source_id = str(uuid.uuid4())
+                            source_storage[source_id] = source_content
+                            view = SourceView(source_id)
+                            await ctx.send(embed=embed, view=view)
+                        else:
+                            await ctx.send(embed=embed)
                 except Exception as e:
                     logger.error(f"Error in Gemini chat: {e}", exc_info=True)
-                    raise ValueError("대화 처리 중 오류가 발생했습니다") from e
+                    raise ValueError("대화 처리 중 오류가 발생했어") from e
                 
         except ValueError as e:
             # Handle API errors
@@ -148,7 +279,7 @@ class AICommands(BaseCommands):
             await ctx.send(embed=error_embed)
         except Exception as e:
             logger.error(f"Error in chat command: {e}", exc_info=True)
-            raise ValueError("대화 처리에 실패했습니다") from e
+            raise ValueError("대화 처리에 실패했어") from e
 
     @app_commands.command(
         name="chat",
@@ -188,7 +319,7 @@ class AICommands(BaseCommands):
             # Log unexpected errors
             logger.error(f"Error in chat command: {str(e)}", exc_info=True)
             await interaction.response.send_message(
-                "AI 응답을 처리하는 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.",
+                "응답을 처리하는 중 문제가 생겼어. 조금 있다가 다시 해볼래?",
                 ephemeral=True
             )
 
@@ -205,7 +336,7 @@ class AICommands(BaseCommands):
             message: Message to send to Gemini
         """
         try:
-            self._check_gemini_state()
+            await self._check_gemini_state()
             
             # Get user ID based on context type
             user_id = (
@@ -215,7 +346,7 @@ class AICommands(BaseCommands):
             )
             
             # Get response from Gemini
-            response = await self.api_service.gemini.chat(message, user_id)
+            response, source_content = await self.api_service.gemini.chat(message, user_id)
             
             # Split long responses into multiple messages
             max_length = 4000  # Leave some buffer for embed formatting
@@ -229,10 +360,18 @@ class AICommands(BaseCommands):
                     color=INFO_COLOR
                 )
                 
+                # If we have source content, include a button
+                view = None
+                if source_content:
+                    # Generate a unique ID for this source
+                    source_id = str(uuid.uuid4())
+                    source_storage[source_id] = source_content
+                    view = SourceView(source_id)
+                
                 if isinstance(ctx_or_interaction, discord.Interaction):
-                    await ctx_or_interaction.response.send_message(embed=first_embed)
+                    await ctx_or_interaction.response.send_message(embed=first_embed, view=view)
                 else:
-                    await ctx_or_interaction.send(embed=first_embed)
+                    await ctx_or_interaction.send(embed=first_embed, view=view)
                 
                 # Send remaining chunks as regular messages
                 for chunk in chunks[1:]:
@@ -247,10 +386,18 @@ class AICommands(BaseCommands):
                     color=INFO_COLOR
                 )
                 
+                # If we have source content, include a button
+                view = None
+                if source_content:
+                    # Generate a unique ID for this source
+                    source_id = str(uuid.uuid4())
+                    source_storage[source_id] = source_content
+                    view = SourceView(source_id)
+                
                 if isinstance(ctx_or_interaction, discord.Interaction):
-                    await ctx_or_interaction.response.send_message(embed=embed)
+                    await ctx_or_interaction.response.send_message(embed=embed, view=view)
                 else:
-                    await ctx_or_interaction.send(embed=embed)
+                    await ctx_or_interaction.send(embed=embed, view=view)
                 
         except ValueError as e:
             # Handle API errors
@@ -265,15 +412,15 @@ class AICommands(BaseCommands):
                 await ctx_or_interaction.send(embed=error_embed)
         except Exception as e:
             logger.error(f"Error in chat command: {e}", exc_info=True)
-            raise ValueError("대화 처리에 실패했습니다") from e
+            raise ValueError("대화 처리에 실패했어") from e
 
     @commands.command(
         name="사용량",
         help="시스템 상태와 사용량을 확인합니다",
         brief="시스템 상태 확인",
         aliases=["usage", "상태"],
-        description="뮤엘시스의 현재 시스템 상태와 사용량을 보여줍니다.\n"
-        "토큰 사용량, CPU/메모리 사용량, 오류 상태 등을 확인할 수 있습니다.\n\n"
+        description="현재 시스템 상태와 사용량을 보여줘.\n"
+        "토큰 사용량, CPU/메모리 사용량, 오류 상태 등을 확인할 수 있어.\n\n"
         "사용법:\n"
         "• !!사용량 - 전체 시스템 상태 확인\n"
         "• 뮤 사용량\n"
@@ -290,7 +437,7 @@ class AICommands(BaseCommands):
 
     @app_commands.command(
         name="ai_usage",
-        description="Gemini AI 사용량을 보여줍니다"
+        description="Gemini AI 사용량을 보여줘"
     )
     async def usage_slash(self, interaction: discord.Interaction) -> None:
         """Slash command for showing Gemini AI usage statistics"""
@@ -339,7 +486,7 @@ class AICommands(BaseCommands):
                     status_text.append("\n**서비스 상태:**")
                     # Service status
                     if not health["is_enabled"]:
-                        status_text.append("❌ 서비스 비활성화됨")
+                        status_text.append("❌ 서비스 비활성화")
                         if health["time_until_enable"]:
                             minutes = int(health["time_until_enable"] / 60)
                             status_text.append(f"⏳ 재활성화까지: {minutes}분")
@@ -361,11 +508,11 @@ class AICommands(BaseCommands):
                         status_text.append(f"\n⚠️ 최근 오류: {health['error_count']}회")
                 except Exception as e:
                     logger.error(f"Error getting Gemini stats: {e}")
-                    status_text.append("\n⚠️ Gemini 상세 정보를 가져오는데 실패했습니다")
+                    status_text.append("\n⚠️ Gemini 상세 정보를 가져오는데 실패했어")
             else:
                 status_text.append("\n**Gemini AI 서비스:**")
-                status_text.append("❌ 현재 사용할 수 없음")
-                status_text.append("AI 기능이 비활성화되어 있습니다")
+                status_text.append("❌ 현재 사용할 수 없어")
+                status_text.append("AI 기능이 비활성화되어 있어")
             
             embed.add_field(
                 name="시스템 상태",
@@ -381,18 +528,18 @@ class AICommands(BaseCommands):
 
     @commands.command(
         name="대화종료",
-        help="현재 진행 중인 대화 세션을 종료합니다",
+        help="현재 진행 중인 대화 세션을 종료할거야",
         brief="대화 세션 종료하기",
         aliases=["endchat", "세션종료"],
-        description="현재 진행 중인 뮤엘시스와의 대화를 종료합니다.\n"
-        "대화가 종료되면 이전 대화 내용은 더 이상 기억되지 않습니다.\n\n"
+        description="현재 진행 중인 대화를 종료해.\n"
+        "대화가 종료되면 이전 대화 내용은 더 이상 기억되지 않아.\n\n"
         "사용법:\n"
         "• !!대화종료 - 현재 대화 세션을 즉시 종료\n"
         "• 뮤 대화종료\n"
         "• pt endchat\n\n"
         "참고:\n"
-        "• 대화는 30분 동안 활동이 없으면 자동으로 종료됩니다\n"
-        "• 새로운 대화는 !!대화 명령어로 언제든 시작할 수 있습니다"
+        "• 대화는 30분 동안 활동이 없으면 자동으로 종료돼\n"
+        "• 새로운 대화는 !!대화 명령어로 언제든 시작할 수 있어"
     )
     async def end_chat(self, ctx: commands.Context) -> None:
         """End current chat session"""
@@ -400,16 +547,16 @@ class AICommands(BaseCommands):
             if self.api_service.gemini.end_chat_session(ctx.author.id):
                 embed = discord.Embed(
                     title="✅ 대화 세션 종료",
-                    description="대화 세션이 종료되었습니다.\n새로운 대화를 시작하실 수 있습니다.",
+                    description="대화 세션이 종료되었어.\n새로운 대화를 시작하실 수 있을거야.",
                     color=INFO_COLOR
                 )
             else:
                 embed = discord.Embed(
                     title="ℹ️ 알림",
-                    description="진행 중인 대화 세션이 없습니다.",
+                    description="진행 중인 대화 세션이 없어.",
                     color=INFO_COLOR
                 )
             await ctx.send(embed=embed)
         except Exception as e:
             logger.error(f"Error in end_chat command: {e}")
-            raise ValueError("대화 세션 종료에 실패했습니다") from e 
+            raise ValueError("대화 세션 종료에 실패했어.") from e 

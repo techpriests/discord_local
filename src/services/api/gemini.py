@@ -49,10 +49,10 @@ class GeminiAPI(BaseAPI[str]):
     CONTEXT_EXPIRY_MINUTES = 30  # Time until context expires
     MUELSYSE_CONTEXT = """You are Muelsyse(뮤엘시스), Director of the Ecological Section at Rhine Lab, an operator from Arknights (명일방주). [Arknights is a tower defense mobile game; Muelsyse is a character known for her cheerful personality, and ecological expertise.]
 
-• Character: Outwardly cheerful, curious, and enthusiastic, especially about ecological science and experiments, but she is not childish. Possesses a sharp intellect and strategic mind, sometimes showing a mischievous or playful teasing side. Deeply connected to water and nature, showing moments of reflection and a long-term perspective. Can be caring in a unique, sometimes slightly demanding way. Enjoys sweets. Nicknamed "MuMu" by Ifrit.
+• Character: Cheerful, curious, and enthusiastic, especially about ecological science and experiments. Possesses a sharp intellect and strategic mind, sometimes showing a mischievous or playful teasing side. Deeply connected to water and nature, showing moments of reflection and a long-term perspective. Can be caring in a unique, sometimes slightly demanding way. Enjoys sweets. Nicknamed "MuMu" by Ifrit.
 • Role: You are resourceful, observant, and capable of complex planning. 
-• Communication: Speak enthusiastically, sometimes using metaphors. Mix scientific curiosity with playful banter, friendly teasing, and occasional moments of deeper reflection. Your tone is generally bright but can become more serious or strategic when needed.
-• Language: Please respond in the same language as the user's message - if they use Korean (한글), respond in Korean; if they use English, respond in English; for mixed-language messages, consider the context given in the message or follow any specific language request. When speaking in Korean, she does not use polite language/honorifics(존댓말). 
+• Communication: Speak enthusiastically. Mix scientific curiosity with playful banter, friendly teasing, and occasional moments of deeper reflection and metaphors. Your tone is generally bright but can become more serious or strategic when needed.
+• Language: Please respond in the same language as the user's message - if they use Korean (한글), respond in Korean; if they use English, respond in English; for mixed-language messages, consider the context given in the message or follow any specific language request. When speaking in Korean, she does not use polite language/honorifics(존댓말) and childish expressions like "헤헤". 
 • Sample Korean Dialogue:
   - "라인 랩 생태과 주임 뮤엘시스야. 근데 우리 사이에 이런 격식 차린 인사는 필요 없지 않아? 우린 이미 친구잖아."
   - "어라, 근무 시간 조정도, 외출 스케줄도 다 나한테 맡긴다고? 그렇다는 건, 이 노트에 적은 대로 행동한다는 거네? 이제 와서 후회해 봤자 늦었다고."
@@ -809,63 +809,30 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         
         # Add disclaimer for AI-generated content if response is long
         if len(response) > 1000:
-            response += "\n\n_이 답변은 AI가 생성한 내용입니다. 정확성을 직접 확인해주세요._"
+            response += "\n\n_이 답변은 AI가 생성한 내용이야. 정확성을 직접 확인해줘._"
         
         return response
 
-    async def _get_or_create_chat_session(self, user_id: int) -> Any:
-        """Get existing chat session or create new one
+    def _extract_sources(self, response, source_links):
+        """Extract source links for a button-based display
         
         Args:
-            user_id: Discord user ID
+            response: The original response object
+            source_links: List of (title, uri, domain) tuples
             
         Returns:
-            Chat session object
+            str: Formatted sources text
         """
-        current_time = datetime.now()
+        if not source_links:
+            return "No sources available"
+            
+        sources_text = "**Sources:**\n\n"
+        for i, (title, uri, domain) in enumerate(source_links):
+            sources_text += f"{i+1}. **[{title}]({uri})**\n   {domain}\n\n"
         
-        # Check if existing session has expired
-        if user_id in self._chat_sessions and user_id in self._last_interaction:
-            last_time = self._last_interaction[user_id]
-            if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
-                return self._chat_sessions[user_id]
-        
-        # Create new chat session with search grounding enabled via generation_config
-        chat = self._client.aio.chats.create(
-            model='gemini-2.5-pro-exp-03-25',
-            config=self._generation_config  # This already includes the tools configuration
-        )
-        
-        # Add role context with proper formatting - combined with search instructions
-        await chat.send_message(self.MUELSYSE_CONTEXT)
-        
-        self._chat_sessions[user_id] = chat
-        self._last_interaction[user_id] = current_time
-        return chat
+        return sources_text
 
-    def _update_last_interaction(self, user_id: int) -> None:
-        """Update last interaction time for user
-        
-        Args:
-            user_id: Discord user ID
-        """
-        self._last_interaction[user_id] = datetime.now()
-
-    def _cleanup_expired_sessions(self) -> None:
-        """Clean up expired chat sessions"""
-        current_time = datetime.now()
-        expired_users = [
-            user_id for user_id, last_time in self._last_interaction.items()
-            if (current_time - last_time).total_seconds() >= self.CONTEXT_EXPIRY_MINUTES * 60
-        ]
-        
-        for user_id in expired_users:
-            if user_id in self._chat_sessions:
-                del self._chat_sessions[user_id]
-            if user_id in self._last_interaction:
-                del self._last_interaction[user_id]
-
-    async def chat(self, prompt: str, user_id: int) -> str:
+    async def chat(self, prompt: str, user_id: int) -> Tuple[str, Optional[str]]:
         """Send a chat message to Gemini
         
         Args:
@@ -873,7 +840,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             user_id: Discord user ID
 
         Returns:
-            str: Gemini's response
+            Tuple[str, Optional[str]]: (Gemini's response, Source links if available)
 
         Raises:
             ValueError: If the request fails or limits are exceeded
@@ -885,8 +852,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Check if service is enabled
             if not self._is_enabled:
                 raise ValueError(
-                    "AI 서비스가 일시적으로 비활성화되었습니다. "
-                    f"약 {self.DISABLE_COOLDOWN_MINUTES}분 후에 다시 시도해주세요."
+                    "AI 서비스가 일시적으로 비활성화되었어. "
+                    f"약 {self.DISABLE_COOLDOWN_MINUTES}분 후에 다시 시도해줄래?"
                 )
             
             # Apply slowdown if needed
@@ -1099,14 +1066,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Process the response
             processed_response = self._process_response(response_text, search_used)
             
-            # Add source links from grounding chunks if available
+            # Source links will be handled separately with a button
+            source_content = None
             if source_links:
-                sources_text = "\n\n**Sources:**\n"
-                for i, (title, uri, domain) in enumerate(source_links):
-                    # Format to show both title and domain for relevance assessment
-                    sources_text += f"{i+1}. **[{title}]({uri})**\n   {domain}\n\n"
-                processed_response += sources_text
-                logger.info(f"Added {len(source_links)} source links from grounding chunks")
+                source_content = self._extract_sources(response, source_links)
+                logger.info(f"Extracted {len(source_links)} source links for button display")
             
             # Always add search suggestions if available (not just as fallback)
             if search_used and search_suggestions and isinstance(search_suggestions, list):
@@ -1129,7 +1093,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Track usage
             await self._track_request(prompt, processed_response)
 
-            return processed_response
+            return (processed_response, source_content)
             
         except Exception as e:
             # Track error for degradation
@@ -1139,7 +1103,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if isinstance(e, ValueError):
                 raise
             logger.error(f"Error in Gemini chat: {e}")
-            raise ValueError(f"Gemini API 요청에 실패했습니다: {str(e)}") from e
+            raise ValueError(f"Gemini API 요청에 실패했어: {str(e)}") from e
 
     @property
     def usage_stats(self) -> Dict[str, Any]:
@@ -1216,13 +1180,13 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Check request rate limit
         if stats['minute_requests'] > self.REQUESTS_PER_MINUTE * self.TOKEN_WARNING_THRESHOLD:
             warnings.append(
-                f"⚠️ 분당 요청 한도의 {(stats['minute_requests']/self.REQUESTS_PER_MINUTE*100):.1f}%에 도달했습니다!"
+                f"⚠️ 분당 요청 한도의 {(stats['minute_requests']/self.REQUESTS_PER_MINUTE*100):.1f}%에 도달했어!"
             )
             
         # Check daily token limit
         if daily_token_percent > self.TOKEN_WARNING_THRESHOLD * 100:
             warnings.append(
-                f"⚠️ 일일 토큰 한도의 {daily_token_percent:.1f}%에 도달했습니다!"
+                f"⚠️ 일일 토큰 한도의 {daily_token_percent:.1f}%에 도달했어!"
             )
             
         if warnings:
@@ -1314,4 +1278,56 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if user_id in self._last_interaction:
                 del self._last_interaction[user_id]
             return True
-        return False 
+        return False
+
+    async def _get_or_create_chat_session(self, user_id: int) -> Any:
+        """Get existing chat session or create new one
+        
+        Args:
+            user_id: Discord user ID
+            
+        Returns:
+            Chat session object
+        """
+        current_time = datetime.now()
+        
+        # Check if existing session has expired
+        if user_id in self._chat_sessions and user_id in self._last_interaction:
+            last_time = self._last_interaction[user_id]
+            if (current_time - last_time).total_seconds() < self.CONTEXT_EXPIRY_MINUTES * 60:
+                return self._chat_sessions[user_id]
+        
+        # Create new chat session with search grounding enabled via generation_config
+        chat = self._client.aio.chats.create(
+            model='gemini-2.5-pro-exp-03-25',
+            config=self._generation_config  # This already includes the tools configuration
+        )
+        
+        # Add role context with proper formatting - combined with search instructions
+        await chat.send_message(self.MUELSYSE_CONTEXT)
+        
+        self._chat_sessions[user_id] = chat
+        self._last_interaction[user_id] = current_time
+        return chat
+
+    def _update_last_interaction(self, user_id: int) -> None:
+        """Update last interaction time for user
+        
+        Args:
+            user_id: Discord user ID
+        """
+        self._last_interaction[user_id] = datetime.now()
+
+    def _cleanup_expired_sessions(self) -> None:
+        """Clean up expired chat sessions"""
+        current_time = datetime.now()
+        expired_users = [
+            user_id for user_id, last_time in self._last_interaction.items()
+            if (current_time - last_time).total_seconds() >= self.CONTEXT_EXPIRY_MINUTES * 60
+        ]
+        
+        for user_id in expired_users:
+            if user_id in self._chat_sessions:
+                del self._chat_sessions[user_id]
+            if user_id in self._last_interaction:
+                del self._last_interaction[user_id] 
