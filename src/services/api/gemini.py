@@ -1021,6 +1021,41 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                                             source_links.append((title, uri, domain))
                                             logger.info(f"Added context source: {title} - {uri} ({domain})")
                         
+                        # NEW: Extract from grounding_supports (used in follow-up messages)
+                        if not source_links and hasattr(candidate.grounding_metadata, 'grounding_supports') and candidate.grounding_metadata.grounding_supports:
+                            supports = candidate.grounding_metadata.grounding_supports
+                            logger.info(f"Found {len(supports)} grounding_supports - checking for sources")
+                            
+                            # We need both grounding_chunks and grounding_supports
+                            if hasattr(candidate.grounding_metadata, 'grounding_chunks') and candidate.grounding_metadata.grounding_chunks:
+                                chunks = candidate.grounding_metadata.grounding_chunks
+                                
+                                for support in supports:
+                                    if hasattr(support, 'grounding_chunk_indices') and support.grounding_chunk_indices:
+                                        for idx in support.grounding_chunk_indices:
+                                            if 0 <= idx < len(chunks):
+                                                chunk = chunks[idx]
+                                                
+                                                # Extract from web chunks
+                                                if hasattr(chunk, 'web') and chunk.web:
+                                                    if hasattr(chunk.web, 'title') and hasattr(chunk.web, 'uri'):
+                                                        title = chunk.web.title or "Source"
+                                                        uri = chunk.web.uri
+                                                        domain = urlparse(uri).netloc if uri else ""
+                                                        if uri:
+                                                            source_links.append((title, uri, domain))
+                                                            logger.info(f"Added web source from supports: {title} - {uri}")
+                                                
+                                                # Extract from retrieved_context chunks
+                                                if hasattr(chunk, 'retrieved_context') and chunk.retrieved_context:
+                                                    if hasattr(chunk.retrieved_context, 'title') and hasattr(chunk.retrieved_context, 'uri'):
+                                                        title = chunk.retrieved_context.title or "Source"
+                                                        uri = chunk.retrieved_context.uri
+                                                        domain = urlparse(uri).netloc if uri else ""
+                                                        if uri:
+                                                            source_links.append((title, uri, domain))
+                                                            logger.info(f"Added context source from supports: {title} - {uri}")
+                        
                         # Extract search entry point if available - this is the preferred way
                         if hasattr(candidate.grounding_metadata, 'search_entry_point') and candidate.grounding_metadata.search_entry_point:
                             search_entry_point = candidate.grounding_metadata.search_entry_point
