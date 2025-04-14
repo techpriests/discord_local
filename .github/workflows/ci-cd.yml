@@ -3,10 +3,22 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ main ]  # Only run on main
+    paths-ignore:
+      - 'src/commands/**'
+      - 'src/services/**'
+      - 'src/utils/**'
+      - '!src/utils/constants.py'  # Still include critical utility files
+      - '!src/utils/types.py'
     tags:
       - 'temp_stable'  # Also run on our temporary tag
   pull_request:
     branches: [ main ]  # Only run on PRs to main
+    paths-ignore:
+      - 'src/commands/**'
+      - 'src/services/**'
+      - 'src/utils/**'
+      - '!src/utils/constants.py'  # Still include critical utility files
+      - '!src/utils/types.py'
 
 jobs:
   ci:

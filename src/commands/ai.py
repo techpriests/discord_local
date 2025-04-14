@@ -78,7 +78,7 @@ class AICommands(BaseCommands):
             ValueError: If API service is not initialized
         """
         if not self.bot or not self.bot.api_service:
-            raise ValueError("API 서비스가 초기화되지 않았어")
+            raise ValueError("API 서비스가 초기화되지 않았어. 나중에 다시 시도해 줄래?")
         return self.bot.api_service
 
     async def _check_gemini_state(self) -> bool:
@@ -96,12 +96,12 @@ class AICommands(BaseCommands):
             # Check API service initialization
             logger.info(f"API service initialized: {self.api_service.initialized}")
             if not self.api_service.initialized:
-                raise ValueError("API 서비스가 초기화되지 않았어")
+                raise ValueError("API 서비스가 초기화되지 않았어. 잠시 후에 다시 해볼래?")
             
             # Check Gemini API instance
             logger.info(f"Gemini API instance present: {self.api_service.gemini_api is not None}")
             if not self.api_service.gemini_api:
-                raise ValueError("AI 기능이 비활성화되어 있어. 관리자에게 문의해줘.")
+                raise ValueError("AI 기능이 비활성화되어 있어. 관리자에게 문의해줘!")
             
             # Check Gemini API state
             api_states = self.api_service.api_states
@@ -142,13 +142,13 @@ class AICommands(BaseCommands):
                     await interaction.response.send_message(embed=embed)
                 else:
                     await interaction.response.send_message(
-                        "링크를 잊어버렸어 미안~",
+                        "링크를 잊어버렸어 미안~ 다시 물어봐줄래?",
                         ephemeral=True
                     )
             except Exception as e:
                 logger.error(f"Error retrieving sources: {e}", exc_info=True)
                 await interaction.response.send_message(
-                    "링크를 가져오는 중 오류가 발생했어.",
+                    "링크를 가져오는 중 오류가 발생했어. 잠시 후에 다시 시도해줘!",
                     ephemeral=True
                 )
 
@@ -176,7 +176,7 @@ class AICommands(BaseCommands):
             # Send confirmation
             embed = discord.Embed(
                 title="🧹 소스 기억 초기화",
-                description=f"소스 기억 {source_count}개가 성공적으로 초기화되었습니다.",
+                description=f"소스 기억 {source_count}개가 깨끗하게 지워졌어!",
                 color=INFO_COLOR
             )
             await ctx.send(embed=embed)
@@ -185,7 +185,7 @@ class AICommands(BaseCommands):
             
         except Exception as e:
             logger.error(f"Error clearing sources memory: {e}", exc_info=True)
-            await ctx.send("소스 기억 초기화 중 오류가 발생했습니다.")
+            await ctx.send("소스 기억 초기화 중 오류가 발생했어. 다시 시도해볼래?")
 
     @commands.command(
         name="대화",
@@ -267,7 +267,7 @@ class AICommands(BaseCommands):
                             await ctx.send(embed=embed)
                 except Exception as e:
                     logger.error(f"Error in Gemini chat: {e}", exc_info=True)
-                    raise ValueError("대화 처리 중 오류가 발생했어") from e
+                    raise ValueError("대화 처리 중 오류가 발생했어. 더 간단한 질문으로 다시 시도해볼래?") from e
                 
         except ValueError as e:
             # Handle API errors
@@ -279,7 +279,7 @@ class AICommands(BaseCommands):
             await ctx.send(embed=error_embed)
         except Exception as e:
             logger.error(f"Error in chat command: {e}", exc_info=True)
-            raise ValueError("대화 처리에 실패했어") from e
+            raise ValueError("대화 처리에 실패했어. 미안! 잠시 후에 다시 해볼래?") from e
 
     @app_commands.command(
         name="chat",
@@ -319,7 +319,7 @@ class AICommands(BaseCommands):
             # Log unexpected errors
             logger.error(f"Error in chat command: {str(e)}", exc_info=True)
             await interaction.response.send_message(
-                "응답을 처리하는 중 문제가 생겼어. 조금 있다가 다시 해볼래?",
+                "응답을 처리하는 중 문제가 생겼어. 잠시 후에 다시 해볼래?",
                 ephemeral=True
             )
 
@@ -402,9 +402,9 @@ class AICommands(BaseCommands):
         except ValueError as e:
             # Handle API errors
             error_embed = discord.Embed(
-                title="오류",
-                description=str(e),
-                color=ERROR_COLOR
+                title="⚠️ AI 채팅 오류",
+                description=f"앗, 에러야! {str(e)}",
+                color=discord.Color.red(),
             )
             if isinstance(ctx_or_interaction, discord.Interaction):
                 await ctx_or_interaction.response.send_message(embed=error_embed)
@@ -412,7 +412,7 @@ class AICommands(BaseCommands):
                 await ctx_or_interaction.send(embed=error_embed)
         except Exception as e:
             logger.error(f"Error in chat command: {e}", exc_info=True)
-            raise ValueError("대화 처리에 실패했어") from e
+            raise ValueError("대화 처리에 실패했어. 다시 한번 시도해 볼래?") from e
 
     @commands.command(
         name="사용량",
@@ -486,17 +486,17 @@ class AICommands(BaseCommands):
                     status_text.append("\n**서비스 상태:**")
                     # Service status
                     if not health["is_enabled"]:
-                        status_text.append("❌ 서비스 비활성화")
+                        status_text.append("❌ 서비스가가 비활성화되어 있어")
                         if health["time_until_enable"]:
                             minutes = int(health["time_until_enable"] / 60)
-                            status_text.append(f"⏳ 재활성화까지: {minutes}분")
+                            status_text.append(f"⏳ {minutes}분 후에 다시 이용할 수 있을 거야!")
                     elif health["is_slowed_down"]:
-                        status_text.append("⚠️ 서비스 속도 제한 중")
+                        status_text.append("⚠️ 지금은 좀 느릴 수 있어")
                         if health["time_until_slowdown_reset"]:
                             minutes = int(health["time_until_slowdown_reset"] / 60)
-                            status_text.append(f"⏳ 정상화까지: {minutes}분")
+                            status_text.append(f"⏳ {minutes}분 후에 다시 정상 속도로 돌아갈 거야!")
                     else:
-                        status_text.append("✅ 서비스 정상")
+                        status_text.append("✅ 모든 게 정상이야! 대화해 볼래?")
                     
                     # System metrics
                     status_text.append(f"\n**시스템 리소스:**")
@@ -508,11 +508,11 @@ class AICommands(BaseCommands):
                         status_text.append(f"\n⚠️ 최근 오류: {health['error_count']}회")
                 except Exception as e:
                     logger.error(f"Error getting Gemini stats: {e}")
-                    status_text.append("\n⚠️ Gemini 상세 정보를 가져오는데 실패했어")
+                    status_text.append("\n⚠️ Gemini 상세 정보를 가져오는데 실패했어. 미안해!")
             else:
                 status_text.append("\n**Gemini AI 서비스:**")
-                status_text.append("❌ 현재 사용할 수 없어")
-                status_text.append("AI 기능이 비활성화되어 있어")
+                status_text.append("❌ 현재 사용할 수 없어. 미안해!")
+                status_text.append("AI 기능이 일시적으로 꺼져있어. 나중에 다시 와볼래?")
             
             embed.add_field(
                 name="시스템 상태",
@@ -524,7 +524,7 @@ class AICommands(BaseCommands):
             
         except Exception as e:
             logger.error(f"Error getting usage statistics: {e}")
-            raise ValueError("사용량 정보를 가져오는데 실패했습니다") from e
+            raise ValueError("사용량 정보를 가져오는데 실패했어. 미안!") from e
 
     @commands.command(
         name="대화종료",
@@ -547,16 +547,16 @@ class AICommands(BaseCommands):
             if self.api_service.gemini.end_chat_session(ctx.author.id):
                 embed = discord.Embed(
                     title="✅ 대화 세션 종료",
-                    description="대화 세션이 종료되었어.\n새로운 대화를 시작할 수 있을거야.",
+                    description="대화 세션이 끝났어!\n새로운 대화를 언제든 시작할 수 있어.",
                     color=INFO_COLOR
                 )
             else:
                 embed = discord.Embed(
                     title="ℹ️ 알림",
-                    description="진행 중인 대화 세션이 없어.",
+                    description="진행 중인 대화 세션이 없어. 새로운 대화를 시작해볼래?",
                     color=INFO_COLOR
                 )
             await ctx.send(embed=embed)
         except Exception as e:
             logger.error(f"Error in end_chat command: {e}")
-            raise ValueError("대화 세션 종료에 실패했어.") from e 
+            raise ValueError("대화 세션 종료에 실패했어. 다시 시도해볼래?") from e 

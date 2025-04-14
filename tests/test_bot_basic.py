@@ -95,18 +95,18 @@ class TestBotBasic:
                 commands.Cooldown(1, 60),
                 retry_after=5.0,
                 type=commands.BucketType.default
-            ), "명령어 재사용 대기 시간입니다. 5.0초 후에 다시 시도해주세요"),
+            ), "명령어 재사용 대기 시간이야. 5.0초 후에 다시 시도해줘"),
             (commands.MissingPermissions(["send_messages"]), 
-             "이 명령어를 실행할 권한이 없습니다"),
+             "이 명령어를 실행할 권한이 없어"),
             (ValueError("Test error"), 
              "Test error"),
             (commands.CommandNotFound(), None),
             (commands.MissingRequiredArgument(param=MagicMock(name='param')), 
-             "필수 인자가 누락되었습니다"),
+             "필수 인자가 누락되었어"),
             (commands.BadArgument(), 
-             "잘못된 인자가 전달되었습니다"),
+             "잘못된 인자가 전달되었어"),
             (commands.NoPrivateMessage(), 
-             "명령어 실행 중 오류가 발생했습니다"),
+             "명령어 실행 중 오류가 발생한 것 같아"),
         ]
         
         for error, expected_message in errors:
