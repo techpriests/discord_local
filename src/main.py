@@ -10,7 +10,7 @@ from discord.ext import commands
 from src.services.api.service import APIService
 
 from src.bot import DiscordBot
-from src.commands import EntertainmentCommands, InformationCommands, SystemCommands, AICommands, ArknightsCommands, UtilityCommands
+from src.commands import EntertainmentCommands, InformationCommands, SystemCommands, AICommands
 
 logger = logging.getLogger(__name__)
 
@@ -147,16 +147,16 @@ class MuelsyseBot(commands.Bot):
         
         # Add command groups
         self.ai_commands = AICommands()
-        self.arknights_commands = ArknightsCommands()
-        self.utility_commands = UtilityCommands()
         self.entertainment_commands = EntertainmentCommands()
+        self.information_commands = InformationCommands()
+        self.system_commands = SystemCommands()
         
         # Add cogs (command categories)
         logger.info("Adding command cogs...")
         self.add_cog(self.ai_commands)
-        self.add_cog(self.arknights_commands)
-        self.add_cog(self.utility_commands)
         self.add_cog(self.entertainment_commands)
+        self.add_cog(self.information_commands)
+        self.add_cog(self.system_commands)
         
     async def setup_hook(self) -> None:
         """Setup hook that's called before the bot starts"""
