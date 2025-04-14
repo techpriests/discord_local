@@ -17,6 +17,8 @@ on:
       - '!pyproject.toml'
       - '!Dockerfile'
       - '!docker-compose.yml'
+      # Exclude workflow files
+      - '!.github/workflows/**'
   pull_request:
     branches: [ main ]
     paths:
@@ -33,6 +35,8 @@ on:
       - '!pyproject.toml'
       - '!Dockerfile'
       - '!docker-compose.yml'
+      # Exclude workflow files
+      - '!.github/workflows/**'
 
 # Add permissions for the entire workflow
 permissions:
@@ -149,8 +153,18 @@ jobs:
             
             # Create update file for notification
             echo "Hot reload updates available ($(date))" > ~/discord_local/updates.txt
-            git_message=$(git log -1 --pretty=%B)
-            echo "Commit message: $git_message" >> ~/discord_local/updates.txt
+            
+            # Use commit information from GitHub environment variables
+            echo "Commit SHA: ${{ github.sha }}" >> ~/discord_local/updates.txt
+            
+            # Read the commit message directly from github.event
+            if [ -n "${{ github.event.head_commit.message }}" ]; then
+                echo "Commit message: ${{ github.event.head_commit.message }}" >> ~/discord_local/updates.txt
+            else
+                # Fallback to local git if needed
+                git_message=$(git log -1 --pretty=%B)
+                echo "Commit message: $git_message" >> ~/discord_local/updates.txt
+            fi
             
             # Save commit info for version reporting
             echo "${{ github.sha }}" > ~/discord_local/hot_reload_version.txt
