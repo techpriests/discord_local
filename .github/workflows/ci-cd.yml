@@ -9,6 +9,7 @@ on:
       - 'src/utils/**'
       - '!src/utils/constants.py'  # Still include critical utility files
       - '!src/utils/types.py'
+      - '.github/workflows/**'  # Ignore workflow file changes
     tags:
       - 'temp_stable'  # Also run on our temporary tag
   pull_request:
@@ -19,6 +20,7 @@ on:
       - 'src/utils/**'
       - '!src/utils/constants.py'  # Still include critical utility files
       - '!src/utils/types.py'
+      - '.github/workflows/**'  # Ignore workflow file changes
 
 jobs:
   ci:
