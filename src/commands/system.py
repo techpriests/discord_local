@@ -316,8 +316,11 @@ class SystemCommands(BaseCommands):
                 with open(update_file, 'r') as f:
                     update_info = f.read().strip()
                 
+                # Filter out any personal information and format securely
+                filtered_info = self._filter_update_info(update_info)
+                
                 # Send notification with reload instructions
-                await ctx.send(f"**업데이트가 준비되었어**\n```\n{update_info}\n```\n적용하려면 `!!리로드` 명령어를 사용해줘.")
+                await ctx.send(f"**업데이트가 준비되었어**\n```\n{filtered_info}\n```\n적용하려면 `!!리로드` 명령어를 사용해줘.")
             else:
                 await ctx.send("새 업데이트가 없어.")
         except Exception as e:
@@ -341,15 +344,45 @@ class SystemCommands(BaseCommands):
                 with open(update_file, 'r') as f:
                     update_info = f.read().strip()
                 
+                # Filter out any personal information and format securely
+                filtered_info = self._filter_update_info(update_info)
+                
                 # Send notification with reload instructions
                 await interaction.response.send_message(
-                    f"**업데이트가 준비되었어**\n```\n{update_info}\n```\n적용하려면 `!!리로드` 명령어를 사용해줘."
+                    f"**업데이트가 준비되었어**\n```\n{filtered_info}\n```\n적용하려면 `!!리로드` 명령어를 사용해줘."
                 )
             else:
                 await interaction.response.send_message("새 업데이트가 없어.")
         except Exception as e:
             logger.error(f"Failed to check updates: {e}")
             await interaction.response.send_message(f"업데이트 확인 중 오류가 발생했어. 오류: {str(e)}")
+    
+    def _filter_update_info(self, update_info: str) -> str:
+        """Filter sensitive information from update info
+        
+        Args:
+            update_info: Raw update info from file
+            
+        Returns:
+            str: Filtered update info
+        """
+        import re
+        lines = update_info.split('\n')
+        filtered_lines = []
+        
+        for line in lines:
+            # Only keep time info and commit message
+            if line.startswith("Hot reload updates available") or line.startswith("Commit message:"):
+                filtered_lines.append(line)
+            # Remove any personal identifiers
+            elif not line.startswith("Changes by:"):
+                # Check for any email-like patterns and remove them
+                line = re.sub(r'\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b', '[EMAIL REMOVED]', line)
+                # Remove GitHub usernames
+                line = re.sub(r'@[A-Za-z0-9_-]+', '@[USERNAME]', line)
+                filtered_lines.append(line)
+        
+        return '\n'.join(filtered_lines)
     
     @commands.command(name="리로드", help="명령어 모듈을 다시 로드합니다")
     @commands.has_permissions(administrator=True)
@@ -359,6 +392,10 @@ class SystemCommands(BaseCommands):
             # Track reload outcomes
             success_modules = []
             failed_modules = {}
+            
+            # Import the reload function
+            import importlib
+            import sys
             
             if module:
                 # Reload specific module
@@ -373,12 +410,24 @@ class SystemCommands(BaseCommands):
                             if self.bot.get_cog(cog_name):
                                 await self.bot.remove_cog(cog_name)
                             
+                            # Get module name from class
+                            module_name = cmd_class.__module__
+                            
+                            # Force reload the module
+                            if module_name in sys.modules:
+                                logger.info(f"Reloading module: {module_name}")
+                                importlib.reload(sys.modules[module_name])
+                            
+                            # Re-import the command class
+                            module_obj = importlib.import_module(module_name)
+                            cmd_class = getattr(module_obj, cog_name)
+                            
                             # Re-initialize and add the cog
-                            if cmd_class.__name__ == "InformationCommands":
+                            if cog_name == "InformationCommands":
                                 cog = cmd_class(self.bot.api_service)
-                            elif cmd_class.__name__ == "SystemCommands":
+                            elif cog_name == "SystemCommands":
                                 cog = cmd_class(self.bot)
-                            elif cmd_class.__name__ == "AICommands":
+                            elif cog_name == "AICommands":
                                 cog = cmd_class()
                                 cog.bot = self.bot
                             else:
@@ -404,12 +453,24 @@ class SystemCommands(BaseCommands):
                         if self.bot.get_cog(cog_name):
                             await self.bot.remove_cog(cog_name)
                         
+                        # Get module name from class
+                        module_name = cmd_class.__module__
+                        
+                        # Force reload the module
+                        if module_name in sys.modules:
+                            logger.info(f"Reloading module: {module_name}")
+                            importlib.reload(sys.modules[module_name])
+                        
+                        # Re-import the command class to get updated version
+                        module_obj = importlib.import_module(module_name)
+                        cmd_class = getattr(module_obj, cog_name)
+                        
                         # Re-initialize and add the cog with specific initialization
-                        if cmd_class.__name__ == "InformationCommands":
+                        if cog_name == "InformationCommands":
                             cog = cmd_class(self.bot.api_service)
-                        elif cmd_class.__name__ == "SystemCommands":
+                        elif cog_name == "SystemCommands":
                             cog = cmd_class(self.bot)
-                        elif cmd_class.__name__ == "AICommands":
+                        elif cog_name == "AICommands":
                             cog = cmd_class()
                             cog.bot = self.bot
                         else:
