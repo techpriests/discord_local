@@ -301,15 +301,53 @@ class DiscordBot(commands.Bot):
         interaction: discord.Interaction,
         error: app_commands.AppCommandError
     ) -> None:
-        """Handle slash command errors
-        
-        Args:
-            interaction: Command interaction
-            error: Error that occurred
-        """
+        """Handle application command errors"""
         error_message = self._get_error_message(error)
         await self._send_error_message(interaction, error_message)
         logger.error(f"Slash command error: {error}", exc_info=error)
+
+    async def on_interaction(self, interaction: discord.Interaction) -> None:
+        """Handle button interactions
+        
+        Args:
+            interaction: The interaction event
+        """
+        # Process the interaction first to avoid timeout
+        if interaction.type == discord.InteractionType.application_command:
+            # Let discord.py handle slash commands
+            return
+            
+        # For component interactions like buttons
+        if interaction.type == discord.InteractionType.component:
+            try:
+                # Check if this is a source button
+                if interaction.data.get("custom_id", "").startswith("sources_"):
+                    # Get source_id from custom_id
+                    source_id = interaction.data.get("custom_id", "").replace("sources_", "")
+                    
+                    # Get AICommands instance
+                    ai_commands = self.get_cog("AICommands")
+                    if ai_commands:
+                        # Handle the interaction
+                        await ai_commands.handle_button_interaction(interaction)
+                        
+                        # Clean up from source_storage in ai_commands
+                        from src.commands.ai import source_storage
+                        if source_id in source_storage:
+                            del source_storage[source_id]
+                    else:
+                        await interaction.response.send_message(
+                            "AI 명령어를 처리할 수 없습니다.",
+                            ephemeral=True
+                        )
+                    
+                    return
+            except Exception as e:
+                logger.error(f"Error handling button interaction: {e}", exc_info=True)
+                await interaction.response.send_message(
+                    "버튼 처리 중 문제가 생겼어.", 
+                    ephemeral=True
+                )
 
     def _get_error_message(self, error: Exception) -> str:
         """Get user-friendly error message
