@@ -71,6 +71,28 @@ jobs:
           # Deploy application
           cd ~/discord_local
           
+          # Create CI/CD lock file to signal to hot-reload workflow
+          echo "CI/CD deployment started at $(date)" > ci_cd.lock
+          
+          # Check for active hot-reload processes
+          if [ -f "update.lock" ]; then
+            echo "Hot-reload process in progress. Waiting for completion..."
+            # Wait for lock file to be removed or timeout after 2 minutes
+            timeout=120
+            while [ -f "update.lock" ] && [ $timeout -gt 0 ]; do
+              sleep 5
+              timeout=$((timeout-5))
+              echo "Still waiting... ($timeout seconds remaining)"
+            done
+            
+            if [ -f "update.lock" ]; then
+              echo "Hot-reload process timed out. Removing lock file."
+              rm -f update.lock
+            else
+              echo "Hot-reload process completed."
+            fi
+          fi
+          
           # If deploying from tag, checkout that specific commit
           if [[ "${{ github.ref }}" == "refs/tags/temp_stable" ]]; then
             git fetch --all --tags
@@ -106,6 +128,16 @@ jobs:
           # Build and start new containers
           docker-compose build
           docker-compose up -d
+          
+          # After successful deployment, clean up hot-reload artifacts
+          # Remove updates.txt to prevent false update notifications
+          rm -f updates.txt
+          
+          # Update hot_reload_version.txt with the current version
+          echo "$GIT_COMMIT" > hot_reload_version.txt
+          
+          # Remove CI/CD lock file
+          rm -f ci_cd.lock
           
           # After successful deployment, remove old images
           # This removes images that aren't used by any container
