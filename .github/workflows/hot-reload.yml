@@ -1,0 +1,138 @@
+name: Hot Reload Process
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'src/commands/**'
+      - 'src/services/**'
+      - 'src/utils/**'
+      # Exclude core files that need full restart
+      - '!src/main.py'
+      - '!src/bot.py'
+      - '!src/utils/constants.py'
+      - '!src/utils/types.py'
+      - '!requirements.txt'
+      - '!poetry.lock'
+      - '!pyproject.toml'
+      - '!Dockerfile'
+      - '!docker-compose.yml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'src/commands/**'
+      - 'src/services/**'
+      - 'src/utils/**'
+      # Exclude core files that need full restart
+      - '!src/main.py'
+      - '!src/bot.py'
+      - '!src/utils/constants.py'
+      - '!src/utils/types.py'
+      - '!requirements.txt'
+      - '!poetry.lock'
+      - '!pyproject.toml'
+      - '!Dockerfile'
+      - '!docker-compose.yml'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install poetry
+        poetry install
+
+    - name: Run tests
+      run: poetry run pytest
+    
+    - name: Add PR comment
+      if: github.event_name == 'pull_request'
+      uses: actions/github-script@v6
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        script: |
+          github.rest.issues.createComment({
+            issue_number: context.issue.number,
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            body: '✅ Hot-reload eligible changes detected. When merged, these changes can be applied using `!!리로드` command without a full restart.'
+          })
+
+  deploy-changes:
+    needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Deploy changes to server
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            # Update only the specific files
+            cd ~/discord_local
+            
+            # Create backup timestamp
+            backup_timestamp=$(date +"%Y%m%d_%H%M%S")
+            backup_dir="src_backup_${backup_timestamp}"
+            
+            # Check disk space before proceeding
+            df_output=$(df -h . | tail -1)
+            available=$(echo $df_output | awk '{print $4}' | sed 's/G//')
+            if (( $(echo "$available < 1.0" | bc -l) )); then
+                echo "WARNING: Low disk space: ${available}G available" >> ~/discord_local/low_disk_warning.txt
+                echo "Low disk space warning: ${available}G available. Backup still proceeded." > ~/discord_local/updates.txt
+                echo "Some older backups might be cleaned up automatically." >> ~/discord_local/updates.txt
+            fi
+            
+            # Create backup of files that will be changed
+            echo "Creating backup directory: ${backup_dir}"
+            mkdir -p ${backup_dir}
+            
+            # Copy current src directories to backup
+            cp -r src/commands ${backup_dir}/ 2>/dev/null || true
+            cp -r src/services ${backup_dir}/ 2>/dev/null || true
+            cp -r src/utils ${backup_dir}/ 2>/dev/null || true
+            
+            # Create integrity verification files
+            find ${backup_dir} -type f -name "*.py" | wc -l > ${backup_dir}/file_count.txt
+            find ${backup_dir} -type f -name "*.py" -exec md5sum {} \; > ${backup_dir}/checksums.md5
+            
+            # Save backup info for rollback
+            echo "${backup_timestamp}" > ~/discord_local/current_backup.txt
+            
+            # Lock file to prevent concurrent operations
+            echo "Deployment at $(date)" > ~/discord_local/update.lock
+            
+            # Now update the files
+            git fetch origin main
+            git checkout origin/main -- src/commands src/services src/utils
+            
+            # Create update file for notification
+            echo "Hot reload updates available ($(date))" > ~/discord_local/updates.txt
+            echo "Changes by: ${{ github.actor }}" >> ~/discord_local/updates.txt
+            git_message=$(git log -1 --pretty=%B)
+            echo "Commit message: $git_message" >> ~/discord_local/updates.txt
+            
+            # Save commit info for version reporting
+            echo "${{ github.sha }}" > ~/discord_local/hot_reload_version.txt
+            
+            # Cleanup old backups (keep last 5)
+            cd ~/discord_local
+            ls -dt src_backup_* | tail -n +6 | xargs -r rm -rf
+            
+            # Remove lock file
+            rm -f ~/discord_local/update.lock 

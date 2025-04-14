@@ -161,7 +161,7 @@ class TestInformationCommands:
             first_embed = first_call.kwargs.get('embed')
             assert isinstance(first_embed, discord.Embed), "First call should have an embed"
             assert first_embed.description is not None, "Processing embed should have a description"
-            assert "가져오는 중" in first_embed.description, "Processing message not found in first embed"
+            assert "환율 정보를 가져오고 있어" in first_embed.description, "Processing message not found in first embed"
             
             # Last call should be exchange rate embed
             last_embed = last_call.kwargs.get('embed')

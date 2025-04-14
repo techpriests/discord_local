@@ -41,24 +41,24 @@ class InformationCommands(BaseCommands):
             ValueError: If API is not initialized
         """
         if not self.api.initialized:
-            raise ValueError("API 서비스가 초기화되지 않았습니다")
+            raise ValueError("API 서비스가 초기화되지 않았어")
             
         api_states = self.api.api_states
         if not api_states.get(api_name.lower(), False):
-            raise ValueError(f"{api_name} API가 초기화되지 않았습니다")
+            raise ValueError(f"{api_name} API가 초기화되지 않았어")
 
-    @discord.app_commands.command(name="population", description="국가의 인구수를 알려드립니다")
+    @discord.app_commands.command(name="population", description="국가의 인구수를 알려줄게")
     async def population_slash(self, interaction: discord.Interaction, country_name: str) -> None:
         """Slash command version"""
         await self._handle_population(interaction, country_name)
 
     @commands.command(
         name="인구",
-        help="국가의 인구수를 알려줍니다",
+        help="국가의 인구수를 알려줘",
         brief="인구 확인",
         aliases=["population"],
         description=(
-            "국가의 인구, 수도, 지역 정보를 보여줍니다.\n"
+            "국가의 인구, 수도, 지역 정보를 보여줘.\n"
             "사용법:\n"
             "• !!인구 [국가명]\n"
             "• 뮤 인구 [국가명]\n"
@@ -67,7 +67,7 @@ class InformationCommands(BaseCommands):
             "• !!인구 South Korea - 대한민국 정보\n"
             "• 뮤 인구 Japan - 일본 정보\n"
             "• pt population United States - 미국 정보\n"
-            "※ 영어로 국가명을 입력하면 더 정확한 결과를 얻을 수 있습니다."
+            "※ 영어로 국가명을 입력하면 더 정확한 결과를 얻을 수 있어."
         ),
     )
     async def population_prefix(self, ctx: commands.Context, *, country_name: str = None):
@@ -87,7 +87,7 @@ class InformationCommands(BaseCommands):
             if not self._validate_country_name(country_name):
                 return await self.send_response(
                     ctx_or_interaction, 
-                    "국가 이름을 2글자 이상 입력해주세요...",
+                    "국가 이름을 2글자 이상 입력해줘",
                     ephemeral=True
                 )
 
@@ -95,7 +95,7 @@ class InformationCommands(BaseCommands):
             try:
                 processing_msg = await self.send_response(
                     ctx_or_interaction, 
-                    "국가 정보를 검색중입니다...",
+                    "국가 정보를 검색중이야...",
                     ephemeral=True
                 )
                 country = await self._get_country_info(country_name)
@@ -165,22 +165,22 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            f"{user_name}님, 인구 정보를 가져오는데 실패했습니다: {country_name}",
+            f"{user_name}, 인구 정보를 가져오는데 실패했어: {country_name}",
             ephemeral=True
         )
 
-    @discord.app_commands.command(name="game", description="Steam 게임의 동시접속자 수를 알려드립니다")
+    @discord.app_commands.command(name="game", description="Steam 게임의 동시접속자 수를 알려줄게")
     async def game_slash(self, interaction: discord.Interaction, game_name: str) -> None:
         """Slash command for game search"""
         await self._handle_steam(interaction, game_name)
 
     @commands.command(
         name="스팀",
-        help="스팀 게임의 현재 플레이어 수를 알려줍니다",
+        help="스팀 게임의 현재 플레이어 수를 알려줄거야",
         brief="스팀 게임 정보",
         aliases=["steam", "game"],
         description=(
-            "스팀 게임의 현재 플레이어 수와 정보를 보여줍니다.\n"
+            "스팀 게임의 현재 플레이어 수와 정보를 보여줘.\n"
             "사용법:\n"
             "• !!스팀 [게임명]\n"
             "• 뮤 스팀 [게임명]\n"
@@ -189,7 +189,7 @@ class InformationCommands(BaseCommands):
             "• !!스팀 Lost Ark\n"
             "• 뮤 스팀 PUBG\n"
             "• pt steam Dota 2\n"
-            "※ 정확한 게임명을 입력하면 더 좋은 결과를 얻을 수 있습니다."
+            "※ 정확한 게임명을 입력하면 더 좋은 결과를 얻을 수 있어."
         ),
     )
     async def steam_prefix(self, ctx: commands.Context, *, game_name: str = None):
@@ -213,7 +213,7 @@ class InformationCommands(BaseCommands):
             if not game_name:
                 await self.send_response(
                     ctx_or_interaction,
-                    "게임 이름을 입력해주세요...",
+                    "어라, 게임 이름도 없이 어떻게 찾아줄 수 있겠어?",
                     ephemeral=True
                 )
                 return
@@ -224,7 +224,7 @@ class InformationCommands(BaseCommands):
                 # Show processing message
                 processing_msg = await self.send_response(
                     ctx_or_interaction,
-                    f"{user_name}님, 게임 정보를 가져오는 중...",
+                    f"{user_name}, 데이터베이스를 뒤져보는 중이야...",
                     ephemeral=True
                 )
 
@@ -269,8 +269,8 @@ class InformationCommands(BaseCommands):
             user_name: Name of the user who issued the command
         """
         embed = discord.Embed(
-            title="❌ 게임을 찾을 수 없습니다", 
-            description=f"{user_name}님, 입력하신 게임을 찾을 수 없습니다.",
+            title="❌ 모르겠어!", 
+            description=f"{user_name}, 그 이름으로는 찾을 수 없었어.",
             color=ERROR_COLOR
         )
         await self.send_response(ctx_or_interaction, embed=embed, ephemeral=True)
@@ -293,7 +293,7 @@ class InformationCommands(BaseCommands):
         
         embed = discord.Embed(
             title=f"🎮 {game['name']}", 
-            description=f"{user_name}님이 요청하신 게임의 정보입니다.",
+            description=f"{user_name}가 찾던 게임의 정보야.",
             color=SUCCESS_COLOR
         )
 
@@ -315,7 +315,7 @@ class InformationCommands(BaseCommands):
         """
         embed = discord.Embed(
             title="❌ 오류", 
-            description=f"{user_name}님, 게임 정보를 가져오는데 실패했습니다.", 
+            description=f"{user_name}, 뭔가 DB에 문제가 생긴 것 같아.", 
             color=ERROR_COLOR
         )
         await self.send_response(ctx_or_interaction, embed=embed, ephemeral=True)
@@ -348,7 +348,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"{user_name}님, 명령어 사용 제한 중입니다. {error.retry_after:.1f}초 후에 다시 시도해주세요.",
+            f"{user_name}, 명령어 사용 제한 중이야 {error.retry_after:.1f}초 후에 다시 시도해줘.",
             ephemeral=True
         )
 
@@ -361,7 +361,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"{user_name}님, 필수 입력값이 누락되었습니다. `!!muhelp {ctx.command}` 로 사용법을 확인해주세요.",
+            f"{user_name}, 필수 입력값이 누락되었어. `!!muhelp {ctx.command}` 로 사용법을 확인해줄래?",
             ephemeral=True
         )
 
@@ -375,11 +375,11 @@ class InformationCommands(BaseCommands):
         logger.error(f"Unexpected error in {ctx.command}: {error}")
         user_name = self.get_user_name(ctx)
         error_messages = [
-            f"{user_name}님, 예상치 못한 오류가 발생했습니다.",
-            "가능한 해결 방법:",
-            "• 잠시 후 다시 시도",
+            f"{user_name}, 예상치 못한 오류가 발생했어.",
+            "가능한 해결 방법은:",
+            "• 잠시 후 다시 시도하기",
             "• 명령어 사용법 확인 (`!!muhelp` 명령어 사용)",
-            "• 봇 관리자에게 문의",
+            "• 관리자에게 문의",
         ]
         await self.send_response(
             ctx,
@@ -389,10 +389,10 @@ class InformationCommands(BaseCommands):
 
     @commands.command(
         name="시간",
-        help="세계 시간을 변환합니다",
+        help="세계 시간을 변환해줘",
         brief="시간 변환",
         aliases=["time"],
-        description="한국 시간과 세계 각국의 시간을 변환합니다.\n"
+        description="한국 시간과 세계 각국의 시간을 변환해.\n"
         "사용법:\n"
         "• !!시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
         "• 뮤 시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
@@ -411,7 +411,7 @@ class InformationCommands(BaseCommands):
         """
         await self._handle_time(ctx, timezone, time_str)
 
-    @discord.app_commands.command(name="time", description="세계 시간을 보여줍니다")
+    @discord.app_commands.command(name="time", description="세계 시간을 보여줘")
     async def time_slash(
         self, 
         interaction: discord.Interaction, 
@@ -434,7 +434,7 @@ class InformationCommands(BaseCommands):
                 if not timezone:
                     return await self.send_response(
                         ctx_or_interaction,
-                        "올바른 시간대를 입력해주세요"
+                        "올바른 시간대를 입력해줘"
                     )
 
             current_time = self._get_current_time(timezone)
@@ -465,7 +465,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx_or_interaction)
         embed = discord.Embed(
             title="🕒 세계 시간",
-            description=f"{user_name}님이 요청하신 시간 정보입니다.",
+            description=f"{user_name}님이 요청하신 시간 정보야.",
             color=INFO_COLOR
         )
         embed.add_field(name="시간대", value=timezone, inline=True)
@@ -484,7 +484,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            f"{user_name}님, 시간 정보를 처리하는데 실패했습니다",
+            f"{user_name}, 시간 정보를 처리하는데 실패했어",
             ephemeral=True
         )
 
@@ -492,7 +492,7 @@ class InformationCommands(BaseCommands):
     # If you need to re-enable weather functionality in the future,
     # please check the git history for the implementation
 
-    @discord.app_commands.command(name="exchange", description="환율 정보를 보여줍니다")
+    @discord.app_commands.command(name="exchange", description="환율 정보를 보여줘")
     async def exchange_slash(
         self, 
         interaction: discord.Interaction, 
@@ -503,11 +503,11 @@ class InformationCommands(BaseCommands):
 
     @commands.command(
         name="환율",
-        help="현재 환율 정보를 보여줍니다",
+        help="현재 환율 정보를 보여줄게",
         brief="환율 확인",
         aliases=["exchange"],
-        description="주요 통화의 현재 환율 정보를 보여줍니다.\n"
-        "특정 통화를 지정하면 해당 통화의 환율만 보여줍니다.\n"
+        description="주요 통화의 현재 환율 정보를 보여줘.\n"
+        "특정 통화를 지정하면 해당 통화의 환율만 보여줄거야.\n"
         "사용법:\n"
         "• !!환율 [통화코드]\n"
         "• 뮤 환율 [통화코드]\n"
@@ -540,7 +540,7 @@ class InformationCommands(BaseCommands):
                 # Show processing message
                 processing_msg = await self.send_response(
                     ctx_or_interaction,
-                    "환율 정보를 가져오는 중...",
+                    "환율 정보를 가져오고 있어...",
                     ephemeral=True
                 )
 
@@ -570,7 +570,7 @@ class InformationCommands(BaseCommands):
         if currency not in rates:
             return await self.send_response(
                 ctx_or_interaction,
-                f"지원하지 않는 통화입니다: {currency}"
+                f"지원하지 않는 통화인 것 같아: {currency}"
             )
 
         rate = rates[currency]
@@ -614,7 +614,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx_or_interaction)
         await self.send_response(
             ctx_or_interaction,
-            f"{user_name}님, 환율 정보를 가져오는데 실패했습니다",
+            f"이런, {user_name}! 환율 정보를 가져오는데 실패했어. 서버에 일시적인 문제가 있는 것 같아. 조금 있다가 다시 해볼래?",
             ephemeral=True
         )
 

@@ -39,7 +39,7 @@ class SystemCommands(BaseCommands):
             raise commands.BotMissingPermissions(["send_messages"])
         except Exception as e:
             logger.error(f"Error in ping command: {e}")
-            raise ValueError("지연시간을 측정할 수 없습니다")
+            raise ValueError("지연시간을 측정할 수 없어")
 
     @commands.command(name="복사")
     async def echo(self, ctx: commands.Context, *, message: str) -> None:
@@ -56,7 +56,7 @@ class SystemCommands(BaseCommands):
             raise commands.BotMissingPermissions(["manage_messages"])
         except Exception as e:
             logger.error(f"Error in echo command: {e}")
-            raise ValueError("메시지를 복사할 수 없습니다")
+            raise ValueError("메시지를 복사할 수가 없네")
 
     @commands.command(
         name="따라해",
@@ -84,10 +84,10 @@ class SystemCommands(BaseCommands):
             await ctx.send(message)
         except discord.Forbidden as e:
             logger.error(f"Permission error in copy_message: {e}")
-            raise discord.Forbidden("메시지를 삭제할 권한이 없습니다.") from e
+            raise discord.Forbidden("메시지를 삭제할 권한이 없어") from e
         except Exception as e:
             logger.error(f"Error in copy_message: {e}")
-            raise ValueError("메시지 복사에 실패했습니다") from e
+            raise ValueError("메시지를 복사하다가 문제가 생겼어") from e
 
     @commands.command(aliases=["quit"])
     @commands.has_permissions(administrator=True)
@@ -98,11 +98,11 @@ class SystemCommands(BaseCommands):
             ctx: Command context
         """
         try:
-            await ctx.send("봇을 종료합니다...")
+            await ctx.send("봇을 종료할게...")
             await self.bot.close()
         except Exception as e:
             logger.error(f"Error during bot shutdown: {e}")
-            await ctx.send("봇 종료 중 오류가 발생했습니다.")
+            await ctx.send("봇 종료 중 문제가 생겼어.")
 
     @commands.command(aliases=["restart"])
     @commands.has_permissions(administrator=True)
@@ -113,12 +113,12 @@ class SystemCommands(BaseCommands):
             ctx: Command context
         """
         try:
-            await ctx.send("봇을 재시작합니다...")
+            await ctx.send("봇을 재시작할게...")
             await self.bot.close()
             # The Docker container's restart policy will handle the actual restart
         except Exception as e:
             logger.error(f"Error during bot restart: {e}")
-            await ctx.send("봇 재시작 중 오류가 발생했습니다.")
+            await ctx.send("재시작 중에 문제가 생겼어.")
 
     @commands.command(name="동기화", help="슬래시 명령어를 동기화합니다")
     @commands.has_permissions(administrator=True)
@@ -126,12 +126,12 @@ class SystemCommands(BaseCommands):
         """Synchronize slash commands (admin only)"""
         try:
             await self.bot.tree.sync()
-            await ctx.send("슬래시 명령어 동기화 완료!")
+            await ctx.send("명령어 동기화 완료했어!")
         except discord.Forbidden:
             raise commands.BotMissingPermissions(["manage_guild"])
         except Exception as e:
             logger.error(f"Failed to sync commands: {e}")
-            raise ValueError("명령어 동기화에 실패했습니다") from e
+            raise ValueError("명령어 동기화 중중 문제가 생겼어") from e
 
     @commands.command(
         name="버전",
@@ -290,7 +290,7 @@ class SystemCommands(BaseCommands):
             logger.error(f"Error in help command: {e}", exc_info=True)
             error_embed = discord.Embed(
                 title="❌ 오류",
-                description="도움말을 표시하는 중 오류가 발생했습니다.",
+                description="도움말을 표시하는 중에 문제가 생겼어.",
                 color=discord.Color.red()
             )
             if isinstance(ctx_or_interaction, discord.Interaction):
