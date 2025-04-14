@@ -98,6 +98,27 @@ jobs:
             # Update only the specific files
             cd ~/discord_local
             
+            # Check for active CI/CD processes
+            # First, check if Docker Compose is actively restarting containers
+            docker_busy=$(docker ps -a --filter "status=restarting" --filter "name=discord_" | wc -l)
+            
+            if [ "$docker_busy" -gt 0 ]; then
+                echo "CI/CD deployment in progress (Docker containers restarting). Hot-reload will be skipped."
+                exit 0
+            fi
+            
+            # Check for CI/CD lock marker
+            if [ -f "ci_cd.lock" ]; then
+                # Check if lock is recent (within last 5 minutes)
+                if [ $(( $(date +%s) - $(date -r ci_cd.lock +%s) )) -lt 300 ]; then
+                    echo "CI/CD deployment detected within last 5 minutes. Hot-reload will be skipped."
+                    exit 0
+                else
+                    # Lock is stale, remove it
+                    rm -f ci_cd.lock
+                fi
+            fi
+            
             # Create backup timestamp
             backup_timestamp=$(date +"%Y%m%d_%H%M%S")
             backup_dir="src_backup_${backup_timestamp}"
