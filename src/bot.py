@@ -271,7 +271,7 @@ class DiscordBot(commands.Bot):
             logger.info("Setting bot presence...")
             await cast(discord.Client, self).change_presence(
                 activity=discord.Game(
-                    name=f"뮤 도움말 | /muhelp | {self.version_info.commit}"
+                    name=f"뮤 도움말 | /help | {self.version_info.commit}"
                 )
             )
             logger.info("Bot initialization complete")

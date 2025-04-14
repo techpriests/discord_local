@@ -547,7 +547,7 @@ class AICommands(BaseCommands):
             if self.api_service.gemini.end_chat_session(ctx.author.id):
                 embed = discord.Embed(
                     title="✅ 대화 세션 종료",
-                    description="대화 세션이 종료되었어.\n새로운 대화를 시작하실 수 있을거야.",
+                    description="대화 세션이 종료되었어.\n새로운 대화를 시작할 수 있을거야.",
                     color=INFO_COLOR
                 )
             else:
