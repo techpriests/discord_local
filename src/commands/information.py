@@ -392,7 +392,7 @@ class InformationCommands(BaseCommands):
         help="세계 시간을 변환해줘",
         brief="시간 변환",
         aliases=["time"],
-        description="한국 시간과 세계 각국의 시간을 변환해.\n"
+        description="한국 시간과 세계 각국의 시간을 비교해서 알려줄거야.\n"
         "사용법:\n"
         "• !!시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
         "• 뮤 시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
@@ -465,7 +465,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx_or_interaction)
         embed = discord.Embed(
             title="🕒 세계 시간",
-            description=f"{user_name}님이 요청하신 시간 정보야.",
+            description=f"{user_name}가 요청한 시간 정보야.",
             color=INFO_COLOR
         )
         embed.add_field(name="시간대", value=timezone, inline=True)
