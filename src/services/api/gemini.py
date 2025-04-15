@@ -1149,7 +1149,14 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Re-raise with appropriate message
             if isinstance(e, ValueError):
                 raise
+            
             logger.error(f"Error in Gemini chat: {e}")
+            
+            # Check for 503 overload errors specifically
+            if '503 UNAVAILABLE' in str(e) and 'overloaded' in str(e):
+                raise ValueError("Gemini API가 현재 과부하 상태야. 잠시 후에 다시 시도해줄래?") from e
+            
+            # Generic error for other cases
             raise ValueError(f"Gemini API 요청에 실패했어: {str(e)}") from e
 
     @property
