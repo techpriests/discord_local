@@ -911,3 +911,71 @@ class SystemCommands(BaseCommands):
             # Force shutdown as last resort
             import sys
             sys.exit(1)
+
+    @commands.command(name="건강", aliases=["health"])
+    @commands.is_owner()  # Restrict to bot owner only
+    async def health_check_prefix(self, ctx):
+        """Check if all modules are properly loaded after hot-reloading"""
+        await self._handle_health_check(ctx)
+        
+    @discord.app_commands.command(
+        name="health",
+        description="모듈 핫-리로드 상태를 확인합니다"
+    )
+    @discord.app_commands.default_permissions(administrator=True)  # Default perm requirement
+    @discord.app_commands.check(lambda i: i.client.is_owner(i.user))  # Actual check for owner
+    async def health_check_slash(self, interaction: discord.Interaction):
+        """Slash command for health check"""
+        await self._handle_health_check(interaction)
+        
+    async def _handle_health_check(self, ctx_or_interaction: CommandContext):
+        """Handle health check for both prefix and slash commands"""
+        try:
+            health_results = []
+            
+            # Define critical modules to check (add more as needed)
+            modules_to_check = [
+                {
+                    "name": "GeminiAPI", 
+                    "module_path": "src.services.api.gemini", 
+                    "class_name": "GeminiAPI",
+                    "instance": self.bot.api_service.gemini
+                }
+                # Add other important modules here as needed
+            ]
+            
+            for module_info in modules_to_check:
+                # Dynamically import the module
+                import importlib
+                module = importlib.import_module(module_info["module_path"])
+                
+                # Get the current class from the module
+                current_class = getattr(module, module_info["class_name"])
+                
+                # Get the instance's class
+                instance_class = module_info["instance"].__class__
+                
+                # Compare the actual class objects
+                if current_class is not instance_class:
+                    health_results.append(f"❌ {module_info['name']}: Using outdated version")
+                else:
+                    health_results.append(f"✅ {module_info['name']}: Up to date")
+            
+            # Overall status
+            if all(r.startswith("✅") for r in health_results):
+                status = "✅ All systems up to date"
+            else:
+                status = "❌ Outdated instances detected - restart recommended"
+                
+            # Send response appropriately for context or interaction
+            message = f"**Health Check Results**\n" + "\n".join(health_results) + f"\n\n**Status:** {status}"
+            await self.send_response(ctx_or_interaction, message)
+            
+        except Exception as e:
+            import traceback
+            error_msg = traceback.format_exc()
+            logger.error(f"Health check error: {error_msg}")
+            
+            # Send error response appropriately
+            message = f"❌ Health check failed with error: {type(e).__name__} - {str(e)}"
+            await self.send_response(ctx_or_interaction, message)
