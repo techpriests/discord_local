@@ -1384,16 +1384,4 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if user_id in self._chat_sessions:
                 del self._chat_sessions[user_id]
             if user_id in self._last_interaction:
-                del self._last_interaction[user_id]
-
-            # If no sources found from direct chunks, try looking at the actual content for URLs
-            if not source_links and hasattr(response, 'text'):
-                logger.info("No sources found in chunks, looking for URLs in text")
-                # Look for URLs in the text using a regex pattern
-                url_pattern = r'https?://(?:[-\w.]|(?:%[\da-fA-F]{2}))+'
-                urls = re.findall(url_pattern, response.text)
-                for url in urls:
-                    domain = urlparse(url).netloc
-                    title = f"Source from {domain}"
-                    source_links.append((title, url, domain))
-                    logger.info(f"Added URL from text: {url}") 
+                del self._last_interaction[user_id] 
