@@ -230,7 +230,7 @@ class APIService:
             logger.error(f"Failed to initialize API service: {e}")
             raise
 
-    async def _cleanup_apis(self, apis: List[tuple[str, BaseAPI]]) -> None:
+    async def _cleanup_apis(self, apis: List[tuple[str, Optional[BaseAPI]]]) -> None:
         """Clean up initialized APIs
         
         Args:
@@ -239,6 +239,10 @@ class APIService:
         cleanup_errors = []
         for api_name, api in apis:
             try:
+                if api is None:
+                    logger.info(f"Skipping cleanup for {api_name} API (not initialized)")
+                    continue
+                    
                 logger.info(f"Cleaning up {api_name} API...")
                 await api.close()
             except Exception as e:
@@ -285,19 +289,36 @@ class APIService:
             return False
 
     async def close(self) -> None:
-        """Cleanup all API clients"""
-        apis_to_close = [
-            ("Steam", self._steam_api),
-            ("Population", self._population_api),
-            ("Exchange", self._exchange_api),
-            ("DNF", self._dnf_api)
-        ]
-        
-        if self._gemini_api:
-            apis_to_close.append(("Gemini", self._gemini_api))
+        """Clean up all API clients"""
+        try:
+            # Create a list of API clients to clean up
+            apis_to_cleanup = [
+                ("Steam", self._steam_api),
+                ("Population", self._population_api),
+                ("Exchange", self._exchange_api),
+                ("DNF", self._dnf_api),
+                ("Gemini", self._gemini_api)
+            ]
+            await self._cleanup_apis(apis_to_cleanup)
             
-        await self._cleanup_apis(apis_to_close)
-        logger.info("All API clients cleaned up")
+            # Reset API state
+            self._reset_api_states()
+            self._initialized = False
+            
+            # Set all API clients to None
+            self._steam_api = None
+            self._population_api = None
+            self._exchange_api = None
+            self._dnf_api = None
+            self._gemini_api = None
+            
+            logger.info("All API clients cleaned up")
+            
+        except Exception as e:
+            logger.error(f"Error during API service cleanup: {e}")
+            # Ensure we reset state even if cleanup fails
+            self._reset_api_states()
+            self._initialized = False
 
     async def __aenter__(self) -> 'APIService':
         """Async context manager entry"""

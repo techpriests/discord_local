@@ -116,6 +116,24 @@ class SystemCommands(BaseCommands):
         """
         try:
             await ctx.send("봇을 재시작할게...")
+            
+            # Schedule force exit after a timeout
+            import threading
+            import os
+            import signal
+            import time
+            
+            def force_exit_after_timeout():
+                # Wait 10 seconds for graceful shutdown
+                time.sleep(10)
+                # If we're still running after timeout, force exit
+                logger.warning("Shutdown timeout reached. Forcing exit...")
+                os.kill(os.getpid(), signal.SIGTERM)
+            
+            # Start force exit timer in a non-blocking thread
+            threading.Thread(target=force_exit_after_timeout, daemon=True).start()
+            
+            # Initiate graceful shutdown
             await self.bot.close()
             # The Docker container's restart policy will handle the actual restart
         except Exception as e:
