@@ -294,21 +294,77 @@ class AICommands(BaseCommands):
     ):
         """Start a chat with the AI."""
         try:
-            # Use the same handler as the prefix command
-            await self._handle_chat(interaction, message)
+            # Immediately defer the response to prevent timeout
+            await interaction.response.defer(ephemeral=private)
+            
+            # Check Gemini state
+            await self._check_gemini_state()
+            
+            # Get user ID
+            user_id = interaction.user.id
+            
+            # Process through Gemini API directly
+            response, source_content = await self.api_service.gemini.chat(message, user_id)
+            
+            # Format and send response
+            max_length = 4000  # Leave buffer for embed formatting
+            
+            if len(response) > max_length:
+                # Split response into chunks
+                chunks = [response[i:i+max_length] for i in range(0, len(response), max_length)]
+                
+                # Send first chunk as an embed
+                first_embed = discord.Embed(
+                    description=chunks[0],
+                    color=INFO_COLOR
+                )
+                
+                # Add source view if needed
+                view = None
+                if source_content:
+                    source_id = str(uuid.uuid4())
+                    source_storage[source_id] = source_content
+                    view = SourceView(source_id)
+                
+                # Send first response
+                await interaction.followup.send(embed=first_embed, view=view)
+                
+                # Send remaining chunks
+                for chunk in chunks[1:]:
+                    await interaction.followup.send(chunk)
+            else:
+                # Create embed for response
+                embed = discord.Embed(
+                    description=response,
+                    color=INFO_COLOR
+                )
+                
+                # Add source view if needed
+                view = None
+                if source_content:
+                    source_id = str(uuid.uuid4())
+                    source_storage[source_id] = source_content
+                    view = SourceView(source_id)
+                
+                # Send response
+                await interaction.followup.send(embed=embed, view=view)
+                
+        except ValueError as e:
+            # Handle expected errors
+            if interaction.response.is_done():
+                await interaction.followup.send(str(e), ephemeral=True)
+            else:
+                await interaction.response.send_message(str(e), ephemeral=True)
         except Exception as e:
             # Log unexpected errors
             logger.error(f"Error in chat slash command: {str(e)}", exc_info=True)
+            
+            error_msg = "응답을 처리하는 중 문제가 생겼어. 잠시 후에 다시 해볼래?"
+            
             if interaction.response.is_done():
-                await interaction.followup.send(
-                    "응답을 처리하는 중 문제가 생겼어. 잠시 후에 다시 해볼래?",
-                    ephemeral=True
-                )
+                await interaction.followup.send(error_msg, ephemeral=True)
             else:
-                await interaction.response.send_message(
-                    "응답을 처리하는 중 문제가 생겼어. 잠시 후에 다시 해볼래?",
-                    ephemeral=True
-                )
+                await interaction.response.send_message(error_msg, ephemeral=True)
 
     @command_handler()
     async def _handle_chat(
