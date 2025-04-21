@@ -36,8 +36,8 @@ class ArknightsCommands(BaseCommands):
         """Calculate Arknights pull probabilities
         
         Usage:
-            !명방 [pulls]
-            Example: !명방 50
+            뮤 명방 [pulls]
+            Example: 뮤 명방 50
         """
         await self._handle_pull_calc(ctx, pulls)
 
@@ -50,8 +50,8 @@ class ArknightsCommands(BaseCommands):
         """Calculate Arknights limited banner pull probabilities
         
         Usage:
-            !명방한정 [pulls]
-            Example: !명방한정 300
+            뮤 명방한정 [pulls]
+            Example: 뮤 명방한정 300
         """
         await self._handle_pull_calc(ctx, pulls, is_limited=True)
 
@@ -85,8 +85,8 @@ class ArknightsCommands(BaseCommands):
         """Calculate pulls from Arknights resources
         
         Usage:
-            !자원 [합성옥] [순오리지늄] [헤드헌팅권]
-            Example: !자원 6000 10 2
+            뮤 자원 [합성옥] [순오리지늄] [헤드헌팅권]
+            Example: 뮤 자원 6000 10 2
         """
         await self._handle_resource_calc(ctx, orundum, originite, permits)
 
@@ -102,7 +102,7 @@ class ArknightsCommands(BaseCommands):
             if pulls <= 0:
                 await self.send_error(
                     ctx_or_interaction,
-                    "뽑기 횟수는 1회 이상이어야 합니다",
+                    "뽑기 횟수는 1회 이상이어야 해.",
                     ephemeral=True
                 )
                 return
@@ -110,7 +110,7 @@ class ArknightsCommands(BaseCommands):
             if pulls > 1000:
                 await self.send_error(
                     ctx_or_interaction,
-                    "계산 가능한 최대 뽑기 횟수는 1000회입니다",
+                    "계산 가능한 최대 뽑기 횟수는 1000회야.",
                     ephemeral=True
                 )
                 return
@@ -122,7 +122,7 @@ class ArknightsCommands(BaseCommands):
             user_name = self.get_user_name(ctx_or_interaction)
             embed = discord.Embed(
                 title="🎲 명일방주 뽑기 확률 계산",
-                description=f"{user_name}님의 {pulls}회 뽑기 결과입니다.",
+                description=f"{user_name}의 {pulls}회 뽑기 결과야.",
                 color=INFO_COLOR
             )
 
@@ -175,7 +175,7 @@ class ArknightsCommands(BaseCommands):
         try:
             # Input validation
             if orundum < 0 or originite < 0 or permits < 0:
-                raise ValueError("자원 수량은 0 이상이어야 합니다")
+                raise ValueError("자원 수량은 0 이상이어야 해.")
 
             # Calculate pulls from resources
             result = self.calculator.calculate_pulls_from_resources(
