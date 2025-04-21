@@ -29,7 +29,7 @@ class EntertainmentCommands(BaseCommands):
         help="봇과 인사를 나눕니다",
         brief="인사하기",
         aliases=["인사", "하이"],
-        description="봇과 인사를 나누는 명령어입니다.\n사용법: !!안녕",
+        description="봇과 인사를 나누는 명령어입니다.\n사용법: 뮤 안녕",
     )
     async def hello(self, ctx: commands.Context) -> None:
         """Greet the user"""
@@ -48,9 +48,9 @@ class EntertainmentCommands(BaseCommands):
         brief="선택하기",
         aliases=["choice", "골라줘"],
         description="여러 선택지 중 하나를 무작위로 선택해주는 명령어야.\n"
-        "사용법: !!투표 [선택지1] [선택지2] ...\n"
-        "또는: !!골라줘 [선택지1] [선택지2] ...\n"
-        "예시: !!투표 피자 치킨 햄버거",
+        "사용법: 뮤 골라줘 [선택지1] [선택지2] ...\n"
+        "또는: 뮤 투표 선택지1] [선택지2] ...\n"
+        "예시: 뮤 투표 피자 치킨 햄버거",
     )
     async def choose(self, ctx: commands.Context, *args: str) -> None:
         """Choose one option from multiple choices"""
@@ -83,7 +83,7 @@ class EntertainmentCommands(BaseCommands):
         """
         if len(choices) < 2:
             raise ValueError(
-                "최소 두 가지 이상의 선택지를 입력해줘. " "(예시: !!투표 피자 치킨 햄버거)"
+                "최소 두 가지 이상의 선택지를 입력해줘. " "(예시: 뮤 투표 피자 치킨 햄버거)"
             )
 
         if any(len(choice) > 100 for choice in choices):
@@ -109,11 +109,11 @@ class EntertainmentCommands(BaseCommands):
         brief="주사위 굴리기",
         aliases=["roll", "굴려"],
         description="지정한 개수와 면의 수만큼 주사위를 굴립니다.\n"
-        "사용법: !!주사위 [개수]d[면수]\n"
+        "사용법: 뮤 주사위 [개수]d[면수]\n"
         "예시:\n"
-        "!!주사위 2d6  -> 6면체 주사위 2개\n"
-        "!!주사위 1d20 -> 20면체 주사위 1개\n"
-        "!!주사위 3d4  -> 4면체 주사위 3개",
+        "뮤 주사위 2d6  -> 6면체 주사위 2개\n"
+        "뮤 주사위 1d20 -> 20면체 주사위 1개\n"
+        "뮤 주사위 3d4  -> 4면체 주사위 3개",
     )
     async def roll_dice(
         self,

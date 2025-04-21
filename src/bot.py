@@ -26,6 +26,18 @@ from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
 
+# Help description for the bot
+HELP_DESCRIPTION = """
+**주요 명령어**:
+• `/chat` - AI와 대화하기
+• `/game` - 스팀 게임 정보 보기
+• `/dice` - 주사위 굴리기
+• `/poll` - 투표 만들기
+• `/roll` - 다양한 주사위 굴리기
+
+자세한 명령어 안내는 각 명령어의 설명을 참고해 줘줘.
+"""
+
 class DiscordBot(commands.Bot):
     """Main bot class handling commands and events"""
 

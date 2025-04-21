@@ -1,4 +1,5 @@
 import logging
+import os
 import time
 import asyncio
 from typing import List, Dict, Any, Optional, Union
@@ -67,8 +68,8 @@ class SystemCommands(BaseCommands):
         aliases=["copy", "mimic"],
         description=(
             "입력한 메시지를 그대로 따라합니다.\n"
-            "사용법: !!따라해 [메시지]\n"
-            "예시: !!따라해 안녕하세요"
+            "사용법: 뮤 따라해 [메시지]\n"
+            "예시: 뮤 따라해 안녕하세요"
         ),
     )
     async def copy_message(self, ctx: commands.Context, *, message: str) -> None:
@@ -196,7 +197,7 @@ class SystemCommands(BaseCommands):
         aliases=["muhelp", "도움말", "도움", "명령어"],
         description="봇의 모든 명령어와 사용법을 보여줍니다.\n"
         "사용법:\n"
-        "• !!help\n"
+        "• 뮤 도움말\n"
         "• 뮤 help\n"
         "• pt help"
     )
@@ -221,10 +222,9 @@ class SystemCommands(BaseCommands):
                 title="🤖 뮤엘시스 도움말",
                 description=(
                     "모든 명령어는 다음 세 가지 방식으로 사용할 수 있어:\n\n"
-                    "1. !!명령어 - 기본 접두사\n"
-                    "2. 뮤 명령어 - 한글 접두사\n"
-                    "3. mu command - 영문 접두사\n"
-                    "4. /command - 슬래시 명령어"
+                    "1. 뮤 명령어 - 기본 접두사\n"
+                    "2. mu command - 영문 접두사\n"
+                    "3. /command - 슬래시 명령어"
                 ),
                 color=discord.Color.blue()
             )
@@ -233,10 +233,10 @@ class SystemCommands(BaseCommands):
             embed.add_field(
                 name="🎮 엔터테인먼트",
                 value=(
-                    "• !!안녕 - 봇과 인사하기\n"
-                    "• !!주사위 [XdY] - 주사위 굴리기 (예: 2d6)\n"
-                    "• !!투표 [선택지1] [선택지2] ... - 투표 생성\n"
-                    "• !!골라줘 [선택지1] [선택지2] ... - 무작위 선택"
+                    "• 뮤 안녕 - 봇과 인사하기\n"
+                    "• 뮤 주사위 [XdY] - 주사위 굴리기 (예: 2d6)\n"
+                    "• 뮤 투표 [선택지1] [선택지2] ... - 투표 생성\n"
+                    "• 뮤 골라줘 [선택지1] [선택지2] ... - 무작위 선택"
                 ),
                 inline=False
             )
@@ -244,9 +244,9 @@ class SystemCommands(BaseCommands):
             embed.add_field(
                 name="🤖 AI 명령어",
                 value=(
-                    "• !!대화 [메시지] - AI와 대화하기\n"
-                    "• !!대화종료 - 대화 세션 종료\n"
-                    "• !!사용량 - AI 시스템 상태 확인"
+                    "• 뮤 대화 [메시지] - AI와 대화하기\n"
+                    "• 뮤 대화종료 - 대화 세션 종료\n"
+                    "• 뮤 사용량 - AI 시스템 상태 확인"
                 ),
                 inline=False
             )
@@ -254,10 +254,10 @@ class SystemCommands(BaseCommands):
             embed.add_field(
                 name="📊 정보 명령어",
                 value=(
-                    "• !!스팀 [게임이름] - 스팀 게임 정보 확인\n"
-                    "• !!시간 [지역] - 세계 시간 확인\n"
-                    "• !!인구 [국가] - 국가 인구 정보 확인\n"
-                    "• !!환율 [통화코드] - 환율 정보 확인(현재 사용 불가)"
+                    "• 뮤 스팀 [게임이름] - 스팀 게임 정보 확인\n"
+                    "• 뮤 시간 [지역] - 세계 시간 확인\n"
+                    "• 뮤 인구 [국가] - 국가 인구 정보 확인\n"
+                    "• 뮤 환율 [통화코드] - 환율 정보 확인(현재 사용 불가)"
                 ),
                 inline=False
             )
@@ -265,10 +265,10 @@ class SystemCommands(BaseCommands):
             embed.add_field(
                 name="🎲 명일방주 명령어",
                 value=(
-                    "• !!명방 [횟수] - 일반 배너 뽑기 확률 계산\n"
+                    "• 뮤 명방 [횟수] - 일반 배너 뽑기 확률 계산\n"
                     "  └ /arknights_pull [횟수] - 슬래시 명령어 버전\n"
-                    "• !!명방한정 [횟수] - 한정 배너 뽑기 확률 계산\n"
-                    "• !!자원 [합성옥] [순오리지늄] [헤드헌팅권] - 보유 자원으로 가능한 뽑기 횟수 계산\n"
+                    "• 뮤 명방한정 [횟수] - 한정 배너 뽑기 확률 계산\n"
+                    "• 뮤 자원 [합성옥] [순오리지늄] [헤드헌팅권] - 보유 자원으로 가능한 뽑기 횟수 계산\n"
                     "  └ /arknights_resources - 슬래시 명령어 버전"
                 ),
                 inline=False
@@ -277,8 +277,8 @@ class SystemCommands(BaseCommands):
             embed.add_field(
                 name="⚙️ 시스템 명령어",
                 value=(
-                    "• !!핑 - 봇 지연시간 확인\n"
-                    "• !!복사 [메시지] - 메시지 복사\n"
+                    "• 뮤 핑 - 봇 지연시간 확인\n"
+                    "• 뮤 복사 [메시지] - 메시지 복사\n"
                 ),
                 inline=False
             )
@@ -286,9 +286,9 @@ class SystemCommands(BaseCommands):
             embed.add_field(
                 name="💾 메모리 명령어[현재 사용불가]",
                 value=(
-                    "• !!기억 [텍스트] [별명] - 정보 저장\n"
-                    "• !!알려 [별명] - 정보 확인\n"
-                    "• !!잊어 [별명] - 정보 삭제"
+                    "• 뮤 기억 [텍스트] [별명] - 정보 저장\n"
+                    "• 뮤 알려 [별명] - 정보 확인\n"
+                    "• 뮤 잊어 [별명] - 정보 삭제"
                 ),
                 inline=False
             )
@@ -338,7 +338,7 @@ class SystemCommands(BaseCommands):
                 filtered_info = self._filter_update_info(update_info)
                 
                 # Send notification with reload instructions
-                await ctx.send(f"**업데이트가 준비되었어**\n```\n{filtered_info}\n```\n적용하려면 `!!리로드` 명령어를 사용해줘.")
+                await ctx.send(f"**업데이트가 준비되었어**\n```\n{filtered_info}\n```\n적용하려면 `뮤 리로드` 명령어를 사용해줘.")
             else:
                 await ctx.send("새 업데이트가 없어.")
         except Exception as e:
@@ -367,7 +367,7 @@ class SystemCommands(BaseCommands):
                 
                 # Send notification with reload instructions
                 await interaction.response.send_message(
-                    f"**업데이트가 준비되었어**\n```\n{filtered_info}\n```\n적용하려면 `!!리로드` 명령어를 사용해줘."
+                    f"**업데이트가 준비되었어**\n```\n{filtered_info}\n```\n적용하려면 `뮤 리로드` 명령어를 사용해줘."
                 )
             else:
                 await interaction.response.send_message("새 업데이트가 없어.")

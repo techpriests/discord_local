@@ -60,12 +60,11 @@ class InformationCommands(BaseCommands):
         description=(
             "국가의 인구, 수도, 지역 정보를 보여줘.\n"
             "사용법:\n"
-            "• !!인구 [국가명]\n"
             "• 뮤 인구 [국가명]\n"
             "• pt population [국가명]\n"
             "예시:\n"
-            "• !!인구 South Korea - 대한민국 정보\n"
-            "• 뮤 인구 Japan - 일본 정보\n"
+            "• 뮤 인구 South Korea - 대한민국 정보\n"
+            "• pt population Japan - 일본 정보\n"
             "• pt population United States - 미국 정보\n"
             "※ 영어로 국가명을 입력하면 더 정확한 결과를 얻을 수 있어."
         ),
@@ -182,12 +181,11 @@ class InformationCommands(BaseCommands):
         description=(
             "스팀 게임의 현재 플레이어 수와 정보를 보여줘.\n"
             "사용법:\n"
-            "• !!스팀 [게임명]\n"
             "• 뮤 스팀 [게임명]\n"
             "• pt steam [게임명]\n"
             "예시:\n"
-            "• !!스팀 Lost Ark\n"
-            "• 뮤 스팀 PUBG\n"
+            "• 뮤 스팀 Lost Ark\n"
+            "• pt steam PUBG\n"
             "• pt steam Dota 2\n"
             "※ 정확한 게임명을 입력하면 더 좋은 결과를 얻을 수 있어."
         ),
@@ -361,7 +359,7 @@ class InformationCommands(BaseCommands):
         user_name = self.get_user_name(ctx)
         await self.send_response(
             ctx,
-            f"{user_name}, 필수 입력값이 누락되었어. `!!muhelp {ctx.command}` 로 사용법을 확인해줄래?",
+            f"{user_name}, 필수 입력값이 누락되었어. `뮤 muhelp {ctx.command}` 로 사용법을 확인해줄래?",
             ephemeral=True
         )
 
@@ -378,7 +376,7 @@ class InformationCommands(BaseCommands):
             f"{user_name}, 예상치 못한 오류가 발생했어.",
             "가능한 해결 방법은:",
             "• 잠시 후 다시 시도하기",
-            "• 명령어 사용법 확인 (`!!muhelp` 명령어 사용)",
+            "• 명령어 사용법 확인 (`뮤 muhelp` 명령어 사용)",
             "• 관리자에게 문의",
         ]
         await self.send_response(
@@ -394,20 +392,19 @@ class InformationCommands(BaseCommands):
         aliases=["time"],
         description="한국 시간과 세계 각국의 시간을 비교해서 알려줄거야.\n"
         "사용법:\n"
-        "• !!시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
         "• 뮤 시간 [지역] [시간]  -> 특정 지역/시간 변환\n"
         "• pt time [지역] [시간]  -> 특정 지역/시간 변환\n"
         "예시:\n"
-        "• !!시간  -> 주요 도시 시간 표시\n"
+        "• 뮤 시간  -> 주요 도시 시간 표시\n"
         "• 뮤 시간 US/Pacific  -> 특정 지역 시간 변환\n"
         "• pt time US/Pacific 09:00  -> 특정 시간 변환",
     )
     async def time_prefix(self, ctx, timezone: str = None, time_str: str = None):
         """Convert time between timezones
         Examples:
-        !!시간  # Show all timezones
-        !!시간 US/Pacific  # Convert current KR time to PST
-        !!시간 US/Pacific 09:00  # Convert PST 09:00 to KR time
+        뮤 시간  # Show all timezones
+        뮤 시간 US/Pacific  # Convert current KR time to PST
+        뮤 시간 US/Pacific 09:00  # Convert PST 09:00 to KR time
         """
         await self._handle_time(ctx, timezone, time_str)
 
@@ -509,11 +506,10 @@ class InformationCommands(BaseCommands):
         description="주요 통화의 현재 환율 정보를 보여줘.\n"
         "특정 통화를 지정하면 해당 통화의 환율만 보여줄거야.\n"
         "사용법:\n"
-        "• !!환율 [통화코드]\n"
         "• 뮤 환율 [통화코드]\n"
         "• pt exchange [통화코드]\n"
         "예시:\n"
-        "• !!환율\n"
+        "• 뮤 환율\n"
         "• 뮤 환율 USD\n"
         "• pt exchange EUR",
     )

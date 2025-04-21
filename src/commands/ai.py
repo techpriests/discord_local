@@ -294,34 +294,21 @@ class AICommands(BaseCommands):
     ):
         """Start a chat with the AI."""
         try:
-            # Check if Gemini API is available
-            await self._check_gemini_state()
-            
-            # Create or get chat session
-            chat = await self._get_or_create_chat_session(interaction, private)
-            
-            # Process the chat request
-            response = await chat.send_message(
-                message,
-                enable_search=search
-            )
-            
-            # Format and send response
-            await self._process_response(interaction, response, private)
-            
-        except ValueError as e:
-            # Handle known error states (API not available, etc)
-            await interaction.response.send_message(
-                str(e),
-                ephemeral=True
-            )
+            # Use the same handler as the prefix command
+            await self._handle_chat(interaction, message)
         except Exception as e:
             # Log unexpected errors
-            logger.error(f"Error in chat command: {str(e)}", exc_info=True)
-            await interaction.response.send_message(
-                "응답을 처리하는 중 문제가 생겼어. 잠시 후에 다시 해볼래?",
-                ephemeral=True
-            )
+            logger.error(f"Error in chat slash command: {str(e)}", exc_info=True)
+            if interaction.response.is_done():
+                await interaction.followup.send(
+                    "응답을 처리하는 중 문제가 생겼어. 잠시 후에 다시 해볼래?",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    "응답을 처리하는 중 문제가 생겼어. 잠시 후에 다시 해볼래?",
+                    ephemeral=True
+                )
 
     @command_handler()
     async def _handle_chat(
@@ -422,8 +409,7 @@ class AICommands(BaseCommands):
         description="현재 시스템 상태와 사용량을 보여줘.\n"
         "토큰 사용량, CPU/메모리 사용량, 오류 상태 등을 확인할 수 있어.\n\n"
         "사용법:\n"
-        "• !!사용량 - 전체 시스템 상태 확인\n"
-        "• 뮤 사용량\n"
+        "• 뮤 사용량 - 전체 시스템 상태 확인\n"
         "• pt usage\n\n"
         "표시 정보:\n"
         "• 현재 분당 요청 수\n"
@@ -534,12 +520,11 @@ class AICommands(BaseCommands):
         description="현재 진행 중인 대화를 종료해.\n"
         "대화가 종료되면 이전 대화 내용은 더 이상 기억되지 않아.\n\n"
         "사용법:\n"
-        "• !!대화종료 - 현재 대화 세션을 즉시 종료\n"
-        "• 뮤 대화종료\n"
+        "• 뮤 대화종료 - 현재 대화 세션을 즉시 종료\n"
         "• pt endchat\n\n"
         "참고:\n"
         "• 대화는 30분 동안 활동이 없으면 자동으로 종료돼\n"
-        "• 새로운 대화는 !!대화 명령어로 언제든 시작할 수 있어"
+        "• 새로운 대화는 뮤 대화 명령어로 언제든 시작할 수 있어"
     )
     async def end_chat(self, ctx: commands.Context) -> None:
         """End current chat session"""
