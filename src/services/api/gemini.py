@@ -247,7 +247,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         
         # Test the API connection
         response = self._client.models.generate_content(
-            model='gemini-2.5-pro-exp-03-25',
+            model='gemini-2.5-pro-preview-05-06',
             contents='test',
             config=self._generation_config
         )
@@ -273,7 +273,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         try:
             # Use the model's count_tokens method
             response = await self._client.aio.models.count_tokens(
-                model='gemini-2.5-pro-exp-03-25',
+                model='gemini-2.5-pro-preview-05-06',
                 contents=text
             )
             return response.total_tokens
@@ -1304,7 +1304,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             
             # Try to create the model
             model = client.models.generate_content(
-                model='gemini-2.5-pro-exp-03-25',
+                model='gemini-2.5-pro-preview-05-06',
                 contents='test',
                 config=genai.types.GenerateContentConfig()
             )
@@ -1353,7 +1353,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         
         # Create new chat session with search grounding enabled via generation_config
         chat = self._client.aio.chats.create(
-            model='gemini-2.5-pro-exp-03-25',
+            model='gemini-2.5-pro-preview-05-06',
             config=self._generation_config  # This already includes the tools configuration
         )
         
