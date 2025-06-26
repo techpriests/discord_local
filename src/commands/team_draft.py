@@ -737,13 +737,15 @@ class TeamDraftCommands(BaseCommands):
         """Start servant ban phase where captains ban 2 servants each"""
         # Find the channel for this draft
         channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
+        if self.bot:
+            # Try to get channel via bot first
+            for channel_id, d in self.active_drafts.items():
+                if d == draft:
+                    channel = self.bot.get_channel(channel_id)
+                    break
         
         if not channel:
-            logger.warning("Could not find channel for servant ban phase")
+            logger.warning("Could not find channel for servant ban phase - bot may not be properly initialized")
             return
         
         embed = discord.Embed(
@@ -1078,10 +1080,15 @@ class CaptainVotingView(discord.ui.View):
         # Start servant ban phase
         self.draft.phase = DraftPhase.SERVANT_BAN
         
-        # Check if this is test mode (only 1 real user among 12 players)
-        real_users = [user_id for user_id in self.draft.players.keys() if user_id < 1000000000000000000]  # Real Discord IDs are typically smaller
+        # Check if this is test mode by looking at the player IDs
+        # In test mode, we generate fake IDs that are >= 100000000000000000
+        fake_users = [user_id for user_id in self.draft.players.keys() if user_id >= 100000000000000000]
+        total_players = len(self.draft.players)
         
-        if len(real_users) <= 1:  # Test mode - auto-complete ban phase
+        logger.info(f"Test mode detection: {len(fake_users)} fake users out of {total_players} total players")
+        
+        if len(fake_users) >= 11:  # Test mode - 11 fake + 1 real = 12 total
+            logger.info("Detected test mode - auto-completing ban phase")
             # In test mode, automatically select random bans for captains
             import random
             all_servants = list(self.draft.available_servants)
@@ -1095,11 +1102,15 @@ class CaptainVotingView(discord.ui.View):
                 for servant in banned:
                     if servant in all_servants:
                         all_servants.remove(servant)
+                        
+                captain_name = self.draft.players[captain_id].username
+                logger.info(f"Auto-banned for {captain_name}: {banned}")
             
             # Move directly to servant selection
             self.draft.phase = DraftPhase.SERVANT_SELECTION
             await self.bot_commands._start_servant_selection()
         else:
+            logger.info("Detected normal mode - showing ban interface")
             # Normal mode - show ban interface
             await self.bot_commands._start_servant_ban_phase(self.draft)
 
