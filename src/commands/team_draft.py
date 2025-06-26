@@ -141,7 +141,21 @@ class TeamDraftCommands(BaseCommands):
         test_mode: bool = False
     ) -> None:
         """Start a new draft session"""
-        await self._handle_draft_start(interaction, players, test_mode)
+        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode}")
+        try:
+            await self._handle_draft_start(interaction, players, test_mode)
+        except Exception as e:
+            logger.error(f"Error in draft_start_slash: {e}", exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    f"⚠️ 명령어 실행 중 오류가 발생했습니다: {str(e)}", 
+                    ephemeral=True
+                )
+            else:
+                await interaction.followup.send(
+                    f"⚠️ 명령어 실행 중 오류가 발생했습니다: {str(e)}", 
+                    ephemeral=True
+                )
 
     @command_handler()
     async def _handle_draft_start(
@@ -179,7 +193,7 @@ class TeamDraftCommands(BaseCommands):
                     await self.send_error(
                         ctx_or_interaction, 
                         f"정확히 12명의 플레이어가 필요합니다. (현재: {len(players)}명)\n"
-                        #"💡 **팁**: `/페어 test_mode:True`로 테스트 모드를 사용해보세요!"
+                        #"💡 **팁**: `t`로 테스트 모드를 사용해보세요!"
                     )
                     return
             
@@ -339,6 +353,23 @@ class TeamDraftCommands(BaseCommands):
             )
         
         return embed 
+
+    @app_commands.command(name="페어취소", description="진행 중인 드래프트를 취소합니다")
+    async def draft_cancel_slash(self, interaction: discord.Interaction) -> None:
+        """Cancel current draft"""
+        await self._handle_draft_cancel(interaction)
+
+    @app_commands.command(name="페어테스트", description="팀 드래프트 시스템 테스트")
+    async def draft_test_slash(self, interaction: discord.Interaction) -> None:
+        """Test if team draft system is working"""
+        logger.info(f"페어테스트 command called by {interaction.user.name}")
+        await interaction.response.send_message(
+            "✅ **팀 드래프트 시스템이 작동합니다!**\n\n"
+            "사용법:\n"
+            "• `/페어 test_mode:True` - 테스트 모드로 드래프트 시작\n"
+            "• `/페어상태` - 현재 드래프트 상태 확인",
+            ephemeral=True
+        )
 
 
 class CaptainVotingView(discord.ui.View):
@@ -916,11 +947,6 @@ class CharacterDropdown(discord.ui.Select):
         # Create selection view
         view = TeamSelectionView(draft, self, available_players)
         await channel.send(embed=embed, view=view)
-
-    @app_commands.command(name="페어취소", description="진행 중인 드래프트를 취소합니다")
-    async def draft_cancel_slash(self, interaction: discord.Interaction) -> None:
-        """Cancel current draft"""
-        await self._handle_draft_cancel(interaction)
 
     @command_handler()
     async def _handle_draft_cancel(self, ctx_or_interaction: CommandContext) -> None:
