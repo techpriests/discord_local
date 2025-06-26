@@ -27,7 +27,7 @@ from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
 
-# Help description for the bot V3
+# Help description for the bot V4
 HELP_DESCRIPTION = """
 **주요 명령어**:
 • `/chat` - AI와 대화하기
