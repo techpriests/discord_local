@@ -151,7 +151,8 @@ class TeamDraftCommands(BaseCommands):
         elif "team_size:6" in args.lower() or "team_size=6" in args.lower():
             team_size = 6
             
-        await self._handle_draft_start(ctx, "", test_mode, team_size)
+        # Pass the args to handle player mentions
+        await self._handle_draft_start(ctx, args, test_mode, team_size)
 
     @app_commands.command(name="페어", description="팀 드래프트를 시작해 (기본: 6v6)")
     async def draft_start_slash(
