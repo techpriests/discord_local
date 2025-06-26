@@ -1328,15 +1328,37 @@ class CharacterDropdown(discord.ui.Select):
             f"**{selected_character}** ({self.category})를 선택했습니다!", ephemeral=True
         )
         
-        # Check if all players have selected
+        # Get view reference once
+        view: ServantSelectionView = self.view
+        
+        # Check if all players have selected or handle test mode
         selected_count = sum(1 for p in self.draft.players.values() if p.selected_servant)
+        
+        # Check if this is test mode (most players are fake)
+        fake_users = [user_id for user_id in self.draft.players.keys() if user_id >= 100000000000000000]
+        
+        if len(fake_users) >= 11:  # Test mode
+            # In test mode, auto-select for all remaining fake players
+            import random
+            available_servants = list(self.draft.available_servants - self.draft.banned_servants)
+            
+            for player_id, player in self.draft.players.items():
+                if player.selected_servant is None and player_id >= 100000000000000000:  # Fake player
+                    if available_servants:
+                        # Randomly select a servant for this fake player
+                        servant = random.choice(available_servants)
+                        player.selected_servant = servant
+                        available_servants.remove(servant)  # Avoid duplicates temporarily
+            
+            # Now check if all players have selected (should be true after auto-selection)
+            selected_count = sum(1 for p in self.draft.players.values() if p.selected_servant)
+            
         if selected_count == 12:
             # All selected, reveal and check for conflicts
-            view: ServantSelectionView = self.view
             await view.bot_commands._reveal_servant_selections()
         else:
             # Continue to next category
-            await view.update_category(self.category, interaction) 
+            await view.update_category(self.category, interaction)
 
 
 class ServantBanView(discord.ui.View):
