@@ -448,6 +448,8 @@ class SystemCommands(BaseCommands):
                             elif cog_name == "AICommands":
                                 cog = cmd_class()
                                 cog.bot = self.bot
+                            elif cog_name == "TeamDraftCommands":
+                                cog = cmd_class(self.bot)  # Pass bot as constructor parameter
                             else:
                                 cog = cmd_class()
                                 
@@ -491,6 +493,8 @@ class SystemCommands(BaseCommands):
                         elif cog_name == "AICommands":
                             cog = cmd_class()
                             cog.bot = self.bot
+                        elif cog_name == "TeamDraftCommands":
+                            cog = cmd_class(self.bot)  # Pass bot as constructor parameter
                         else:
                             cog = cmd_class()
                             

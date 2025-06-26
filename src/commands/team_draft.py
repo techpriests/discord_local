@@ -20,18 +20,12 @@ class DraftPhase(Enum):
     """Phases of the draft system"""
     WAITING = "waiting"
     CAPTAIN_VOTING = "captain_voting"
+    SERVANT_BAN = "servant_ban"
     SERVANT_SELECTION = "servant_selection"
     SERVANT_RESELECTION = "servant_reselection"
     TEAM_SELECTION = "team_selection"
-    COMMAND_SPELL = "command_spell"
     FINAL_SWAP = "final_swap"
     COMPLETED = "completed"
-
-
-class CommandSpellType(Enum):
-    """Types of command spells"""
-    BAN_BREATH = "ban_breath"  # 밴의 호흡 - 1획 소모
-    PROTECTION_BREATH = "protection_breath"  # 보호의 호흡 - 2획 소모
 
 
 @dataclass
@@ -44,14 +38,6 @@ class Player:
     is_captain: bool = False
     captain_votes: int = 0
     protected: bool = False
-
-
-@dataclass
-class CommandSpell:
-    """Represents a command spell usage"""
-    spell_type: CommandSpellType
-    cost: int
-    description: str
 
 
 @dataclass
@@ -97,17 +83,10 @@ class DraftSession:
     current_picking_captain: Optional[int] = None
     picks_this_round: Dict[int, int] = field(default_factory=dict)  # captain_id -> picks_made
     
-    # Command spell phase
-    command_spells: Dict[CommandSpellType, CommandSpell] = field(default_factory=lambda: {
-        CommandSpellType.BAN_BREATH: CommandSpell(
-            CommandSpellType.BAN_BREATH, 1, "상대팀 서번트 1명을 밴합니다"
-        ),
-        CommandSpellType.PROTECTION_BREATH: CommandSpell(
-            CommandSpellType.PROTECTION_BREATH, 2, "자신의 팀 서번트 1명을 보호합니다"
-        )
-    })
-    captain_spell_points: Dict[int, int] = field(default_factory=dict)  # captain_id -> remaining points
-    current_spell_captain: Optional[int] = None
+    # Servant ban phase
+    banned_servants: Set[str] = field(default_factory=set)
+    captain_bans: Dict[int, List[str]] = field(default_factory=dict)  # captain_id -> banned_servants
+    bans_submitted: Set[int] = field(default_factory=set)  # captain_ids who submitted bans
     
     # Messages for state tracking
     status_message_id: Optional[int] = None
@@ -198,7 +177,7 @@ class TeamDraftCommands(BaseCommands):
                 players = await self._generate_test_players(ctx_or_interaction)
                 await self.send_success(
                     ctx_or_interaction, 
-                    "🧪 **테스트 모드**로 드래프트를 시작합니다!\n"
+                    "🧪 **테스트 모드**V2로 드래프트를 시작합니다!\n"
                     "가상의 플레이어 12명이 자동으로 생성되었습니다."
                 )
             else:
@@ -352,10 +331,10 @@ class TeamDraftCommands(BaseCommands):
         phase_names = {
             DraftPhase.WAITING: "대기 중",
             DraftPhase.CAPTAIN_VOTING: "팀장 선출 투표",
+            DraftPhase.SERVANT_BAN: "서번트 밴",
             DraftPhase.SERVANT_SELECTION: "서번트 선택",
             DraftPhase.SERVANT_RESELECTION: "서번트 재선택",
             DraftPhase.TEAM_SELECTION: "팀원 선택",
-            DraftPhase.COMMAND_SPELL: "령주 사용",
             DraftPhase.FINAL_SWAP: "최종 교체",
             DraftPhase.COMPLETED: "완료"
         }
@@ -426,18 +405,30 @@ class TeamDraftCommands(BaseCommands):
             logger.warning(f"Could not find channel or draft. channel: {channel}, current_draft: {current_draft}")
             return
         
+        # Remove banned servants from available list
+        current_draft.available_servants = current_draft.available_servants - current_draft.banned_servants
+        
         embed = discord.Embed(
             title="⚔️ 서번트 선택",
             description="**현재 카테고리: 세이버**\n"
                        "카테고리 버튼을 눌러 다른 클래스를 선택하거나,\n"
-                       "아래 드롭다운에서 서번트를 선택하세요.",
+                       "아래 드롭다운에서 서번트를 선택하세요.\n"
+                       "❌ 표시된 서번트는 밴되어 선택할 수 없습니다.",
             color=INFO_COLOR
         )
         
-        # Show characters in default category (세이버)
+        # Show characters in default category (세이버) with ban status
         saber_chars = current_draft.servant_categories["세이버"]
-        char_list = "\n".join([f"• {char}" for char in saber_chars])
+        char_list = "\n".join([
+            f"{'❌' if char in current_draft.banned_servants else '•'} {char}" 
+            for char in saber_chars
+        ])
         embed.add_field(name="세이버 서번트 목록", value=char_list, inline=False)
+        
+        # Show banned servants summary
+        if current_draft.banned_servants:
+            banned_list = ", ".join(sorted(current_draft.banned_servants))
+            embed.add_field(name="🚫 밴된 서번트", value=banned_list, inline=False)
         
         embed.add_field(
             name="📋 선택 방법",
@@ -565,12 +556,13 @@ class TeamDraftCommands(BaseCommands):
         
         # Remove taken servants from available list
         taken_servants = set(draft.confirmed_servants.values())
-        draft.available_servants = draft.available_servants - taken_servants
+        draft.available_servants = draft.available_servants - taken_servants - draft.banned_servants
         
         embed = discord.Embed(
             title="🔄 서번트 재선택",
             description="중복으로 인해 서번트를 다시 선택해야 하는 플레이어들이 있습니다.\n"
-                       "**현재 카테고리: 세이버**",
+                       "**현재 카테고리: 세이버**\n"
+                       "❌ 표시된 서번트는 이미 선택되었거나 밴되어 선택할 수 없습니다.",
             color=INFO_COLOR
         )
         
@@ -578,7 +570,10 @@ class TeamDraftCommands(BaseCommands):
         embed.add_field(name="재선택 대상", value="\n".join(reselect_names), inline=False)
         
         # Show available characters in first category
-        available_saber = [char for char in draft.servant_categories["세이버"] if char not in taken_servants]
+        available_saber = [
+            char for char in draft.servant_categories["세이버"] 
+            if char not in taken_servants and char not in draft.banned_servants
+        ]
         if available_saber:
             embed.add_field(
                 name="세이버 사용 가능",
@@ -648,7 +643,7 @@ class TeamDraftCommands(BaseCommands):
         # Check if team selection is complete
         assigned_players = sum(1 for p in draft.players.values() if p.team is not None)
         if assigned_players == 12:
-            await self._start_command_spell_phase_for_draft(draft)
+            await self._start_final_swap_phase_for_draft(draft)
             return
         
         # Get current round pattern
@@ -738,13 +733,54 @@ class TeamDraftCommands(BaseCommands):
         del self.active_drafts[channel_id]
         await self.send_success(ctx_or_interaction, "드래프트가 취소되었습니다.")
 
-    async def _handle_ban_reselection(self, banned_player_id: int) -> None:
-        """Handle reselection after ban"""
-        # Find current draft with this player
+    async def _start_servant_ban_phase(self) -> None:
+        """Start servant ban phase where captains ban 2 servants each"""
+        # Find the channel and draft
+        channel = None
+        current_draft = None
+        for channel_id, draft in self.active_drafts.items():
+            if draft.phase == DraftPhase.SERVANT_BAN:
+                try:
+                    channel = self.bot.get_channel(channel_id)
+                    current_draft = draft
+                    break
+                except Exception as e:
+                    logger.error(f"Error getting channel {channel_id}: {e}")
+                    continue
+        
+        if not channel or not current_draft:
+            logger.warning(f"Could not find channel or draft for ban phase. channel: {channel}, current_draft: {current_draft}")
+            return
+        
+        embed = discord.Embed(
+            title="🚫 서번트 밴 단계",
+            description="각 팀장은 밴하고 싶은 서번트를 **2명**씩 선택하세요.\n"
+                       "상대방이 어떤 서번트를 밴하는지 모르는 상태에서 진행됩니다.",
+            color=INFO_COLOR
+        )
+        
+        captain_names = [current_draft.players[cap_id].username for cap_id in current_draft.captains]
+        embed.add_field(name="팀장", value=" vs ".join(captain_names), inline=False)
+        
+        embed.add_field(
+            name="📋 밴 방법",
+            value="1️⃣ 아래 **카테고리 버튼**을 클릭\n"
+                  "2️⃣ 해당 카테고리의 **드롭다운**에서 서번트 선택\n"
+                  "3️⃣ **2명**을 선택한 후 확정 버튼 클릭\n"
+                  "4️⃣ 양 팀장 모두 완료시 밴 결과 공개",
+            inline=False
+        )
+        
+        view = ServantBanView(current_draft, self)
+        await channel.send(embed=embed, view=view)
+
+    async def _complete_servant_bans(self) -> None:
+        """Complete servant ban phase and reveal banned servants"""
+        # Find current draft
         current_draft = None
         current_channel_id = None
         for channel_id, draft in self.active_drafts.items():
-            if banned_player_id in draft.players:
+            if draft.phase == DraftPhase.SERVANT_BAN:
                 current_draft = draft
                 current_channel_id = channel_id
                 break
@@ -752,219 +788,38 @@ class TeamDraftCommands(BaseCommands):
         if not current_draft:
             return
         
-        # Get available servants (exclude confirmed ones)
-        taken_servants = set(current_draft.confirmed_servants.values())
-        available_servants = current_draft.available_servants - taken_servants
-        
         channel = self.bot.get_channel(current_channel_id)
         if not channel:
             return
         
-        banned_player = current_draft.players[banned_player_id]
+        # Collect all banned servants
+        all_bans = []
+        for captain_id, bans in current_draft.captain_bans.items():
+            all_bans.extend(bans)
+            current_draft.banned_servants.update(bans)
         
         embed = discord.Embed(
-            title="🔄 서번트 재선택 (밴 후)",
-            description=f"**{banned_player.username}**님, 밴으로 인해 새로운 서번트를 선택해야 합니다.",
-            color=INFO_COLOR
+            title="🚫 서번트 밴 결과",
+            description="양 팀장의 밴이 완료되었습니다. 다음 서번트들이 밴되었습니다.",
+            color=ERROR_COLOR
         )
         
-        embed.add_field(
-            name="선택 가능한 서번트",
-            value="\n".join(sorted(available_servants)) if available_servants else "없음",
-            inline=False
-        )
+        # Show each captain's bans
+        for captain_id in current_draft.captains:
+            captain_name = current_draft.players[captain_id].username
+            captain_bans = current_draft.captain_bans.get(captain_id, [])
+            ban_text = ", ".join(captain_bans) if captain_bans else "없음"
+            embed.add_field(name=f"{captain_name}의 밴", value=ban_text, inline=True)
         
-        # Create dropdown for reselection
-        if available_servants:
-            options = [
-                discord.SelectOption(
-                    label=servant,
-                    value=servant
-                )
-                for servant in sorted(available_servants)
-            ]
-            
-            select = discord.ui.Select(
-                placeholder="새로운 서번트를 선택하세요...",
-                options=options,
-                min_values=1,
-                max_values=1
-            )
-            
-            async def reselect_callback(select_interaction):
-                banned_player_id = int(select.values[0])
-                banned_player = current_draft.players[banned_player_id]
-                old_servant = current_draft.confirmed_servants[banned_player_id]
-                
-                # Remove from confirmed servants
-                del current_draft.confirmed_servants[banned_player_id]
-                banned_player.selected_servant = None
-                
-                # Deduct spell points
-                current_draft.captain_spell_points[banned_player_id] -= 1
-                
-                await select_interaction.response.send_message(
-                    f"**{banned_player.username}**의 **{old_servant}**가 밴되었습니다!\n"
-                    f"{banned_player.username}은(는) 새로운 서번트를 선택해야 합니다."
-                )
-                
-                # Handle reselection and continue spell phase
-                await self._continue_command_spell_phase()
-            
-            select.callback = reselect_callback
-            reselect_view = discord.ui.View()
-            reselect_view.add_item(select)
-            
-            await channel.send(embed=embed, view=reselect_view)
-        else:
-            # No available servants
-            await channel.send(embed=embed)
-            await self._continue_command_spell_phase()
-
-    async def _continue_command_spell_phase(self) -> None:
-        """Continue command spell phase"""
-        # Find current draft
-        current_draft = None
-        for draft in self.active_drafts.values():
-            if draft.phase == DraftPhase.COMMAND_SPELL:
-                current_draft = draft
-                break
-        
-        if not current_draft:
-            return
-        
-        # Switch to other captain or end phase
-        current_captain = current_draft.current_spell_captain
-        other_captain = [c for c in current_draft.captains if c != current_captain][0]
-        
-        # Check if current captain has points left
-        if current_draft.captain_spell_points[current_captain] > 0:
-            # Switch to other captain
-            current_draft.current_spell_captain = other_captain
-            await self._show_command_spell_status_for_draft(current_draft)
-        elif current_draft.captain_spell_points[other_captain] > 0:
-            # Other captain still has points
-            current_draft.current_spell_captain = other_captain
-            await self._show_command_spell_status_for_draft(current_draft)
-        else:
-            # Both captains used all points, end phase
-            await self._start_final_swap_phase_for_draft(current_draft)
-
-    async def _show_command_spell_status_for_draft(self, draft: DraftSession) -> None:
-        """Show command spell usage status for specific draft"""
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
-        if not channel:
-            return
-        
-        current_captain = draft.current_spell_captain
-        current_points = draft.captain_spell_points[current_captain]
-        
-        embed = discord.Embed(
-            title="✨ 령주 사용",
-            description=f"{draft.players[current_captain].username}의 차례\n"
-                       f"남은 령주: {current_points}획",
-            color=INFO_COLOR
-        )
-        
-        # Show teams
-        team1_players = [p for p in draft.players.values() if p.team == 1]
-        team2_players = [p for p in draft.players.values() if p.team == 2]
-        
-        def format_team(players):
-            return "\n".join([
-                f"{p.username} ({draft.confirmed_servants[p.user_id]}) {'🛡️' if p.protected else ''}"
-                for p in players
-            ])
-        
-        embed.add_field(name="팀 1", value=format_team(team1_players), inline=True)
-        embed.add_field(name="팀 2", value=format_team(team2_players), inline=True)
-        
-        view = CommandSpellView(draft, self)
-        await channel.send(embed=embed, view=view)
-
-    async def _start_final_swap_phase_for_draft(self, draft: DraftSession) -> None:
-        """Start final swap phase for specific draft"""
-        draft.phase = DraftPhase.FINAL_SWAP
-        
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
-        if not channel:
-            return
-        
-        embed = discord.Embed(
-            title="🔄 최종 교체 단계",
-            description="각 팀은 팀 내에서 서번트를 자유롭게 교체할 수 있습니다.\n"
-                       "교체를 원하지 않으면 완료 버튼을 눌러주세요.",
-            color=INFO_COLOR
-        )
-        
-        # Show final teams
-        team1_players = [p for p in draft.players.values() if p.team == 1]
-        team2_players = [p for p in draft.players.values() if p.team == 2]
-        
-        def format_final_team(players):
-            return "\n".join([
-                f"{p.username} - {draft.confirmed_servants[p.user_id]}"
-                for p in players
-            ])
-        
-        embed.add_field(name="팀 1 최종 로스터", value=format_final_team(team1_players), inline=True)
-        embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
-        
-        view = FinalSwapView(draft, self)
-        await channel.send(embed=embed, view=view)
-
-    async def _start_command_spell_phase_for_draft(self, draft: DraftSession) -> None:
-        """Start command spell phase for specific draft"""
-        draft.phase = DraftPhase.COMMAND_SPELL
-        
-        # Initialize spell points for captains
-        for captain_id in draft.captains:
-            draft.captain_spell_points[captain_id] = 2
-        
-        # First pick captain starts
-        draft.current_spell_captain = draft.first_pick_captain
-        
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
-        if not channel:
-            return
-        
-        embed = discord.Embed(
-            title="✨ 령주 사용 단계",
-            description="각 팀장은 2획의 령주를 사용할 수 있습니다.\n"
-                       "번갈아 가며 령주를 사용하거나 패스할 수 있습니다.",
-            color=INFO_COLOR
-        )
-        
-        embed.add_field(
-            name="사용 가능한 령주",
-            value="**밴의 호흡** (1획) - 상대팀 서번트 1명을 밴\n"
-                  "**보호의 호흡** (2획) - 자신의 팀 서번트 1명을 보호",
-            inline=False
-        )
-        
-        current_captain_name = draft.players[draft.current_spell_captain].username
-        embed.add_field(name="현재 차례", value=current_captain_name, inline=True)
+        # Show total banned servants
+        banned_list = ", ".join(sorted(current_draft.banned_servants))
+        embed.add_field(name="총 밴된 서번트", value=banned_list, inline=False)
         
         await channel.send(embed=embed)
-        await self._show_command_spell_status_for_draft(draft)
+        
+        # Move to servant selection phase
+        current_draft.phase = DraftPhase.SERVANT_SELECTION
+        await self._start_servant_selection()
 
     async def _complete_draft(self) -> None:
         """Complete the draft"""
@@ -1009,7 +864,7 @@ class TeamDraftCommands(BaseCommands):
         
         # Clean up
         if current_channel_id in self.active_drafts:
-            del self.active_drafts[current_channel_id] 
+            del self.active_drafts[current_channel_id]
 
     async def _check_voting_completion(self, view: 'CaptainVotingView') -> bool:
         """Check if voting should be completed"""
@@ -1025,6 +880,43 @@ class TeamDraftCommands(BaseCommands):
                 return True
         
         return False
+
+    async def _start_final_swap_phase_for_draft(self, draft: DraftSession) -> None:
+        """Start final swap phase for specific draft"""
+        draft.phase = DraftPhase.FINAL_SWAP
+        
+        # Find the channel
+        channel = None
+        for channel_id, d in self.active_drafts.items():
+            if d == draft:
+                channel = self.bot.get_channel(channel_id)
+                break
+        
+        if not channel:
+            return
+        
+        embed = discord.Embed(
+            title="🔄 최종 교체 단계",
+            description="각 팀은 팀 내에서 서번트를 자유롭게 교체할 수 있습니다.\n"
+                       "교체를 원하지 않으면 완료 버튼을 눌러주세요.",
+            color=INFO_COLOR
+        )
+        
+        # Show final teams
+        team1_players = [p for p in draft.players.values() if p.team == 1]
+        team2_players = [p for p in draft.players.values() if p.team == 2]
+        
+        def format_final_team(players):
+            return "\n".join([
+                f"{p.username} - {draft.confirmed_servants[p.user_id]}"
+                for p in players
+            ])
+        
+        embed.add_field(name="팀 1 최종 로스터", value=format_final_team(team1_players), inline=True)
+        embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
+        
+        view = FinalSwapView(draft, self)
+        await channel.send(embed=embed, view=view)
 
 
 class TeamSelectionView(discord.ui.View):
@@ -1088,205 +980,6 @@ class PlayerDropdown(discord.ui.Select):
         
         # Continue team selection
         await self.bot_commands._continue_team_selection_for_draft(self.draft)
-
-
-class CommandSpellView(discord.ui.View):
-    """View for command spell usage"""
-    
-    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
-        super().__init__(timeout=300.0)
-        self.draft = draft
-        self.bot_commands = bot_commands
-        
-        current_points = draft.captain_spell_points[draft.current_spell_captain]
-        
-        # Add ban breath button (1 point)
-        if current_points >= 1:
-            self.add_item(BanBreathButton())
-        
-        # Add protection breath button (2 points)  
-        if current_points >= 2:
-            self.add_item(ProtectionBreathButton())
-        
-        # Add pass button
-        self.add_item(PassButton())
-
-
-class BanBreathButton(discord.ui.Button):
-    """Button for ban breath spell"""
-    
-    def __init__(self):
-        super().__init__(
-            label="밴의 호흡 (1획)",
-            style=discord.ButtonStyle.danger,
-            emoji="⚔️"
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle ban breath usage"""
-        view: CommandSpellView = self.view
-        user_id = interaction.user.id
-        
-        if user_id != view.draft.current_spell_captain:
-            await interaction.response.send_message(
-                "현재 귀하의 차례가 아닙니다.", ephemeral=True
-            )
-            return
-        
-        # Show enemy team for banning
-        current_team = view.draft.players[user_id].team
-        enemy_team = 1 if current_team == 2 else 2
-        enemy_players = [p for p in view.draft.players.values() if p.team == enemy_team and not p.protected]
-        
-        if not enemy_players:
-            await interaction.response.send_message(
-                "밴할 수 있는 대상이 없습니다.", ephemeral=True
-            )
-            return
-        
-        # Create ban selection dropdown
-        options = [
-            discord.SelectOption(
-                label=f"{player.username}",
-                description=f"서번트: {view.draft.confirmed_servants[player.user_id]}",
-                value=str(player.user_id)
-            )
-            for player in enemy_players[:25]
-        ]
-        
-        select = discord.ui.Select(
-            placeholder="밴할 플레이어를 선택하세요...",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-        
-        async def ban_callback(select_interaction):
-            banned_player_id = int(select.values[0])
-            banned_player = view.draft.players[banned_player_id]
-            old_servant = view.draft.confirmed_servants[banned_player_id]
-            
-            # Remove from confirmed servants
-            del view.draft.confirmed_servants[banned_player_id]
-            banned_player.selected_servant = None
-            
-            # Deduct spell points
-            view.draft.captain_spell_points[user_id] -= 1
-            
-            await select_interaction.response.send_message(
-                f"**{banned_player.username}**의 **{old_servant}**가 밴되었습니다!\n"
-                f"{banned_player.username}은(는) 새로운 서번트를 선택해야 합니다."
-            )
-            
-            # Handle reselection and continue spell phase
-            await view.bot_commands._handle_ban_reselection(banned_player_id)
-        
-        select.callback = ban_callback
-        ban_view = discord.ui.View()
-        ban_view.add_item(select)
-        
-        await interaction.response.send_message("밴할 대상을 선택하세요:", view=ban_view, ephemeral=True)
-
-
-class ProtectionBreathButton(discord.ui.Button):
-    """Button for protection breath spell"""
-    
-    def __init__(self):
-        super().__init__(
-            label="보호의 호흡 (2획)",
-            style=discord.ButtonStyle.success,
-            emoji="🛡️"
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle protection breath usage"""
-        view: CommandSpellView = self.view
-        user_id = interaction.user.id
-        
-        if user_id != view.draft.current_spell_captain:
-            await interaction.response.send_message(
-                "현재 귀하의 차례가 아닙니다.", ephemeral=True
-            )
-            return
-        
-        # Show own team for protection
-        current_team = view.draft.players[user_id].team
-        team_players = [p for p in view.draft.players.values() if p.team == current_team and not p.protected]
-        
-        if not team_players:
-            await interaction.response.send_message(
-                "보호할 수 있는 대상이 없습니다.", ephemeral=True
-            )
-            return
-        
-        # Create protection selection dropdown
-        options = [
-            discord.SelectOption(
-                label=f"{player.username}",
-                description=f"서번트: {view.draft.confirmed_servants[player.user_id]}",
-                value=str(player.user_id)
-            )
-            for player in team_players[:25]
-        ]
-        
-        select = discord.ui.Select(
-            placeholder="보호할 플레이어를 선택하세요...",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-        
-        async def protect_callback(select_interaction):
-            protected_player_id = int(select.values[0])
-            protected_player = view.draft.players[protected_player_id]
-            
-            # Set protection
-            protected_player.protected = True
-            
-            # Deduct spell points
-            view.draft.captain_spell_points[user_id] -= 2
-            
-            await select_interaction.response.send_message(
-                f"**{protected_player.username}**이(가) 밴으로부터 보호되었습니다!"
-            )
-            
-            # Continue spell phase
-            await view.bot_commands._continue_command_spell_phase()
-        
-        select.callback = protect_callback
-        protect_view = discord.ui.View()
-        protect_view.add_item(select)
-        
-        await interaction.response.send_message("보호할 대상을 선택하세요:", view=protect_view, ephemeral=True)
-
-
-class PassButton(discord.ui.Button):
-    """Button for passing turn"""
-    
-    def __init__(self):
-        super().__init__(
-            label="패스",
-            style=discord.ButtonStyle.secondary,
-            emoji="⏭️"
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle pass"""
-        view: CommandSpellView = self.view
-        user_id = interaction.user.id
-        
-        if user_id != view.draft.current_spell_captain:
-            await interaction.response.send_message(
-                "현재 귀하의 차례가 아닙니다.", ephemeral=True
-            )
-            return
-        
-        await interaction.response.send_message(
-            f"**{view.draft.players[user_id].username}**이(가) 패스했습니다."
-        )
-        
-        # Continue to next captain
-        await view.bot_commands._continue_command_spell_phase()
 
 
 class FinalSwapView(discord.ui.View):
@@ -1376,9 +1069,9 @@ class CaptainVotingView(discord.ui.View):
         for captain_id in self.draft.captains:
             self.draft.players[captain_id].is_captain = True
         
-        # Start servant selection
-        self.draft.phase = DraftPhase.SERVANT_SELECTION
-        await self.bot_commands._start_servant_selection()
+        # Start servant ban phase
+        self.draft.phase = DraftPhase.SERVANT_BAN
+        await self.bot_commands._start_servant_ban_phase()
 
 
 class CaptainVoteButton(discord.ui.Button):
@@ -1454,7 +1147,6 @@ class ServantSelectionView(discord.ui.View):
         """Add category selection buttons"""
         categories = list(self.draft.servant_categories.keys())
         
-        # Create category buttons (max 5 per row, so split into rows)
         for i, category in enumerate(categories[:8]):  # Max 8 categories
             button = CategoryButton(category, i)
             self.add_item(button)
@@ -1475,8 +1167,11 @@ class ServantSelectionView(discord.ui.View):
                 if char in self.draft.available_servants and char not in taken_servants
             ]
         else:
-            # For initial selection, show all characters in category
-            available_in_category = self.draft.servant_categories[self.current_category]
+            # For initial selection, show all characters in category that aren't banned
+            available_in_category = [
+                char for char in self.draft.servant_categories[self.current_category]
+                if char not in self.draft.banned_servants
+            ]
         
         if available_in_category:
             dropdown = CharacterDropdown(self.draft, self.bot_commands, available_in_category, self.current_category)
@@ -1488,10 +1183,12 @@ class ServantSelectionView(discord.ui.View):
         self._add_character_dropdown()
         
         # Update embed to show current category
+        title = "🔄 서번트 재선택" if self.is_reselection else "⚔️ 서번트 선택"
         embed = discord.Embed(
-            title="⚔️ 서번트 선택",
+            title=title,
             description=f"**현재 카테고리: {new_category}**\n"
-                       "아래 드롭다운에서 서번트를 선택하세요.",
+                       "아래 드롭다운에서 서번트를 선택하세요.\n"
+                       "❌ 표시된 서번트는 밴되어 선택할 수 없습니다.",
             color=INFO_COLOR
         )
         
@@ -1499,10 +1196,15 @@ class ServantSelectionView(discord.ui.View):
         chars_in_category = self.draft.servant_categories[new_category]
         if self.is_reselection:
             taken_servants = set(self.draft.confirmed_servants.values())
-            available_chars = [char for char in chars_in_category if char not in taken_servants]
-            char_list = "\n".join([f"{'✅' if char in available_chars else '❌'} {char}" for char in chars_in_category])
+            char_list = "\n".join([
+                f"{'❌' if char in taken_servants or char in self.draft.banned_servants else '✅'} {char}" 
+                for char in chars_in_category
+            ])
         else:
-            char_list = "\n".join([f"• {char}" for char in chars_in_category])
+            char_list = "\n".join([
+                f"{'❌' if char in self.draft.banned_servants else '•'} {char}" 
+                for char in chars_in_category
+            ])
         
         embed.add_field(name=f"{new_category} 서번트 목록", value=char_list, inline=False)
         
