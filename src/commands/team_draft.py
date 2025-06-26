@@ -400,7 +400,7 @@ class TeamDraftCommands(BaseCommands):
         """Test if team draft system is working"""
         logger.info(f"페어테스트 command called by {interaction.user.name}")
         await interaction.response.send_message(
-            "✅ **팀 드래프트 시스템이 작동합니다!**\n\n"
+            "✅ **팀 드래프트 시스템이 작동합니다!** (v3.0)\n\n"
             "사용법:\n"
             "• `/페어 test_mode:True` - 테스트 모드로 드래프트 시작\n"
             "• `/페어상태` - 현재 드래프트 상태 확인",
