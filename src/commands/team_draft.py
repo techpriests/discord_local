@@ -95,7 +95,7 @@ class DraftSession:
 class TeamDraftCommands(BaseCommands):
     """Commands for team draft system"""
     
-    def __init__(self, bot: commands.Bot) -> None:
+    def __init__(self, bot: commands.Bot = None) -> None:
         """Initialize team draft commands
 
         Args:
@@ -733,23 +733,17 @@ class TeamDraftCommands(BaseCommands):
         del self.active_drafts[channel_id]
         await self.send_success(ctx_or_interaction, "드래프트가 취소되었습니다.")
 
-    async def _start_servant_ban_phase(self) -> None:
+    async def _start_servant_ban_phase(self, draft: DraftSession) -> None:
         """Start servant ban phase where captains ban 2 servants each"""
-        # Find the channel and draft
+        # Find the channel for this draft
         channel = None
-        current_draft = None
-        for channel_id, draft in self.active_drafts.items():
-            if draft.phase == DraftPhase.SERVANT_BAN:
-                try:
-                    channel = self.bot.get_channel(channel_id)
-                    current_draft = draft
-                    break
-                except Exception as e:
-                    logger.error(f"Error getting channel {channel_id}: {e}")
-                    continue
+        for channel_id, d in self.active_drafts.items():
+            if d == draft:
+                channel = self.bot.get_channel(channel_id)
+                break
         
-        if not channel or not current_draft:
-            logger.warning(f"Could not find channel or draft for ban phase. channel: {channel}, current_draft: {current_draft}")
+        if not channel:
+            logger.warning("Could not find channel for servant ban phase")
             return
         
         embed = discord.Embed(
@@ -759,7 +753,7 @@ class TeamDraftCommands(BaseCommands):
             color=INFO_COLOR
         )
         
-        captain_names = [current_draft.players[cap_id].username for cap_id in current_draft.captains]
+        captain_names = [draft.players[cap_id].username for cap_id in draft.captains]
         embed.add_field(name="팀장", value=" vs ".join(captain_names), inline=False)
         
         embed.add_field(
@@ -771,32 +765,16 @@ class TeamDraftCommands(BaseCommands):
             inline=False
         )
         
-        view = ServantBanView(current_draft, self)
+        view = ServantBanView(draft, self)
         await channel.send(embed=embed, view=view)
 
-    async def _complete_servant_bans(self) -> None:
+    async def _complete_servant_bans(self, draft: DraftSession) -> None:
         """Complete servant ban phase and reveal banned servants"""
-        # Find current draft
-        current_draft = None
-        current_channel_id = None
-        for channel_id, draft in self.active_drafts.items():
-            if draft.phase == DraftPhase.SERVANT_BAN:
-                current_draft = draft
-                current_channel_id = channel_id
-                break
-        
-        if not current_draft:
-            return
-        
-        channel = self.bot.get_channel(current_channel_id)
-        if not channel:
-            return
-        
         # Collect all banned servants
         all_bans = []
-        for captain_id, bans in current_draft.captain_bans.items():
+        for captain_id, bans in draft.captain_bans.items():
             all_bans.extend(bans)
-            current_draft.banned_servants.update(bans)
+            draft.banned_servants.update(bans)
         
         embed = discord.Embed(
             title="🚫 서번트 밴 결과",
@@ -805,20 +783,20 @@ class TeamDraftCommands(BaseCommands):
         )
         
         # Show each captain's bans
-        for captain_id in current_draft.captains:
-            captain_name = current_draft.players[captain_id].username
-            captain_bans = current_draft.captain_bans.get(captain_id, [])
+        for captain_id in draft.captains:
+            captain_name = draft.players[captain_id].username
+            captain_bans = draft.captain_bans.get(captain_id, [])
             ban_text = ", ".join(captain_bans) if captain_bans else "없음"
             embed.add_field(name=f"{captain_name}의 밴", value=ban_text, inline=True)
         
         # Show total banned servants
-        banned_list = ", ".join(sorted(current_draft.banned_servants))
+        banned_list = ", ".join(sorted(draft.banned_servants))
         embed.add_field(name="총 밴된 서번트", value=banned_list, inline=False)
         
-        await channel.send(embed=embed)
+        await self.send_response(ctx_or_interaction, embed=embed)
         
         # Move to servant selection phase
-        current_draft.phase = DraftPhase.SERVANT_SELECTION
+        draft.phase = DraftPhase.SERVANT_SELECTION
         await self._start_servant_selection()
 
     async def _complete_draft(self) -> None:
@@ -1063,7 +1041,32 @@ class CaptainVotingView(discord.ui.View):
         
         # Select top 2 vote getters as captains
         sorted_players = sorted(vote_counts.items(), key=lambda x: x[1], reverse=True)
-        self.draft.captains = [sorted_players[0][0], sorted_players[1][0]]
+        
+        # For test mode: if there are ties or insufficient votes, randomly select from tied players
+        if len(self.user_votes) <= 1:  # Test mode or very few votes
+            # Get all players with the highest vote count
+            max_votes = sorted_players[0][1] if sorted_players else 0
+            top_players = [player_id for player_id, votes in sorted_players if votes == max_votes]
+            
+            # If we have ties or not enough clear winners, supplement with random selection
+            if len(top_players) < 2:
+                # Add remaining players for random selection
+                remaining_players = [player_id for player_id, _ in sorted_players if player_id not in top_players]
+                import random
+                needed = 2 - len(top_players)
+                if len(remaining_players) >= needed:
+                    top_players.extend(random.sample(remaining_players, needed))
+                else:
+                    top_players.extend(remaining_players)
+            elif len(top_players) > 2:
+                # Too many ties, randomly select 2 from the tied players
+                import random
+                top_players = random.sample(top_players, 2)
+            
+            self.draft.captains = top_players[:2]
+        else:
+            # Normal mode: select top 2 vote getters
+            self.draft.captains = [sorted_players[0][0], sorted_players[1][0]]
         
         # Mark them as captains
         for captain_id in self.draft.captains:
@@ -1071,7 +1074,31 @@ class CaptainVotingView(discord.ui.View):
         
         # Start servant ban phase
         self.draft.phase = DraftPhase.SERVANT_BAN
-        await self.bot_commands._start_servant_ban_phase()
+        
+        # Check if this is test mode (only 1 real user among 12 players)
+        real_users = [user_id for user_id in self.draft.players.keys() if user_id < 1000000000000000000]  # Real Discord IDs are typically smaller
+        
+        if len(real_users) <= 1:  # Test mode - auto-complete ban phase
+            # In test mode, automatically select random bans for captains
+            import random
+            all_servants = list(self.draft.available_servants)
+            
+            for captain_id in self.draft.captains:
+                # Randomly ban 2 servants for each captain
+                banned = random.sample(all_servants, min(2, len(all_servants)))
+                self.draft.captain_bans[captain_id] = banned
+                self.draft.banned_servants.update(banned)
+                # Remove banned servants so they can't be banned again
+                for servant in banned:
+                    if servant in all_servants:
+                        all_servants.remove(servant)
+            
+            # Move directly to servant selection
+            self.draft.phase = DraftPhase.SERVANT_SELECTION
+            await self.bot_commands._start_servant_selection()
+        else:
+            # Normal mode - show ban interface
+            await self.bot_commands._start_servant_ban_phase(self.draft)
 
 
 class CaptainVoteButton(discord.ui.Button):
@@ -1438,4 +1465,4 @@ class BanCharacterDropdown(discord.ui.Select):
         
         # Check if both captains have submitted bans
         if len(self.draft.bans_submitted) == 2:
-            await self.bot_commands._complete_servant_bans() 
+            await self.bot_commands._complete_servant_bans(self.draft) 
