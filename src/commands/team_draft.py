@@ -152,7 +152,7 @@ class TeamDraftCommands(BaseCommands):
         test_mode: bool = False
     ) -> None:
         """Start a new draft session"""
-        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode}")
+        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode} (v2)")
         try:
             await self._handle_draft_start(interaction, players, test_mode)
         except Exception as e:
