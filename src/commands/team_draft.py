@@ -384,6 +384,16 @@ class TeamDraftCommands(BaseCommands):
         """Cancel current draft"""
         await self._handle_draft_cancel(interaction)
 
+    @commands.command(
+        name="페어취소",
+        help="진행 중인 드래프트를 취소합니다",
+        brief="드래프트 취소",
+        aliases=["draft_cancel", "드래프트취소"]
+    )
+    async def draft_cancel_chat(self, ctx: commands.Context) -> None:
+        """Cancel current draft via chat command"""
+        await self._handle_draft_cancel(ctx)
+
     @app_commands.command(name="페어테스트", description="팀 드래프트 시스템 테스트")
     async def draft_test_slash(self, interaction: discord.Interaction) -> None:
         """Test if team draft system is working"""
@@ -396,270 +406,18 @@ class TeamDraftCommands(BaseCommands):
             ephemeral=True
         )
 
-
-class CaptainVotingView(discord.ui.View):
-    """View for captain voting with buttons"""
-    
-    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
-        super().__init__(timeout=300.0)
-        self.draft = draft
-        self.bot_commands = bot_commands
-        self.user_votes: Dict[int, Set[int]] = {}  # user_id -> set of voted player_ids
-        
-        # Create buttons for each player
-        players = list(draft.players.values())
-        for i, player in enumerate(players[:12]):  # Max 12 buttons
-            button = CaptainVoteButton(player.user_id, player.username, i + 1)
-            self.add_item(button)
-
-    async def on_timeout(self) -> None:
-        """Handle timeout - finalize voting"""
-        await self._finalize_voting()
-
-    async def _finalize_voting(self) -> None:
-        """Finalize captain voting and proceed to next phase"""
-        # Count votes
-        vote_counts = {}
-        for player_id in self.draft.players.keys():
-            vote_counts[player_id] = 0
-        
-        for votes in self.user_votes.values():
-            for voted_player_id in votes:
-                vote_counts[voted_player_id] += 1
-        
-        # Select top 2 vote getters as captains
-        sorted_players = sorted(vote_counts.items(), key=lambda x: x[1], reverse=True)
-        self.draft.captains = [sorted_players[0][0], sorted_players[1][0]]
-        
-        # Mark them as captains
-        for captain_id in self.draft.captains:
-            self.draft.players[captain_id].is_captain = True
-        
-        # Start servant selection
-        self.draft.phase = DraftPhase.SERVANT_SELECTION
-        await self.bot_commands._start_servant_selection()
-
-
-class CaptainVoteButton(discord.ui.Button):
-    """Button for voting for a captain"""
-    
-    def __init__(self, player_id: int, username: str, number: int):
-        super().__init__(
-            label=f"{number}. {username}",
-            style=discord.ButtonStyle.secondary,
-            custom_id=f"vote_{player_id}"
-        )
-        self.player_id = player_id
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle vote button click"""
-        user_id = interaction.user.id
-        view: CaptainVotingView = self.view
-        
-        # Check if user is part of the draft
-        if user_id not in view.draft.players:
-            await interaction.response.send_message(
-                "드래프트 참가자만 투표할 수 있습니다.", ephemeral=True
-            )
-            return
-        
-        # Initialize user votes if needed
-        if user_id not in view.user_votes:
-            view.user_votes[user_id] = set()
-        
-        # Toggle vote
-        if self.player_id in view.user_votes[user_id]:
-            view.user_votes[user_id].remove(self.player_id)
-            await interaction.response.send_message(
-                f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했습니다.", 
-                ephemeral=True
-            )
-        else:
-            # Check vote limit (max 2 votes)
-            if len(view.user_votes[user_id]) >= 2:
-                await interaction.response.send_message(
-                    "최대 2명까지만 투표할 수 있습니다.", ephemeral=True
-                )
-                return
-            
-            view.user_votes[user_id].add(self.player_id)
-            await interaction.response.send_message(
-                f"{view.draft.players[self.player_id].username}에게 투표했습니다.", 
-                ephemeral=True
-            )
-        
-        # Check if all players have voted
-        if len(view.user_votes) == len(view.draft.players):
-            await view._finalize_voting()
-
-
-class ServantSelectionView(discord.ui.View):
-    """View for servant selection with category pagination"""
-    
-    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', is_reselection: bool = False):
-        super().__init__(timeout=600.0)
-        self.draft = draft
-        self.bot_commands = bot_commands
-        self.is_reselection = is_reselection
-        self.current_category = "세이버"  # Default category
-        
-        # Add category buttons
-        self._add_category_buttons()
-        # Add character dropdown for current category
-        self._add_character_dropdown()
-
-    def _add_category_buttons(self):
-        """Add category selection buttons"""
-        categories = list(self.draft.servant_categories.keys())
-        
-        # Create category buttons (max 5 per row, so split into rows)
-        for i, category in enumerate(categories[:8]):  # Max 8 categories
-            button = CategoryButton(category, i)
-            self.add_item(button)
-
-    def _add_character_dropdown(self):
-        """Add character selection dropdown for current category"""
-        # Remove existing character dropdown if any
-        for item in self.children[:]:
-            if isinstance(item, CharacterDropdown):
-                self.remove_item(item)
-        
-        # Get available characters for current category
-        if self.is_reselection:
-            # For reselection, only show available (not taken) characters
-            taken_servants = set(self.draft.confirmed_servants.values())
-            available_in_category = [
-                char for char in self.draft.servant_categories[self.current_category]
-                if char in self.draft.available_servants and char not in taken_servants
-            ]
-        else:
-            # For initial selection, show all characters in category
-            available_in_category = self.draft.servant_categories[self.current_category]
-        
-        if available_in_category:
-            dropdown = CharacterDropdown(self.draft, self.bot_commands, available_in_category, self.current_category)
-            self.add_item(dropdown)
-
-    async def update_category(self, new_category: str, interaction: discord.Interaction):
-        """Update the current category and refresh the dropdown"""
-        self.current_category = new_category
-        self._add_character_dropdown()
-        
-        # Update embed to show current category
-        embed = discord.Embed(
-            title="⚔️ 서번트 선택",
-            description=f"**현재 카테고리: {new_category}**\n"
-                       "아래 드롭다운에서 서번트를 선택하세요.",
-            color=INFO_COLOR
-        )
-        
-        # Show characters in current category
-        chars_in_category = self.draft.servant_categories[new_category]
-        if self.is_reselection:
-            taken_servants = set(self.draft.confirmed_servants.values())
-            available_chars = [char for char in chars_in_category if char not in taken_servants]
-            char_list = "\n".join([f"{'✅' if char in available_chars else '❌'} {char}" for char in chars_in_category])
-        else:
-            char_list = "\n".join([f"• {char}" for char in chars_in_category])
-        
-        embed.add_field(name=f"{new_category} 서번트 목록", value=char_list, inline=False)
-        
-        await interaction.response.edit_message(embed=embed, view=self)
-
-    async def on_timeout(self) -> None:
-        """Handle timeout"""
-        for item in self.children:
-            item.disabled = True
-
-
-class CategoryButton(discord.ui.Button):
-    """Button for selecting servant category"""
-    
-    def __init__(self, category: str, index: int):
-        # Use different colors for different categories
-        colors = [
-            discord.ButtonStyle.primary,   # Blue
-            discord.ButtonStyle.secondary, # Gray
-            discord.ButtonStyle.success,   # Green
-            discord.ButtonStyle.danger,    # Red
-        ]
-        
-        super().__init__(
-            label=category,
-            style=colors[index % len(colors)],
-            custom_id=f"category_{category}"
-        )
-        self.category = category
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle category button click"""
-        view: ServantSelectionView = self.view
-        await view.update_category(self.category, interaction)
-
-
-class CharacterDropdown(discord.ui.Select):
-    """Dropdown for selecting characters within a category"""
-    
-    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', characters: List[str], category: str):
-        self.draft = draft
-        self.bot_commands = bot_commands
-        self.category = category
-        
-        # Create options for available characters in this category
-        options = [
-            discord.SelectOption(label=char, value=char, description=f"{category} 클래스")
-            for char in characters[:25]  # Discord limit
-        ]
-        
-        super().__init__(
-            placeholder=f"{category} 서번트를 선택하세요...",
-            options=options,
-            min_values=1,
-            max_values=1
-        )
-
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle character selection"""
-        user_id = interaction.user.id
-        
-        # Check if user is part of the draft
-        if user_id not in self.draft.players:
-            await interaction.response.send_message(
-                "드래프트 참가자만 서번트를 선택할 수 있습니다.", ephemeral=True
-            )
-            return
-        
-        # Check if user already selected (for initial selection)
-        if user_id in self.draft.confirmed_servants:
-            await interaction.response.send_message(
-                "이미 서번트를 선택했습니다.", ephemeral=True
-            )
-            return
-        
-        selected_character = self.values[0]
-        self.draft.players[user_id].selected_servant = selected_character
-        
-        await interaction.response.send_message(
-            f"**{selected_character}** ({self.category})를 선택했습니다!", ephemeral=True
-        )
-        
-        # Check if all players have selected
-        selected_count = sum(1 for p in self.draft.players.values() if p.selected_servant)
-        if selected_count == 12:
-            # All selected, reveal and check for conflicts
-            view: ServantSelectionView = self.view
-            await view.bot_commands._reveal_servant_selections()
-
     async def _start_servant_selection(self) -> None:
         """Start servant selection phase"""
-        # Find the channel
+        # Find the channel and draft
         channel = None
+        current_draft = None
         for channel_id, draft in self.active_drafts.items():
             if draft.phase == DraftPhase.SERVANT_SELECTION:
                 channel = self.bot.get_channel(channel_id)
+                current_draft = draft
                 break
         
-        if not channel:
+        if not channel or not current_draft:
             return
         
         embed = discord.Embed(
@@ -671,12 +429,9 @@ class CharacterDropdown(discord.ui.Select):
         )
         
         # Show characters in default category (세이버)
-        for draft in self.active_drafts.values():
-            if draft.phase == DraftPhase.SERVANT_SELECTION:
-                saber_chars = draft.servant_categories["세이버"]
-                char_list = "\n".join([f"• {char}" for char in saber_chars])
-                embed.add_field(name="세이버 서번트 목록", value=char_list, inline=False)
-                break
+        saber_chars = current_draft.servant_categories["세이버"]
+        char_list = "\n".join([f"• {char}" for char in saber_chars])
+        embed.add_field(name="세이버 서번트 목록", value=char_list, inline=False)
         
         embed.add_field(
             name="📋 선택 방법",
@@ -686,16 +441,8 @@ class CharacterDropdown(discord.ui.Select):
             inline=False
         )
         
-        # Find the draft for this method
-        current_draft = None
-        for draft in self.active_drafts.values():
-            if draft.phase == DraftPhase.SERVANT_SELECTION:
-                current_draft = draft
-                break
-        
-        if current_draft:
-            view = ServantSelectionView(current_draft, self)
-            await channel.send(embed=embed, view=view)
+        view = ServantSelectionView(current_draft, self)
+        await channel.send(embed=embed, view=view)
 
     async def _reveal_servant_selections(self) -> None:
         """Reveal servant selections and handle conflicts"""
@@ -1365,7 +1112,7 @@ class CompleteButton(discord.ui.Button):
                 )
                 
                 # Continue command spell phase
-                await self._continue_command_spell_phase()
+                await self.bot_commands._continue_command_spell_phase()
             
             select.callback = reselect_callback
             reselect_view = discord.ui.View()
@@ -1375,7 +1122,7 @@ class CompleteButton(discord.ui.Button):
         else:
             # No available servants
             await channel.send(embed=embed)
-            await self._continue_command_spell_phase()
+            await self.bot_commands._continue_command_spell_phase()
 
     async def _continue_command_spell_phase(self) -> None:
         """Continue command spell phase"""
@@ -1566,3 +1313,260 @@ class CompleteButton(discord.ui.Button):
         # Clean up
         if current_channel_id in self.active_drafts:
             del self.active_drafts[current_channel_id] 
+
+
+class CaptainVotingView(discord.ui.View):
+    """View for captain voting with buttons"""
+    
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=300.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.user_votes: Dict[int, Set[int]] = {}  # user_id -> set of voted player_ids
+        
+        # Create buttons for each player
+        players = list(draft.players.values())
+        for i, player in enumerate(players[:12]):  # Max 12 buttons
+            button = CaptainVoteButton(player.user_id, player.username, i + 1)
+            self.add_item(button)
+
+    async def on_timeout(self) -> None:
+        """Handle timeout - finalize voting"""
+        await self._finalize_voting()
+
+    async def _finalize_voting(self) -> None:
+        """Finalize captain voting and proceed to next phase"""
+        # Count votes
+        vote_counts = {}
+        for player_id in self.draft.players.keys():
+            vote_counts[player_id] = 0
+        
+        for votes in self.user_votes.values():
+            for voted_player_id in votes:
+                vote_counts[voted_player_id] += 1
+        
+        # Select top 2 vote getters as captains
+        sorted_players = sorted(vote_counts.items(), key=lambda x: x[1], reverse=True)
+        self.draft.captains = [sorted_players[0][0], sorted_players[1][0]]
+        
+        # Mark them as captains
+        for captain_id in self.draft.captains:
+            self.draft.players[captain_id].is_captain = True
+        
+        # Start servant selection
+        self.draft.phase = DraftPhase.SERVANT_SELECTION
+        await self.bot_commands._start_servant_selection()
+
+
+class CaptainVoteButton(discord.ui.Button):
+    """Button for voting for a captain"""
+    
+    def __init__(self, player_id: int, username: str, number: int):
+        super().__init__(
+            label=f"{number}. {username}",
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"vote_{player_id}"
+        )
+        self.player_id = player_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle vote button click"""
+        user_id = interaction.user.id
+        view: CaptainVotingView = self.view
+        
+        # Check if user is part of the draft
+        if user_id not in view.draft.players:
+            await interaction.response.send_message(
+                "드래프트 참가자만 투표할 수 있습니다.", ephemeral=True
+            )
+            return
+        
+        # Initialize user votes if needed
+        if user_id not in view.user_votes:
+            view.user_votes[user_id] = set()
+        
+        # Toggle vote
+        if self.player_id in view.user_votes[user_id]:
+            view.user_votes[user_id].remove(self.player_id)
+            await interaction.response.send_message(
+                f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했습니다.", 
+                ephemeral=True
+            )
+        else:
+            # Check vote limit (max 2 votes)
+            if len(view.user_votes[user_id]) >= 2:
+                await interaction.response.send_message(
+                    "최대 2명까지만 투표할 수 있습니다.", ephemeral=True
+                )
+                return
+            
+            view.user_votes[user_id].add(self.player_id)
+            await interaction.response.send_message(
+                f"{view.draft.players[self.player_id].username}에게 투표했습니다.", 
+                ephemeral=True
+            )
+        
+        # Check if all players have voted
+        if len(view.user_votes) == len(view.draft.players):
+            await view._finalize_voting()
+
+
+class ServantSelectionView(discord.ui.View):
+    """View for servant selection with category pagination"""
+    
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', is_reselection: bool = False):
+        super().__init__(timeout=600.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.is_reselection = is_reselection
+        self.current_category = "세이버"  # Default category
+        
+        # Add category buttons
+        self._add_category_buttons()
+        # Add character dropdown for current category
+        self._add_character_dropdown()
+
+    def _add_category_buttons(self):
+        """Add category selection buttons"""
+        categories = list(self.draft.servant_categories.keys())
+        
+        # Create category buttons (max 5 per row, so split into rows)
+        for i, category in enumerate(categories[:8]):  # Max 8 categories
+            button = CategoryButton(category, i)
+            self.add_item(button)
+
+    def _add_character_dropdown(self):
+        """Add character selection dropdown for current category"""
+        # Remove existing character dropdown if any
+        for item in self.children[:]:
+            if isinstance(item, CharacterDropdown):
+                self.remove_item(item)
+        
+        # Get available characters for current category
+        if self.is_reselection:
+            # For reselection, only show available (not taken) characters
+            taken_servants = set(self.draft.confirmed_servants.values())
+            available_in_category = [
+                char for char in self.draft.servant_categories[self.current_category]
+                if char in self.draft.available_servants and char not in taken_servants
+            ]
+        else:
+            # For initial selection, show all characters in category
+            available_in_category = self.draft.servant_categories[self.current_category]
+        
+        if available_in_category:
+            dropdown = CharacterDropdown(self.draft, self.bot_commands, available_in_category, self.current_category)
+            self.add_item(dropdown)
+
+    async def update_category(self, new_category: str, interaction: discord.Interaction):
+        """Update the current category and refresh the dropdown"""
+        self.current_category = new_category
+        self._add_character_dropdown()
+        
+        # Update embed to show current category
+        embed = discord.Embed(
+            title="⚔️ 서번트 선택",
+            description=f"**현재 카테고리: {new_category}**\n"
+                       "아래 드롭다운에서 서번트를 선택하세요.",
+            color=INFO_COLOR
+        )
+        
+        # Show characters in current category
+        chars_in_category = self.draft.servant_categories[new_category]
+        if self.is_reselection:
+            taken_servants = set(self.draft.confirmed_servants.values())
+            available_chars = [char for char in chars_in_category if char not in taken_servants]
+            char_list = "\n".join([f"{'✅' if char in available_chars else '❌'} {char}" for char in chars_in_category])
+        else:
+            char_list = "\n".join([f"• {char}" for char in chars_in_category])
+        
+        embed.add_field(name=f"{new_category} 서번트 목록", value=char_list, inline=False)
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    async def on_timeout(self) -> None:
+        """Handle timeout"""
+        for item in self.children:
+            item.disabled = True
+
+
+class CategoryButton(discord.ui.Button):
+    """Button for selecting servant category"""
+    
+    def __init__(self, category: str, index: int):
+        # Use different colors for different categories
+        colors = [
+            discord.ButtonStyle.primary,   # Blue
+            discord.ButtonStyle.secondary, # Gray
+            discord.ButtonStyle.success,   # Green
+            discord.ButtonStyle.danger,    # Red
+        ]
+        
+        super().__init__(
+            label=category,
+            style=colors[index % len(colors)],
+            custom_id=f"category_{category}"
+        )
+        self.category = category
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle category button click"""
+        view: ServantSelectionView = self.view
+        await view.update_category(self.category, interaction)
+
+
+class CharacterDropdown(discord.ui.Select):
+    """Dropdown for selecting characters within a category"""
+    
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', characters: List[str], category: str):
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.category = category
+        
+        # Create options for available characters in this category
+        options = [
+            discord.SelectOption(label=char, value=char, description=f"{category} 클래스")
+            for char in characters[:25]  # Discord limit
+        ]
+        
+        super().__init__(
+            placeholder=f"{category} 서번트를 선택하세요...",
+            options=options,
+            min_values=1,
+            max_values=1
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle character selection"""
+        user_id = interaction.user.id
+        
+        # Check if user is part of the draft
+        if user_id not in self.draft.players:
+            await interaction.response.send_message(
+                "드래프트 참가자만 서번트를 선택할 수 있습니다.", ephemeral=True
+            )
+            return
+        
+        # Check if user already selected (for initial selection)
+        if user_id in self.draft.confirmed_servants:
+            await interaction.response.send_message(
+                "이미 서번트를 선택했습니다.", ephemeral=True
+            )
+            return
+        
+        selected_character = self.values[0]
+        self.draft.players[user_id].selected_servant = selected_character
+        
+        await interaction.response.send_message(
+            f"**{selected_character}** ({self.category})를 선택했습니다!", ephemeral=True
+        )
+        
+        # Check if all players have selected
+        selected_count = sum(1 for p in self.draft.players.values() if p.selected_servant)
+        if selected_count == 12:
+            # All selected, reveal and check for conflicts
+            view: ServantSelectionView = self.view
+            await view.bot_commands._reveal_servant_selections()
+        else:
+            # Continue to next category
+            await view.update_category(self.category, interaction) 
