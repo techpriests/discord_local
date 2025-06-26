@@ -793,7 +793,10 @@ class TeamDraftCommands(BaseCommands):
         banned_list = ", ".join(sorted(draft.banned_servants))
         embed.add_field(name="총 밴된 서번트", value=banned_list, inline=False)
         
-        await self.send_response(ctx_or_interaction, embed=embed)
+        # Find the channel and send the message directly
+        channel = self.bot.get_channel(draft.channel_id)
+        if channel:
+            await channel.send(embed=embed)
         
         # Move to servant selection phase
         draft.phase = DraftPhase.SERVANT_SELECTION
