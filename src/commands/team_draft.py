@@ -116,9 +116,8 @@ class DraftSession:
 class TeamDraftCommands(BaseCommands):
     """Commands for team draft system"""
     
-    def __init__(self, bot) -> None:
+    def __init__(self) -> None:
         super().__init__()
-        self.bot = bot
         self.active_drafts: Dict[int, DraftSession] = {}  # channel_id -> DraftSession
         
         # Selection patterns for team picking
@@ -128,6 +127,11 @@ class TeamDraftCommands(BaseCommands):
             {"first_pick": 1, "second_pick": 1},  # Round 3
             {"first_pick": 1, "second_pick": 0},  # Round 4
         ]
+
+    @property
+    def bot(self):
+        """Get bot instance from the cog"""
+        return super().bot
 
     @app_commands.command(name="페어", description="12명의 플레이어와 함께 팀 드래프트를 시작합니다")
     async def draft_start_slash(
