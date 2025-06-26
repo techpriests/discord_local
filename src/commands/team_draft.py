@@ -732,8 +732,290 @@ class TeamDraftCommands(BaseCommands):
         del self.active_drafts[channel_id]
         await self.send_success(ctx_or_interaction, "드래프트가 취소되었습니다.")
 
+    async def _handle_ban_reselection(self, banned_player_id: int) -> None:
+        """Handle reselection after ban"""
+        # Find current draft with this player
+        current_draft = None
+        current_channel_id = None
+        for channel_id, draft in self.active_drafts.items():
+            if banned_player_id in draft.players:
+                current_draft = draft
+                current_channel_id = channel_id
+                break
+        
+        if not current_draft:
+            return
+        
+        # Get available servants (exclude confirmed ones)
+        taken_servants = set(current_draft.confirmed_servants.values())
+        available_servants = current_draft.available_servants - taken_servants
+        
+        channel = self.bot.get_channel(current_channel_id)
+        if not channel:
+            return
+        
+        banned_player = current_draft.players[banned_player_id]
+        
+        embed = discord.Embed(
+            title="🔄 서번트 재선택 (밴 후)",
+            description=f"**{banned_player.username}**님, 밴으로 인해 새로운 서번트를 선택해야 합니다.",
+            color=INFO_COLOR
+        )
+        
+        embed.add_field(
+            name="선택 가능한 서번트",
+            value="\n".join(sorted(available_servants)) if available_servants else "없음",
+            inline=False
+        )
+        
+        # Create dropdown for reselection
+        if available_servants:
+            options = [
+                discord.SelectOption(label=servant, value=servant)
+                for servant in sorted(available_servants)
+            ]
+            
+            select = discord.ui.Select(
+                placeholder="새로운 서번트를 선택하세요...",
+                options=options,
+                min_values=1,
+                max_values=1
+            )
+            
+            async def reselect_callback(select_interaction):
+                if select_interaction.user.id != banned_player_id:
+                    await select_interaction.response.send_message(
+                        "본인만 선택할 수 있습니다.", ephemeral=True
+                    )
+                    return
+                
+                new_servant = select.values[0]
+                # Update player's servant
+                banned_player.selected_servant = new_servant
+                current_draft.confirmed_servants[banned_player_id] = new_servant
+                
+                await select_interaction.response.send_message(
+                    f"**{new_servant}**를 선택했습니다!"
+                )
+                
+                # Continue command spell phase
+                await self._continue_command_spell_phase()
+            
+            select.callback = reselect_callback
+            reselect_view = discord.ui.View()
+            reselect_view.add_item(select)
+            
+            await channel.send(embed=embed, view=reselect_view)
+        else:
+            # No available servants
+            await channel.send(embed=embed)
+            await self._continue_command_spell_phase()
 
-# Additional View classes for UI interactions
+    async def _continue_command_spell_phase(self) -> None:
+        """Continue command spell phase"""
+        # Find current draft
+        current_draft = None
+        for draft in self.active_drafts.values():
+            if draft.phase == DraftPhase.COMMAND_SPELL:
+                current_draft = draft
+                break
+        
+        if not current_draft:
+            return
+        
+        # Switch to other captain or end phase
+        current_captain = current_draft.current_spell_captain
+        other_captain = [c for c in current_draft.captains if c != current_captain][0]
+        
+        # Check if current captain has points left
+        if current_draft.captain_spell_points[current_captain] > 0:
+            # Switch to other captain
+            current_draft.current_spell_captain = other_captain
+            await self._show_command_spell_status_for_draft(current_draft)
+        elif current_draft.captain_spell_points[other_captain] > 0:
+            # Other captain still has points
+            current_draft.current_spell_captain = other_captain
+            await self._show_command_spell_status_for_draft(current_draft)
+        else:
+            # Both captains used all points, end phase
+            await self._start_final_swap_phase_for_draft(current_draft)
+
+    async def _show_command_spell_status_for_draft(self, draft: DraftSession) -> None:
+        """Show command spell usage status for specific draft"""
+        # Find the channel
+        channel = None
+        for channel_id, d in self.active_drafts.items():
+            if d == draft:
+                channel = self.bot.get_channel(channel_id)
+                break
+        
+        if not channel:
+            return
+        
+        current_captain = draft.current_spell_captain
+        current_points = draft.captain_spell_points[current_captain]
+        
+        embed = discord.Embed(
+            title="✨ 령주 사용",
+            description=f"{draft.players[current_captain].username}의 차례\n"
+                       f"남은 령주: {current_points}획",
+            color=INFO_COLOR
+        )
+        
+        # Show teams
+        team1_players = [p for p in draft.players.values() if p.team == 1]
+        team2_players = [p for p in draft.players.values() if p.team == 2]
+        
+        def format_team(players):
+            return "\n".join([
+                f"{p.username} ({draft.confirmed_servants[p.user_id]}) {'🛡️' if p.protected else ''}"
+                for p in players
+            ])
+        
+        embed.add_field(name="팀 1", value=format_team(team1_players), inline=True)
+        embed.add_field(name="팀 2", value=format_team(team2_players), inline=True)
+        
+        view = CommandSpellView(draft, self)
+        await channel.send(embed=embed, view=view)
+
+    async def _start_final_swap_phase_for_draft(self, draft: DraftSession) -> None:
+        """Start final swap phase for specific draft"""
+        draft.phase = DraftPhase.FINAL_SWAP
+        
+        # Find the channel
+        channel = None
+        for channel_id, d in self.active_drafts.items():
+            if d == draft:
+                channel = self.bot.get_channel(channel_id)
+                break
+        
+        if not channel:
+            return
+        
+        embed = discord.Embed(
+            title="🔄 최종 교체 단계",
+            description="각 팀은 팀 내에서 서번트를 자유롭게 교체할 수 있습니다.\n"
+                       "교체를 원하지 않으면 완료 버튼을 눌러주세요.",
+            color=INFO_COLOR
+        )
+        
+        # Show final teams
+        team1_players = [p for p in draft.players.values() if p.team == 1]
+        team2_players = [p for p in draft.players.values() if p.team == 2]
+        
+        def format_final_team(players):
+            return "\n".join([
+                f"{p.username} - {draft.confirmed_servants[p.user_id]}"
+                for p in players
+            ])
+        
+        embed.add_field(name="팀 1 최종 로스터", value=format_final_team(team1_players), inline=True)
+        embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
+        
+        view = FinalSwapView(draft, self)
+        await channel.send(embed=embed, view=view)
+
+    async def _start_command_spell_phase_for_draft(self, draft: DraftSession) -> None:
+        """Start command spell phase for specific draft"""
+        draft.phase = DraftPhase.COMMAND_SPELL
+        
+        # Initialize spell points for captains
+        for captain_id in draft.captains:
+            draft.captain_spell_points[captain_id] = 2
+        
+        # First pick captain starts
+        draft.current_spell_captain = draft.first_pick_captain
+        
+        # Find the channel
+        channel = None
+        for channel_id, d in self.active_drafts.items():
+            if d == draft:
+                channel = self.bot.get_channel(channel_id)
+                break
+        
+        if not channel:
+            return
+        
+        embed = discord.Embed(
+            title="✨ 령주 사용 단계",
+            description="각 팀장은 2획의 령주를 사용할 수 있습니다.\n"
+                       "번갈아 가며 령주를 사용하거나 패스할 수 있습니다.",
+            color=INFO_COLOR
+        )
+        
+        embed.add_field(
+            name="사용 가능한 령주",
+            value="**밴의 호흡** (1획) - 상대팀 서번트 1명을 밴\n"
+                  "**보호의 호흡** (2획) - 자신의 팀 서번트 1명을 보호",
+            inline=False
+        )
+        
+        current_captain_name = draft.players[draft.current_spell_captain].username
+        embed.add_field(name="현재 차례", value=current_captain_name, inline=True)
+        
+        await channel.send(embed=embed)
+        await self._show_command_spell_status_for_draft(draft)
+
+    async def _complete_draft(self) -> None:
+        """Complete the draft"""
+        # Find current draft
+        current_draft = None
+        current_channel_id = None
+        for channel_id, draft in self.active_drafts.items():
+            if draft.phase == DraftPhase.FINAL_SWAP:
+                current_draft = draft
+                current_channel_id = channel_id
+                break
+        
+        if not current_draft:
+            return
+            
+        current_draft.phase = DraftPhase.COMPLETED
+        
+        channel = self.bot.get_channel(current_channel_id)
+        if not channel:
+            return
+        
+        embed = discord.Embed(
+            title="🏆 드래프트 완료!",
+            description="모든 단계가 완료되었습니다. 게임을 시작하세요!",
+            color=SUCCESS_COLOR
+        )
+        
+        # Show final teams
+        team1_players = [p for p in current_draft.players.values() if p.team == 1]
+        team2_players = [p for p in current_draft.players.values() if p.team == 2]
+        
+        def format_final_team(players):
+            return "\n".join([
+                f"**{p.username}** - {current_draft.confirmed_servants[p.user_id]} {'👑' if p.is_captain else ''}"
+                for p in players
+            ])
+        
+        embed.add_field(name="팀 1", value=format_final_team(team1_players), inline=True)
+        embed.add_field(name="팀 2", value=format_final_team(team2_players), inline=True)
+        
+        await channel.send(embed=embed)
+        
+        # Clean up
+        if current_channel_id in self.active_drafts:
+            del self.active_drafts[current_channel_id] 
+
+    async def _check_voting_completion(self, view: 'CaptainVotingView') -> bool:
+        """Check if voting should be completed"""
+        # Check if all players have voted (normal case)
+        if len(view.user_votes) == len(view.draft.players):
+            return True
+        
+        # For test mode: check if the real user has voted for 2 people
+        # In test mode, only 1 real player can vote
+        if len(view.user_votes) == 1:  # Only one person has voted
+            user_votes = list(view.user_votes.values())[0]
+            if len(user_votes) == 2:  # They voted for 2 people
+                return True
+        
+        return False
+
 
 class TeamSelectionView(discord.ui.View):
     """View for team selection"""
@@ -1045,275 +1327,6 @@ class CompleteButton(discord.ui.Button):
         if all(view.team_ready.values()):
             await view.bot_commands._complete_draft()
 
-    async def _handle_ban_reselection(self, banned_player_id: int) -> None:
-        """Handle reselection after ban"""
-        # Find current draft with this player
-        current_draft = None
-        current_channel_id = None
-        for channel_id, draft in self.active_drafts.items():
-            if banned_player_id in draft.players:
-                current_draft = draft
-                current_channel_id = channel_id
-                break
-        
-        if not current_draft:
-            return
-        
-        # Get available servants (exclude confirmed ones)
-        taken_servants = set(current_draft.confirmed_servants.values())
-        available_servants = current_draft.available_servants - taken_servants
-        
-        channel = self.bot.get_channel(current_channel_id)
-        if not channel:
-            return
-        
-        banned_player = current_draft.players[banned_player_id]
-        
-        embed = discord.Embed(
-            title="🔄 서번트 재선택 (밴 후)",
-            description=f"**{banned_player.username}**님, 밴으로 인해 새로운 서번트를 선택해야 합니다.",
-            color=INFO_COLOR
-        )
-        
-        embed.add_field(
-            name="선택 가능한 서번트",
-            value="\n".join(sorted(available_servants)) if available_servants else "없음",
-            inline=False
-        )
-        
-        # Create dropdown for reselection
-        if available_servants:
-            options = [
-                discord.SelectOption(label=servant, value=servant)
-                for servant in sorted(available_servants)
-            ]
-            
-            select = discord.ui.Select(
-                placeholder="새로운 서번트를 선택하세요...",
-                options=options,
-                min_values=1,
-                max_values=1
-            )
-            
-            async def reselect_callback(select_interaction):
-                if select_interaction.user.id != banned_player_id:
-                    await select_interaction.response.send_message(
-                        "본인만 선택할 수 있습니다.", ephemeral=True
-                    )
-                    return
-                
-                new_servant = select.values[0]
-                # Update player's servant
-                banned_player.selected_servant = new_servant
-                current_draft.confirmed_servants[banned_player_id] = new_servant
-                
-                await select_interaction.response.send_message(
-                    f"**{new_servant}**를 선택했습니다!"
-                )
-                
-                # Continue command spell phase
-                await self.bot_commands._continue_command_spell_phase()
-            
-            select.callback = reselect_callback
-            reselect_view = discord.ui.View()
-            reselect_view.add_item(select)
-            
-            await channel.send(embed=embed, view=reselect_view)
-        else:
-            # No available servants
-            await channel.send(embed=embed)
-            await self.bot_commands._continue_command_spell_phase()
-
-    async def _continue_command_spell_phase(self) -> None:
-        """Continue command spell phase"""
-        # Find current draft
-        current_draft = None
-        for draft in self.active_drafts.values():
-            if draft.phase == DraftPhase.COMMAND_SPELL:
-                current_draft = draft
-                break
-        
-        if not current_draft:
-            return
-        
-        # Switch to other captain or end phase
-        current_captain = current_draft.current_spell_captain
-        other_captain = [c for c in current_draft.captains if c != current_captain][0]
-        
-        # Check if current captain has points left
-        if current_draft.captain_spell_points[current_captain] > 0:
-            # Switch to other captain
-            current_draft.current_spell_captain = other_captain
-            await self._show_command_spell_status_for_draft(current_draft)
-        elif current_draft.captain_spell_points[other_captain] > 0:
-            # Other captain still has points
-            current_draft.current_spell_captain = other_captain
-            await self._show_command_spell_status_for_draft(current_draft)
-        else:
-            # Both captains used all points, end phase
-            await self._start_final_swap_phase_for_draft(current_draft)
-
-    async def _show_command_spell_status_for_draft(self, draft: DraftSession) -> None:
-        """Show command spell usage status for specific draft"""
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
-        if not channel:
-            return
-        
-        current_captain = draft.current_spell_captain
-        current_points = draft.captain_spell_points[current_captain]
-        
-        embed = discord.Embed(
-            title="✨ 령주 사용",
-            description=f"{draft.players[current_captain].username}의 차례\n"
-                       f"남은 령주: {current_points}획",
-            color=INFO_COLOR
-        )
-        
-        # Show teams
-        team1_players = [p for p in draft.players.values() if p.team == 1]
-        team2_players = [p for p in draft.players.values() if p.team == 2]
-        
-        def format_team(players):
-            return "\n".join([
-                f"{p.username} ({draft.confirmed_servants[p.user_id]}) {'🛡️' if p.protected else ''}"
-                for p in players
-            ])
-        
-        embed.add_field(name="팀 1", value=format_team(team1_players), inline=True)
-        embed.add_field(name="팀 2", value=format_team(team2_players), inline=True)
-        
-        view = CommandSpellView(draft, self)
-        await channel.send(embed=embed, view=view)
-
-    async def _start_final_swap_phase_for_draft(self, draft: DraftSession) -> None:
-        """Start final swap phase for specific draft"""
-        draft.phase = DraftPhase.FINAL_SWAP
-        
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
-        if not channel:
-            return
-        
-        embed = discord.Embed(
-            title="🔄 최종 교체 단계",
-            description="각 팀은 팀 내에서 서번트를 자유롭게 교체할 수 있습니다.\n"
-                       "교체를 원하지 않으면 완료 버튼을 눌러주세요.",
-            color=INFO_COLOR
-        )
-        
-        # Show final teams
-        team1_players = [p for p in draft.players.values() if p.team == 1]
-        team2_players = [p for p in draft.players.values() if p.team == 2]
-        
-        def format_final_team(players):
-            return "\n".join([
-                f"{p.username} - {draft.confirmed_servants[p.user_id]}"
-                for p in players
-            ])
-        
-        embed.add_field(name="팀 1 최종 로스터", value=format_final_team(team1_players), inline=True)
-        embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
-        
-        view = FinalSwapView(draft, self)
-        await channel.send(embed=embed, view=view)
-
-    async def _start_command_spell_phase_for_draft(self, draft: DraftSession) -> None:
-        """Start command spell phase for specific draft"""
-        draft.phase = DraftPhase.COMMAND_SPELL
-        
-        # Initialize spell points for captains
-        for captain_id in draft.captains:
-            draft.captain_spell_points[captain_id] = 2
-        
-        # First pick captain starts
-        draft.current_spell_captain = draft.first_pick_captain
-        
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
-        if not channel:
-            return
-        
-        embed = discord.Embed(
-            title="✨ 령주 사용 단계",
-            description="각 팀장은 2획의 령주를 사용할 수 있습니다.\n"
-                       "번갈아 가며 령주를 사용하거나 패스할 수 있습니다.",
-            color=INFO_COLOR
-        )
-        
-        embed.add_field(
-            name="사용 가능한 령주",
-            value="**밴의 호흡** (1획) - 상대팀 서번트 1명을 밴\n"
-                  "**보호의 호흡** (2획) - 자신의 팀 서번트 1명을 보호",
-            inline=False
-        )
-        
-        current_captain_name = draft.players[draft.current_spell_captain].username
-        embed.add_field(name="현재 차례", value=current_captain_name, inline=True)
-        
-        await channel.send(embed=embed)
-        await self._show_command_spell_status_for_draft(draft)
-
-    async def _complete_draft(self) -> None:
-        """Complete the draft"""
-        # Find current draft
-        current_draft = None
-        current_channel_id = None
-        for channel_id, draft in self.active_drafts.items():
-            if draft.phase == DraftPhase.FINAL_SWAP:
-                current_draft = draft
-                current_channel_id = channel_id
-                break
-        
-        if not current_draft:
-            return
-            
-        current_draft.phase = DraftPhase.COMPLETED
-        
-        channel = self.bot.get_channel(current_channel_id)
-        if not channel:
-            return
-        
-        embed = discord.Embed(
-            title="🏆 드래프트 완료!",
-            description="모든 단계가 완료되었습니다. 게임을 시작하세요!",
-            color=SUCCESS_COLOR
-        )
-        
-        # Show final teams
-        team1_players = [p for p in current_draft.players.values() if p.team == 1]
-        team2_players = [p for p in current_draft.players.values() if p.team == 2]
-        
-        def format_final_team(players):
-            return "\n".join([
-                f"**{p.username}** - {current_draft.confirmed_servants[p.user_id]} {'👑' if p.is_captain else ''}"
-                for p in players
-            ])
-        
-        embed.add_field(name="팀 1", value=format_final_team(team1_players), inline=True)
-        embed.add_field(name="팀 2", value=format_final_team(team2_players), inline=True)
-        
-        await channel.send(embed=embed)
-        
-        # Clean up
-        if current_channel_id in self.active_drafts:
-            del self.active_drafts[current_channel_id] 
-
 
 class CaptainVotingView(discord.ui.View):
     """View for captain voting with buttons"""
@@ -1406,8 +1419,9 @@ class CaptainVoteButton(discord.ui.Button):
                 ephemeral=True
             )
         
-        # Check if all players have voted
-        if len(view.user_votes) == len(view.draft.players):
+        # Check if voting should be completed
+        should_complete = await view.bot_commands._check_voting_completion(view)
+        if should_complete:
             await view._finalize_voting()
 
 
