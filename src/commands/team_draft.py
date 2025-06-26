@@ -133,6 +133,21 @@ class TeamDraftCommands(BaseCommands):
         """Get bot instance from the cog"""
         return super().bot
 
+    @commands.command(
+        name="페어",
+        help="12명의 플레이어와 함께 팀 드래프트를 시작합니다",
+        brief="팀 드래프트 시작",
+        aliases=["draft", "팀드래프트"],
+        description="팀 드래프트 시스템을 시작합니다.\n"
+                   "사용법: 뮤 페어 [test_mode:True] - 테스트 모드\n"
+                   "예시: 뮤 페어 test_mode:True"
+    )
+    async def draft_start_chat(self, ctx: commands.Context, *, args: str = "") -> None:
+        """Start team draft via chat command"""
+        # Parse test_mode from args
+        test_mode = "test_mode:true" in args.lower() or "test_mode=true" in args.lower()
+        await self._handle_draft_start(ctx, "", test_mode)
+
     @app_commands.command(name="페어", description="12명의 플레이어와 함께 팀 드래프트를 시작합니다")
     async def draft_start_slash(
         self,
@@ -305,6 +320,16 @@ class TeamDraftCommands(BaseCommands):
     async def draft_status_slash(self, interaction: discord.Interaction) -> None:
         """Check current draft status"""
         await self._handle_draft_status(interaction)
+
+    @commands.command(
+        name="페어상태",
+        help="현재 드래프트 상태를 확인합니다",
+        brief="드래프트 상태 확인",
+        aliases=["draft_status", "드래프트상태"]
+    )
+    async def draft_status_chat(self, ctx: commands.Context) -> None:
+        """Check current draft status via chat command"""
+        await self._handle_draft_status(ctx)
 
     @command_handler()
     async def _handle_draft_status(self, ctx_or_interaction: CommandContext) -> None:
