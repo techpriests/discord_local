@@ -22,6 +22,7 @@ from src.commands.entertainment import EntertainmentCommands
 from src.commands.system import SystemCommands
 from src.commands.arknights import ArknightsCommands
 from src.commands.ai import AICommands
+from src.commands.team_draft import TeamDraftCommands
 from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
@@ -71,7 +72,8 @@ class DiscordBot(commands.Bot):
             EntertainmentCommands,
             SystemCommands,
             ArknightsCommands,
-            AICommands
+            AICommands,
+            TeamDraftCommands
         ]
         self.memory_db: Optional[MemoryDB] = None
         self.version_info: VersionInfo = get_git_info()
