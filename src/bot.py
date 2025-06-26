@@ -217,6 +217,9 @@ class DiscordBot(commands.Bot):
                     elif command_class == AICommands:
                         cog = command_class()
                         cog.bot = self  # Set bot instance for API access
+                    elif command_class == TeamDraftCommands:
+                        cog = command_class()
+                        cog.bot = self  # Set bot instance for draft operations
                     else:
                         cog = command_class()
                     
