@@ -45,8 +45,18 @@ class DraftSession:
     """Represents an active draft session"""
     channel_id: int
     guild_id: int
+    team_size: int = 6  # Number of players per team (3 for 3v3, 6 for 6v6)
     phase: DraftPhase = DraftPhase.WAITING
     players: Dict[int, Player] = field(default_factory=dict)
+    
+    # Test mode tracking
+    is_test_mode: bool = False
+    real_user_id: Optional[int] = None  # The real user in test mode
+    
+    # Race condition protection
+    processing_servant_reveal: bool = False
+    processing_captain_voting: bool = False
+    processing_team_completion: bool = False
     
     # Captain selection
     captain_vote_message_id: Optional[int] = None
@@ -106,49 +116,72 @@ class TeamDraftCommands(BaseCommands):
         self.active_drafts: Dict[int, DraftSession] = {}  # channel_id -> DraftSession
         
         # Selection patterns for team picking
-        self.team_selection_pattern = [
-            {"first_pick": 1, "second_pick": 2},  # Round 1
-            {"first_pick": 2, "second_pick": 2},  # Round 2
-            {"first_pick": 1, "second_pick": 1},  # Round 3
-            {"first_pick": 1, "second_pick": 0},  # Round 4
-        ]
+        self.team_selection_patterns = {
+            6: [  # 6v6 pattern (original)
+                {"first_pick": 1, "second_pick": 2},  # Round 1
+                {"first_pick": 2, "second_pick": 2},  # Round 2
+                {"first_pick": 1, "second_pick": 1},  # Round 3
+                {"first_pick": 1, "second_pick": 0},  # Round 4
+            ],
+            3: [  # 3v3 pattern (corrected)
+                {"first_pick": 1, "second_pick": 2},  # Round 1: First picks 1, Second picks 2
+                {"first_pick": 1, "second_pick": 0},  # Round 2: First picks 1, Second picks 0
+            ]
+        }
 
     @commands.command(
         name="페어",
-        help="12명의 플레이어와 함께 팀 드래프트를 시작합니다",
+        help="팀 드래프트를 시작해 (기본: 6v6, 옵션: 3v3)",
         brief="팀 드래프트 시작",
         aliases=["draft", "팀드래프트"],
-        description="팀 드래프트 시스템을 시작합니다.\n"
-                   "사용법: 뮤 페어 [test_mode:True] - 테스트 모드\n"
-                   "예시: 뮤 페어 test_mode:True"
+        description="팀 드래프트 시스템을 시작해.\n"
+                   "사용법: 뮤 페어 [team_size:3]\n"
+                   "예시: 뮤 페어 team_size:3 (3v3 드래프트)\n"
+                   "예시: 뮤 페어 (6v6 드래프트)"
     )
     async def draft_start_chat(self, ctx: commands.Context, *, args: str = "") -> None:
         """Start team draft via chat command"""
-        # Parse test_mode from args
+        # Parse test_mode and team_size from args
         test_mode = "test_mode:true" in args.lower() or "test_mode=true" in args.lower()
-        await self._handle_draft_start(ctx, "", test_mode)
+        
+        # Parse team_size (default 6 for 6v6)
+        team_size = 6  # default
+        if "team_size:3" in args.lower() or "team_size=3" in args.lower():
+            team_size = 3
+        elif "team_size:6" in args.lower() or "team_size=6" in args.lower():
+            team_size = 6
+            
+        await self._handle_draft_start(ctx, "", test_mode, team_size)
 
-    @app_commands.command(name="페어", description="12명의 플레이어와 함께 팀 드래프트를 시작합니다")
+    @app_commands.command(name="페어", description="팀 드래프트를 시작해 (기본: 6v6)")
     async def draft_start_slash(
         self,
         interaction: discord.Interaction,
         players: str = "",
-        test_mode: bool = False
+        test_mode: bool = False,
+        team_size: int = 6
     ) -> None:
         """Start a new draft session"""
-        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode} (v2)")
+        # Validate team_size
+        if team_size not in [3, 6]:
+            await interaction.response.send_message(
+                "팀 크기는 3 (3v3) 또는 6 (6v6)만 가능해.", ephemeral=True
+            )
+            return
+            
+        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode}, team_size={team_size} (v4)")
         try:
-            await self._handle_draft_start(interaction, players, test_mode)
+            await self._handle_draft_start(interaction, players, test_mode, team_size)
         except Exception as e:
             logger.error(f"Error in draft_start_slash: {e}", exc_info=True)
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    f"⚠️ 명령어 실행 중 오류가 발생했습니다: {str(e)}", 
+                    f"⚠️ 명령어 실행 중 문제가 생겼어: {str(e)}", 
                     ephemeral=True
                 )
             else:
                 await interaction.followup.send(
-                    f"⚠️ 명령어 실행 중 오류가 발생했습니다: {str(e)}", 
+                    f"⚠️ 명령어 실행 중 문제가 생겼어: {str(e)}", 
                     ephemeral=True
                 )
 
@@ -157,7 +190,8 @@ class TeamDraftCommands(BaseCommands):
         self,
         ctx_or_interaction: CommandContext,
         players_str: str = "",
-        test_mode: bool = False
+        test_mode: bool = False,
+        team_size: int = 6
     ) -> None:
         """Handle draft start command"""
         try:
@@ -165,35 +199,42 @@ class TeamDraftCommands(BaseCommands):
             guild_id = self.get_guild_id(ctx_or_interaction)
             
             if channel_id in self.active_drafts:
-                await self.send_error(ctx_or_interaction, "이미 진행 중인 드래프트가 있습니다.")
+                await self.send_error(ctx_or_interaction, "이미 진행 중인 드래프트가 있어.")
                 return
                 
             if not guild_id:
-                await self.send_error(ctx_or_interaction, "서버에서만 드래프트를 시작할 수 있습니다.")
+                await self.send_error(ctx_or_interaction, "서버에서만 드래프트를 시작할 수 있어.")
                 return
             
             # Handle test mode or real players
             if test_mode:
-                players = await self._generate_test_players(ctx_or_interaction)
+                players = await self._generate_test_players(ctx_or_interaction, team_size)
+                team_format = "3v3" if team_size == 3 else "6v6"
                 await self.send_success(
                     ctx_or_interaction, 
-                    "🧪 **테스트 모드**V2로 드래프트를 시작합니다!\n"
-                    "가상의 플레이어 12명이 자동으로 생성되었습니다."
+                    #f"🧪 **테스트 모드 ({team_format})**로 드래프트를 시작해!\n"
+                    f"가상 플레이어 {team_size * 2}명을 자동으로 생성했어."
                 )
             else:
                 # Parse player mentions
                 players = await self._parse_players(ctx_or_interaction, players_str)
                 
-                if len(players) != 12:
+                if len(players) != team_size:
                     await self.send_error(
                         ctx_or_interaction, 
-                        f"정확히 12명의 플레이어가 필요합니다. (현재: {len(players)}명)\n"
-                        #"💡 **팁**: `t`로 테스트 모드를 사용해보세요!"
+                        f"정확히 {team_size}명의 플레이어가 필요해. (현재: {len(players)}명)\n"
+                        #"💡 **팁**: 테스트 모드를 사용해볼래?"
                     )
                     return
             
             # Create draft session
-            draft = DraftSession(channel_id=channel_id, guild_id=guild_id)
+            draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+            
+            # Set test mode flag and real user if in test mode
+            if test_mode:
+                draft.is_test_mode = True
+                draft.real_user_id = self.get_user_id(ctx_or_interaction)
+            
             for user_id, username in players:
                 draft.players[user_id] = Player(user_id=user_id, username=username)
             
@@ -204,9 +245,9 @@ class TeamDraftCommands(BaseCommands):
             
         except Exception as e:
             logger.error(f"Error starting draft: {e}")
-            await self.send_error(ctx_or_interaction, "드래프트 시작 중 오류가 발생했습니다.")
+            await self.send_error(ctx_or_interaction, "드래프트 시작 중 문제가 생겼어.")
 
-    async def _generate_test_players(self, ctx_or_interaction: CommandContext) -> List[Tuple[int, str]]:
+    async def _generate_test_players(self, ctx_or_interaction: CommandContext, team_size: int) -> List[Tuple[int, str]]:
         """Generate fake players for testing"""
         # Get the real user who started the test
         real_user_id = self.get_user_id(ctx_or_interaction)
@@ -220,13 +261,14 @@ class TeamDraftCommands(BaseCommands):
         ]
         
         players = []
+        total_players = team_size * 2  # Total players needed
         
         # Add the real user as first player
         players.append((real_user_id, real_username))
         
-        # Generate 11 fake players with fake IDs
+        # Generate fake players with fake IDs
         import random
-        for i in range(11):
+        for i in range(total_players - 1):  # -1 because we already added the real user
             fake_id = random.randint(100000000000000000, 999999999999999999)  # 18-digit Discord-like ID
             fake_name = test_names[i] if i < len(test_names) else f"테스트플레이어{i+1}"
             players.append((fake_id, fake_name))
@@ -272,15 +314,15 @@ class TeamDraftCommands(BaseCommands):
         
         embed = discord.Embed(
             title="🎖️ 팀장 선출 투표",
-            description="모든 플레이어는 팀장으로 추천하고 싶은 2명에게 투표하세요.\n"
-                       "가장 많은 표를 받은 2명이 팀장이 됩니다.",
+            description="모든 플레이어는 팀장으로 추천하고 싶은 2명에게 투표해.\n"
+                       "가장 많은 표를 받은 2명이 팀장이 돼.",
             color=INFO_COLOR
         )
         
         player_list = "\n".join([f"{i+1}. {player.username}" 
                                 for i, player in enumerate(draft.players.values())])
         embed.add_field(name="참가자 목록", value=player_list, inline=False)
-        embed.add_field(name="투표 방법", value="아래 번호 버튼을 눌러 투표하세요", inline=False)
+        embed.add_field(name="투표 방법", value="아래 번호 버튼을 눌러 투표해", inline=False)
         
         # Create voting view
         view = CaptainVotingView(draft, self)
@@ -296,14 +338,14 @@ class TeamDraftCommands(BaseCommands):
         
         draft.captain_vote_message_id = message.id
 
-    @app_commands.command(name="페어상태", description="현재 드래프트 상태를 확인합니다")
+    @app_commands.command(name="페어상태", description="현재 드래프트 상태를 확인해")
     async def draft_status_slash(self, interaction: discord.Interaction) -> None:
         """Check current draft status"""
         await self._handle_draft_status(interaction)
 
     @commands.command(
         name="페어상태",
-        help="현재 드래프트 상태를 확인합니다",
+        help="현재 드래프트 상태를 확인해",
         brief="드래프트 상태 확인",
         aliases=["draft_status", "드래프트상태"]
     )
@@ -317,7 +359,7 @@ class TeamDraftCommands(BaseCommands):
         channel_id = self.get_channel_id(ctx_or_interaction)
         
         if channel_id not in self.active_drafts:
-            await self.send_error(ctx_or_interaction, "진행 중인 드래프트가 없습니다.")
+            await self.send_error(ctx_or_interaction, "진행 중인 드래프트가 없어.")
             return
         
         draft = self.active_drafts[channel_id]
@@ -326,7 +368,8 @@ class TeamDraftCommands(BaseCommands):
 
     async def _create_status_embed(self, draft: DraftSession) -> discord.Embed:
         """Create status embed for current draft state"""
-        embed = discord.Embed(title="🏆 드래프트 현황", color=INFO_COLOR)
+        team_format = "3v3" if draft.team_size == 3 else "6v6"
+        embed = discord.Embed(title=f"🏆 드래프트 현황 ({team_format})", color=INFO_COLOR)
         
         phase_names = {
             DraftPhase.WAITING: "대기 중",
@@ -353,20 +396,20 @@ class TeamDraftCommands(BaseCommands):
             confirmed_count = len(draft.confirmed_servants)
             embed.add_field(
                 name="서번트 선택 진행도",
-                value=f"{confirmed_count}/12 완료",
+                value=f"{confirmed_count}/{draft.team_size * 2} 완료",
                 inline=True
             )
         
         return embed 
 
-    @app_commands.command(name="페어취소", description="진행 중인 드래프트를 취소합니다")
+    @app_commands.command(name="페어취소", description="진행 중인 드래프트를 취소해")
     async def draft_cancel_slash(self, interaction: discord.Interaction) -> None:
         """Cancel current draft"""
         await self._handle_draft_cancel(interaction)
 
     @commands.command(
         name="페어취소",
-        help="진행 중인 드래프트를 취소합니다",
+        help="진행 중인 드래프트를 취소해",
         brief="드래프트 취소",
         aliases=["draft_cancel", "드래프트취소"]
     )
@@ -379,10 +422,11 @@ class TeamDraftCommands(BaseCommands):
         """Test if team draft system is working"""
         logger.info(f"페어테스트 command called by {interaction.user.name}")
         await interaction.response.send_message(
-            "✅ **팀 드래프트 시스템이 작동합니다!** (v3.0)\n\n"
+            "✅ **팀 드래프트 시스템이 작동해!** (v4.0)\n\n"
             "사용법:\n"
-            "• `/페어 test_mode:True` - 테스트 모드로 드래프트 시작\n"
-            "• `/페어상태` - 현재 드래프트 상태 확인",
+            "• `/페어 team_size:3` - 3v3 드래프트 시작 (6명 필요)\n"
+            "• `/페어` - 6v6 드래프트 시작 (12명 필요)\n"
+            "• `/페어상태` - 현재 드래프트 상태 확인\n\n",
             ephemeral=True
         )
 
@@ -412,8 +456,8 @@ class TeamDraftCommands(BaseCommands):
             title="⚔️ 서번트 선택",
             description="**현재 카테고리: 세이버**\n"
                        "카테고리 버튼을 눌러 다른 클래스를 선택하거나,\n"
-                       "아래 드롭다운에서 서번트를 선택하세요.\n"
-                       "❌ 표시된 서번트는 밴되어 선택할 수 없습니다.",
+                       "아래 드롭다운에서 서번트를 선택해 줘.\n"
+                       "❌ 표시된 서번트는 밴되어 선택할 수 없어.",
             color=INFO_COLOR
         )
         
@@ -432,9 +476,9 @@ class TeamDraftCommands(BaseCommands):
         
         embed.add_field(
             name="📋 선택 방법",
-            value="1️⃣ 원하는 **카테고리 버튼**을 클릭\n"
-                  "2️⃣ 해당 카테고리의 **드롭다운**에서 서번트 선택\n"
-                  "3️⃣ 모든 플레이어가 선택 완료시 결과 공개",
+            value="1️⃣ 원하는 **카테고리 버튼**을 클릭해\n"
+                  "2️⃣ 해당 카테고리의 **드롭다운**에서 서번트를 선택해\n"
+                  "3️⃣ 모든 플레이어가 선택을 완료했을 때 결과를 공개할거야.",
             inline=False
         )
         
@@ -472,34 +516,58 @@ class TeamDraftCommands(BaseCommands):
         if conflicts:
             # Handle conflicts with dice rolls
             embed = discord.Embed(
-                title="🎲 서번트 선택 결과 - 중복 발생!",
-                description="중복 선택된 서번트가 있습니다. 주사위로 결정합니다.",
+                title="🎲 서번트 선택 결과 - 중복이 있어.",
+                description="중복 선택된 서번트가 있네. 주사위로 결정하자.",
                 color=ERROR_COLOR
             )
             
             for servant, user_ids in conflicts.items():
-                # Roll dice for each conflicted user
+                # Roll dice for each conflicted user with tie-breaking
                 rolls = {}
-                for user_id in user_ids:
-                    rolls[user_id] = random.randint(1, 20)
+                max_attempts = 5  # Prevent infinite loops
+                attempt = 0
                 
-                # Find winner (highest roll)
-                winner_id = max(rolls.keys(), key=lambda uid: rolls[uid])
+                while attempt < max_attempts:
+                    # Roll dice for all conflicted users
+                    for user_id in user_ids:
+                        rolls[user_id] = random.randint(1, 20)
+                    
+                    # Check for ties at the highest roll
+                    max_roll = max(rolls.values())
+                    winners = [uid for uid, roll in rolls.items() if roll == max_roll]
+                    
+                    if len(winners) == 1:
+                        # Clear winner found
+                        winner_id = winners[0]
+                        break
+                    else:
+                        # Tie detected, re-roll only the tied players
+                        user_ids = winners  # Only re-roll the tied players
+                        attempt += 1
+                        logger.info(f"Dice tie for {servant}, re-rolling attempt {attempt}")
+                
+                # If still tied after max attempts, use deterministic fallback
+                if len(winners) > 1:
+                    winner_id = min(winners)  # Use lowest user ID as tiebreaker
+                    logger.warning(f"Max re-roll attempts reached for {servant}, using user ID tiebreaker")
                 
                 # Set winner and reset losers
                 current_draft.confirmed_servants[winner_id] = servant
-                current_draft.conflicted_servants[servant] = [uid for uid in user_ids if uid != winner_id]
+                original_losers = [uid for uid in user_ids if uid != winner_id]
+                current_draft.conflicted_servants[servant] = original_losers
                 
-                # Reset losers' selections
-                for user_id in user_ids:
+                # Reset all original conflicted users except winner
+                for user_id in conflicts[servant]:  # Use original conflict list
                     if user_id != winner_id:
                         current_draft.players[user_id].selected_servant = None
                 
-                # Add to embed
+                # Add to embed with tie information
                 roll_text = "\n".join([
-                    f"{current_draft.players[uid].username}: {roll} {'✅' if uid == winner_id else '❌'}"
-                    for uid, roll in rolls.items()
+                    f"{current_draft.players[uid].username}: {rolls[uid]} {'✅' if uid == winner_id else '❌'}"
+                    for uid in conflicts[servant]  # Show all original players
                 ])
+                if attempt > 0:
+                    roll_text += f"\n(재굴림 {attempt}회)"
                 embed.add_field(name=f"{servant} 중복", value=roll_text, inline=True)
             
             # Confirm non-conflicted servants
@@ -522,7 +590,7 @@ class TeamDraftCommands(BaseCommands):
             
             embed = discord.Embed(
                 title="✅ 서번트 선택 완료",
-                description="모든 플레이어의 서번트 선택이 완료되었습니다!",
+                description="모든 플레이어의 서번트 선택이 완료됐어.",
                 color=SUCCESS_COLOR
             )
             
@@ -560,9 +628,9 @@ class TeamDraftCommands(BaseCommands):
         
         embed = discord.Embed(
             title="🔄 서번트 재선택",
-            description="중복으로 인해 서번트를 다시 선택해야 하는 플레이어들이 있습니다.\n"
+            description="중복으로 인해 서번트를 다시 선택해야 하는 플레이어들이 있어.\n"
                        "**현재 카테고리: 세이버**\n"
-                       "❌ 표시된 서번트는 이미 선택되었거나 밴되어 선택할 수 없습니다.",
+                       "❌ 표시된 서번트는 이미 선택되었거나 금지되어 선택할 수 없어.",
             color=INFO_COLOR
         )
         
@@ -585,7 +653,7 @@ class TeamDraftCommands(BaseCommands):
             name="📋 재선택 방법",
             value="1️⃣ **카테고리 버튼**으로 클래스 변경\n"
                   "2️⃣ **드롭다운**에서 사용 가능한 서번트 선택\n"
-                  "❌ 표시된 서번트는 이미 선택됨",
+                  "❌ 표시된 서번트는 이미 선택되어 있어.",
             inline=False
         )
         
@@ -621,7 +689,7 @@ class TeamDraftCommands(BaseCommands):
         
         embed = discord.Embed(
             title="👥 팀원 선택 시작",
-            description="팀장들이 순서대로 팀원을 선택합니다.",
+            description="팀장들이 순서대로 팀원을 선택해.",
             color=INFO_COLOR
         )
         
@@ -641,13 +709,14 @@ class TeamDraftCommands(BaseCommands):
     async def _continue_team_selection_for_draft(self, draft: DraftSession) -> None:
         """Continue team selection process for a specific draft"""
         # Check if team selection is complete
+        total_players = draft.team_size * 2
         assigned_players = sum(1 for p in draft.players.values() if p.team is not None)
-        if assigned_players == 12:
+        if assigned_players == total_players:
             await self._start_final_swap_phase_for_draft(draft)
             return
         
         # Get current round pattern
-        round_info = self.team_selection_pattern[draft.team_selection_round - 1]
+        round_info = self.team_selection_patterns[draft.team_size][draft.team_selection_round - 1]
         current_captain = draft.current_picking_captain
         
         # Check if current captain finished their picks for this round
@@ -686,11 +755,11 @@ class TeamDraftCommands(BaseCommands):
             return
         
         current_captain = draft.current_picking_captain
-        round_info = self.team_selection_pattern[draft.team_selection_round - 1]
+        round_info = self.team_selection_patterns[draft.team_size][draft.team_selection_round - 1]
         
         embed = discord.Embed(
             title=f"👥 팀 선택 - 라운드 {draft.team_selection_round}",
-            description=f"현재 {draft.players[current_captain].username}의 차례입니다.",
+            description=f"현재 {draft.players[current_captain].username}의 차례야.",
             color=INFO_COLOR
         )
         
@@ -727,11 +796,11 @@ class TeamDraftCommands(BaseCommands):
         channel_id = self.get_channel_id(ctx_or_interaction)
         
         if channel_id not in self.active_drafts:
-            await self.send_error(ctx_or_interaction, "진행 중인 드래프트가 없습니다.")
+            await self.send_error(ctx_or_interaction, "진행 중인 드래프트가 없어.")
             return
         
         del self.active_drafts[channel_id]
-        await self.send_success(ctx_or_interaction, "드래프트가 취소되었습니다.")
+        await self.send_success(ctx_or_interaction, "드래프트를 취소했어.")
 
     async def _start_servant_ban_phase(self, draft: DraftSession) -> None:
         """Start servant ban phase where captains ban 2 servants each"""
@@ -750,8 +819,8 @@ class TeamDraftCommands(BaseCommands):
         
         embed = discord.Embed(
             title="🚫 서번트 밴 단계",
-            description="각 팀장은 밴하고 싶은 서번트를 **2명**씩 선택하세요.\n"
-                       "상대방이 어떤 서번트를 밴하는지 모르는 상태에서 진행됩니다.",
+            description="각 팀장이 밴하고 싶은 서번트를 **2명**씩 선택해.\n"
+                       "상대방이 어떤 서번트를 밴하는지 모르는 상태에서 진행할거야.",
             color=INFO_COLOR
         )
         
@@ -761,9 +830,9 @@ class TeamDraftCommands(BaseCommands):
         embed.add_field(
             name="📋 밴 방법",
             value="1️⃣ 아래 **카테고리 버튼**을 클릭\n"
-                  "2️⃣ 해당 카테고리의 **드롭다운**에서 서번트 선택\n"
+                  "2️⃣ 해당 카테고리의 **드롭다운**에서 서번트를 선택\n"
                   "3️⃣ **2명**을 선택한 후 확정 버튼 클릭\n"
-                  "4️⃣ 양 팀장 모두 완료시 밴 결과 공개",
+                  "4️⃣ 양 팀장 모두 완료시 밴 결과를 공개할거야.",
             inline=False
         )
         
@@ -780,7 +849,7 @@ class TeamDraftCommands(BaseCommands):
         
         embed = discord.Embed(
             title="🚫 서번트 밴 결과",
-            description="양 팀장의 밴이 완료되었습니다. 다음 서번트들이 밴되었습니다.",
+            description="양 팀장의 밴이 끝났어. 다음 서번트들의 선택이 금지되었네.",
             color=ERROR_COLOR
         )
         
@@ -826,7 +895,7 @@ class TeamDraftCommands(BaseCommands):
         
         embed = discord.Embed(
             title="🏆 드래프트 완료!",
-            description="모든 단계가 완료되었습니다. 게임을 시작하세요!",
+            description="로스터가 완성됐어!",
             color=SUCCESS_COLOR
         )
         
@@ -880,8 +949,8 @@ class TeamDraftCommands(BaseCommands):
         
         embed = discord.Embed(
             title="🔄 최종 교체 단계",
-            description="각 팀은 팀 내에서 서번트를 자유롭게 교체할 수 있습니다.\n"
-                       "교체를 원하지 않으면 완료 버튼을 눌러주세요.",
+            description="팀 내에서 서번트를 자유롭게 교체할 수 있어.\n"
+                       "교체를 원하지 않으면 완료 버튼을 눌러줘.",
             color=INFO_COLOR
         )
         
@@ -931,7 +1000,7 @@ class PlayerDropdown(discord.ui.Select):
         ]
         
         super().__init__(
-            placeholder="팀원을 선택하세요...",
+            placeholder="팀원 선택...",
             options=options,
             min_values=1,
             max_values=1
@@ -941,9 +1010,13 @@ class PlayerDropdown(discord.ui.Select):
         """Handle player selection"""
         user_id = interaction.user.id
         
-        if user_id != self.draft.current_picking_captain:
+        # In test mode, allow the real user to select for both teams
+        if self.draft.is_test_mode and user_id == self.draft.real_user_id:
+            # Real user can pick for any captain in test mode
+            pass
+        elif user_id != self.draft.current_picking_captain:
             await interaction.response.send_message(
-                "현재 귀하의 차례가 아닙니다.", ephemeral=True
+                "지금은 네 차례가 아니야.", ephemeral=True
             )
             return
         
@@ -951,18 +1024,54 @@ class PlayerDropdown(discord.ui.Select):
         target_player = self.draft.players[selected_player_id]
         
         # Assign player to team
-        captain_team = self.draft.players[user_id].team
+        current_captain = self.draft.current_picking_captain
+        captain_team = self.draft.players[current_captain].team
         target_player.team = captain_team
         
         # Update pick count
-        self.draft.picks_this_round[user_id] += 1
+        self.draft.picks_this_round[current_captain] += 1
         
         await interaction.response.send_message(
-            f"**{target_player.username}**을(를) 팀에 추가했습니다!", ephemeral=False
+            f"**{target_player.username}**을(를) 팀 {captain_team}에 추가했어!", ephemeral=False
         )
+        
+        # Auto-complete remaining picks in test mode
+        if self.draft.is_test_mode:
+            await self._auto_complete_team_selection()
         
         # Continue team selection
         await self.bot_commands._continue_team_selection_for_draft(self.draft)
+    
+    async def _auto_complete_team_selection(self) -> None:
+        """Auto-complete team selection in test mode"""
+        import random
+        
+        # Get all unassigned players (excluding captains)
+        unassigned_players = [
+            player for player in self.draft.players.values()
+            if player.team is None and not player.is_captain
+        ]
+        
+        # Assign remaining players randomly to teams
+        team1_count = sum(1 for p in self.draft.players.values() if p.team == 1)
+        team2_count = sum(1 for p in self.draft.players.values() if p.team == 2)
+        
+        for player in unassigned_players:
+            # Assign to team with fewer members, or randomly if equal
+            if team1_count < team2_count:
+                player.team = 1
+                team1_count += 1
+            elif team2_count < team1_count:
+                player.team = 2
+                team2_count += 1
+            else:
+                # Equal count, assign randomly
+                team = random.choice([1, 2])
+                player.team = team
+                if team == 1:
+                    team1_count += 1
+                else:
+                    team2_count += 1
 
 
 class FinalSwapView(discord.ui.View):
@@ -1000,7 +1109,7 @@ class CompleteButton(discord.ui.Button):
         
         if not is_captain or user_team != self.team_number:
             await interaction.response.send_message(
-                f"팀 {self.team_number}의 팀장만 완료할 수 있습니다.", ephemeral=True
+                f"팀 {self.team_number}의 팀장만 완료할 수 있어.", ephemeral=True
             )
             return
         
@@ -1080,14 +1189,7 @@ class CaptainVotingView(discord.ui.View):
         # Start servant ban phase
         self.draft.phase = DraftPhase.SERVANT_BAN
         
-        # Check if this is test mode by looking at the player IDs
-        # In test mode, we generate fake IDs that are >= 100000000000000000
-        fake_users = [user_id for user_id in self.draft.players.keys() if user_id >= 100000000000000000]
-        total_players = len(self.draft.players)
-        
-        logger.info(f"Test mode detection: {len(fake_users)} fake users out of {total_players} total players")
-        
-        if len(fake_users) >= 11:  # Test mode - 11 fake + 1 real = 12 total
+        if self.draft.is_test_mode:
             logger.info("Detected test mode - auto-completing ban phase")
             # In test mode, automatically select random bans for captains
             import random
@@ -1114,6 +1216,17 @@ class CaptainVotingView(discord.ui.View):
             # Normal mode - show ban interface
             await self.bot_commands._start_servant_ban_phase(self.draft)
 
+        # Check if voting should be completed
+        should_complete = await self.bot_commands._check_voting_completion(self)
+        if should_complete:
+            # Race condition protection: only allow one voting finalization at a time
+            if not self.draft.processing_captain_voting:
+                self.draft.processing_captain_voting = True
+                try:
+                    await self._finalize_voting()
+                finally:
+                    self.draft.processing_captain_voting = False
+
 
 class CaptainVoteButton(discord.ui.Button):
     """Button for voting for a captain"""
@@ -1134,7 +1247,7 @@ class CaptainVoteButton(discord.ui.Button):
         # Check if user is part of the draft
         if user_id not in view.draft.players:
             await interaction.response.send_message(
-                "드래프트 참가자만 투표할 수 있습니다.", ephemeral=True
+                "드래프트 참가자만 투표할 수 있어.", ephemeral=True
             )
             return
         
@@ -1146,20 +1259,20 @@ class CaptainVoteButton(discord.ui.Button):
         if self.player_id in view.user_votes[user_id]:
             view.user_votes[user_id].remove(self.player_id)
             await interaction.response.send_message(
-                f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했습니다.", 
+                f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했어.", 
                 ephemeral=True
             )
         else:
             # Check vote limit (max 2 votes)
             if len(view.user_votes[user_id]) >= 2:
                 await interaction.response.send_message(
-                    "최대 2명까지만 투표할 수 있습니다.", ephemeral=True
+                    "최대 2명까지만 투표할 수 있어.", ephemeral=True
                 )
                 return
             
             view.user_votes[user_id].add(self.player_id)
             await interaction.response.send_message(
-                f"{view.draft.players[self.player_id].username}에게 투표했습니다.", 
+                f"{view.draft.players[self.player_id].username}에게 투표했어.", 
                 ephemeral=True
             )
         
@@ -1228,8 +1341,8 @@ class ServantSelectionView(discord.ui.View):
         embed = discord.Embed(
             title=title,
             description=f"**현재 카테고리: {new_category}**\n"
-                       "아래 드롭다운에서 서번트를 선택하세요.\n"
-                       "❌ 표시된 서번트는 밴되어 선택할 수 없습니다.",
+                       "아래 드롭다운에서 서번트를 한 명 골라줘.\n"
+                       "❌ 표시된 서번트는 금지되어 선택할 수 없어.",
             color=INFO_COLOR
         )
         
@@ -1297,7 +1410,7 @@ class CharacterDropdown(discord.ui.Select):
         ]
         
         super().__init__(
-            placeholder=f"{category} 서번트를 선택하세요...",
+            placeholder=f"{category} 서번트 선택...",
             options=options,
             min_values=1,
             max_values=1
@@ -1310,14 +1423,14 @@ class CharacterDropdown(discord.ui.Select):
         # Check if user is part of the draft
         if user_id not in self.draft.players:
             await interaction.response.send_message(
-                "드래프트 참가자만 서번트를 선택할 수 있습니다.", ephemeral=True
+                "드래프트 참가자만 서번트를 선택할 수 있어.", ephemeral=True
             )
             return
         
         # Check if user already selected (for initial selection)
         if user_id in self.draft.confirmed_servants:
             await interaction.response.send_message(
-                "이미 서번트를 선택했습니다.", ephemeral=True
+                "이미 서번트를 선택했어.", ephemeral=True
             )
             return
         
@@ -1325,7 +1438,7 @@ class CharacterDropdown(discord.ui.Select):
         self.draft.players[user_id].selected_servant = selected_character
         
         await interaction.response.send_message(
-            f"**{selected_character}** ({self.category})를 선택했습니다!", ephemeral=True
+            f"**{selected_character}** ({self.category})를 선택했어!", ephemeral=True
         )
         
         # Get view reference once
@@ -1334,16 +1447,13 @@ class CharacterDropdown(discord.ui.Select):
         # Check if all players have selected or handle test mode
         selected_count = sum(1 for p in self.draft.players.values() if p.selected_servant)
         
-        # Check if this is test mode (most players are fake)
-        fake_users = [user_id for user_id in self.draft.players.keys() if user_id >= 100000000000000000]
-        
-        if len(fake_users) >= 11:  # Test mode
+        if self.draft.is_test_mode:
             # In test mode, auto-select for all remaining fake players
             import random
             available_servants = list(self.draft.available_servants - self.draft.banned_servants)
             
             for player_id, player in self.draft.players.items():
-                if player.selected_servant is None and player_id >= 100000000000000000:  # Fake player
+                if player.selected_servant is None and player_id != self.draft.real_user_id:  # Fake player
                     if available_servants:
                         # Randomly select a servant for this fake player
                         servant = random.choice(available_servants)
@@ -1352,10 +1462,18 @@ class CharacterDropdown(discord.ui.Select):
             
             # Now check if all players have selected (should be true after auto-selection)
             selected_count = sum(1 for p in self.draft.players.values() if p.selected_servant)
-            
-        if selected_count == 12:
+        
+        total_players = self.draft.team_size * 2
+        if selected_count == total_players:
             # All selected, reveal and check for conflicts
-            await view.bot_commands._reveal_servant_selections()
+            # Race condition protection: only allow one reveal process at a time
+            if not self.draft.processing_servant_reveal:
+                self.draft.processing_servant_reveal = True
+                try:
+                    await view.bot_commands._reveal_servant_selections()
+                finally:
+                    self.draft.processing_servant_reveal = False
+            # If already processing, this selection will be included in the ongoing reveal
         else:
             # Continue to next category
             await view.update_category(self.category, interaction)
@@ -1409,7 +1527,7 @@ class ServantBanView(discord.ui.View):
         embed = discord.Embed(
             title="🚫 서번트 밴 단계",
             description=f"**현재 카테고리: {new_category}**\n"
-                       "각 팀장은 밴하고 싶은 서번트를 **2명**씩 선택하세요.",
+                       "각 팀장은 밴하고 싶은 서번트를 **2명**씩 골라줘.",
             color=INFO_COLOR
         )
         
@@ -1461,7 +1579,7 @@ class BanCharacterDropdown(discord.ui.Select):
         ]
         
         super().__init__(
-            placeholder=f"{category} 서번트를 밴하세요...",
+            placeholder=f"{category} 서번트 밴...",
             options=options,
             min_values=1,
             max_values=min(2, len(options))  # Allow up to 2 selections, but not more than available
@@ -1474,14 +1592,14 @@ class BanCharacterDropdown(discord.ui.Select):
         # Check if user is a captain
         if user_id not in self.draft.captains:
             await interaction.response.send_message(
-                "팀장만 서번트를 밴할 수 있습니다.", ephemeral=True
+                "팀장만 서번트를 밴할 수 있어.", ephemeral=True
             )
             return
         
         # Check if captain already submitted bans
         if user_id in self.draft.bans_submitted:
             await interaction.response.send_message(
-                "이미 밴을 제출했습니다.", ephemeral=True
+                "이미 밴을 제출했어.", ephemeral=True
             )
             return
         
@@ -1495,7 +1613,7 @@ class BanCharacterDropdown(discord.ui.Select):
         ban_list = ", ".join(selected_characters)
         
         await interaction.response.send_message(
-            f"**{captain_name}**이(가) **{ban_list}**을(를) 밴했습니다!", 
+            f"**{captain_name}**이(가) **{ban_list}**을(를) 금지했어.", 
             ephemeral=True
         )
         
