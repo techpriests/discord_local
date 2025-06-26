@@ -1296,3 +1296,146 @@ class CharacterDropdown(discord.ui.Select):
         else:
             # Continue to next category
             await view.update_category(self.category, interaction) 
+
+
+class ServantBanView(discord.ui.View):
+    """View for servant ban selection"""
+    
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=300.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.current_category = "세이버"  # Default category
+        
+        # Add category buttons
+        self._add_category_buttons()
+        # Add character dropdown for current category
+        self._add_character_dropdown()
+
+    def _add_category_buttons(self):
+        """Add category selection buttons"""
+        categories = list(self.draft.servant_categories.keys())
+        
+        for i, category in enumerate(categories[:8]):  # Max 8 categories
+            button = BanCategoryButton(category, i)
+            self.add_item(button)
+
+    def _add_character_dropdown(self):
+        """Add character selection dropdown for current category"""
+        # Remove existing character dropdown if any
+        for item in self.children[:]:
+            if isinstance(item, BanCharacterDropdown):
+                self.remove_item(item)
+        
+        # Get characters for current category (excluding already banned)
+        available_in_category = [
+            char for char in self.draft.servant_categories[self.current_category]
+            if char not in self.draft.banned_servants
+        ]
+        
+        if available_in_category:
+            dropdown = BanCharacterDropdown(self.draft, self.bot_commands, available_in_category, self.current_category)
+            self.add_item(dropdown)
+
+    async def update_category(self, new_category: str, interaction: discord.Interaction):
+        """Update the current category and refresh the dropdown"""
+        self.current_category = new_category
+        self._add_character_dropdown()
+        
+        # Update embed to show current category
+        embed = discord.Embed(
+            title="🚫 서번트 밴 단계",
+            description=f"**현재 카테고리: {new_category}**\n"
+                       "각 팀장은 밴하고 싶은 서번트를 **2명**씩 선택하세요.",
+            color=INFO_COLOR
+        )
+        
+        # Show characters in current category
+        chars_in_category = self.draft.servant_categories[new_category]
+        char_list = "\n".join([f"• {char}" for char in chars_in_category])
+        embed.add_field(name=f"{new_category} 서번트 목록", value=char_list, inline=False)
+        
+        await interaction.response.edit_message(embed=embed, view=self)
+
+
+class BanCategoryButton(discord.ui.Button):
+    """Button for selecting servant category for banning"""
+    
+    def __init__(self, category: str, index: int):
+        # Use different colors for different categories
+        colors = [
+            discord.ButtonStyle.primary,   # Blue
+            discord.ButtonStyle.secondary, # Gray
+            discord.ButtonStyle.success,   # Green
+            discord.ButtonStyle.danger,    # Red
+        ]
+        
+        super().__init__(
+            label=category,
+            style=colors[index % len(colors)],
+            custom_id=f"ban_category_{category}"
+        )
+        self.category = category
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle category button click"""
+        view: ServantBanView = self.view
+        await view.update_category(self.category, interaction)
+
+
+class BanCharacterDropdown(discord.ui.Select):
+    """Dropdown for selecting characters to ban"""
+    
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', characters: List[str], category: str):
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.category = category
+        
+        # Create options for available characters in this category
+        options = [
+            discord.SelectOption(label=char, value=char, description=f"{category} 클래스")
+            for char in characters[:25]  # Discord limit
+        ]
+        
+        super().__init__(
+            placeholder=f"{category} 서번트를 밴하세요...",
+            options=options,
+            min_values=1,
+            max_values=min(2, len(options))  # Allow up to 2 selections, but not more than available
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle character ban selection"""
+        user_id = interaction.user.id
+        
+        # Check if user is a captain
+        if user_id not in self.draft.captains:
+            await interaction.response.send_message(
+                "팀장만 서번트를 밴할 수 있습니다.", ephemeral=True
+            )
+            return
+        
+        # Check if captain already submitted bans
+        if user_id in self.draft.bans_submitted:
+            await interaction.response.send_message(
+                "이미 밴을 제출했습니다.", ephemeral=True
+            )
+            return
+        
+        selected_characters = self.values
+        
+        # Store the captain's bans
+        self.draft.captain_bans[user_id] = selected_characters
+        self.draft.bans_submitted.add(user_id)
+        
+        captain_name = self.draft.players[user_id].username
+        ban_list = ", ".join(selected_characters)
+        
+        await interaction.response.send_message(
+            f"**{captain_name}**이(가) **{ban_list}**을(를) 밴했습니다!", 
+            ephemeral=True
+        )
+        
+        # Check if both captains have submitted bans
+        if len(self.draft.bans_submitted) == 2:
+            await self.bot_commands._complete_servant_bans() 
