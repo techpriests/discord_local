@@ -116,10 +116,15 @@ class DraftSession:
 class TeamDraftCommands(BaseCommands):
     """Commands for team draft system"""
     
-    def __init__(self) -> None:
+    def __init__(self, bot: commands.Bot) -> None:
+        """Initialize team draft commands
+
+        Args:
+            bot: Discord bot instance
+        """
         super().__init__()
+        self.bot = bot
         self.active_drafts: Dict[int, DraftSession] = {}  # channel_id -> DraftSession
-        self.bot = None  # Will be set by the bot registration process
         
         # Selection patterns for team picking
         self.team_selection_pattern = [
@@ -404,21 +409,14 @@ class TeamDraftCommands(BaseCommands):
 
     async def _start_servant_selection(self) -> None:
         """Start servant selection phase"""
-        # Get bot instance with fallback mechanisms
-        bot = self.bot
-        if not bot:
-            logger.error("Bot instance is None in _start_servant_selection - bot registration may have failed")
-            return
-            
         # Find the channel and draft
         channel = None
         current_draft = None
         for channel_id, draft in self.active_drafts.items():
             if draft.phase == DraftPhase.SERVANT_SELECTION:
                 try:
-                    channel = bot.get_channel(channel_id)
+                    channel = self.bot.get_channel(channel_id)
                     current_draft = draft
-                    logger.info(f"Found draft in SERVANT_SELECTION phase, channel_id: {channel_id}, channel: {channel}")
                     break
                 except Exception as e:
                     logger.error(f"Error getting channel {channel_id}: {e}")
