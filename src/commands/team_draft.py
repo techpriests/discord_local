@@ -119,6 +119,7 @@ class TeamDraftCommands(BaseCommands):
     def __init__(self) -> None:
         super().__init__()
         self.active_drafts: Dict[int, DraftSession] = {}  # channel_id -> DraftSession
+        self.bot = None  # Will be set by the bot registration process
         
         # Selection patterns for team picking
         self.team_selection_pattern = [
@@ -127,11 +128,6 @@ class TeamDraftCommands(BaseCommands):
             {"first_pick": 1, "second_pick": 1},  # Round 3
             {"first_pick": 1, "second_pick": 0},  # Round 4
         ]
-
-    @property
-    def bot(self):
-        """Get bot instance from the cog"""
-        return super().bot
 
     @commands.command(
         name="페어",
@@ -771,7 +767,10 @@ class TeamDraftCommands(BaseCommands):
         # Create dropdown for reselection
         if available_servants:
             options = [
-                discord.SelectOption(label=servant, value=servant)
+                discord.SelectOption(
+                    label=servant,
+                    value=servant
+                )
                 for servant in sorted(available_servants)
             ]
             
@@ -783,22 +782,23 @@ class TeamDraftCommands(BaseCommands):
             )
             
             async def reselect_callback(select_interaction):
-                if select_interaction.user.id != banned_player_id:
-                    await select_interaction.response.send_message(
-                        "본인만 선택할 수 있습니다.", ephemeral=True
-                    )
-                    return
+                banned_player_id = int(select.values[0])
+                banned_player = current_draft.players[banned_player_id]
+                old_servant = current_draft.confirmed_servants[banned_player_id]
                 
-                new_servant = select.values[0]
-                # Update player's servant
-                banned_player.selected_servant = new_servant
-                current_draft.confirmed_servants[banned_player_id] = new_servant
+                # Remove from confirmed servants
+                del current_draft.confirmed_servants[banned_player_id]
+                banned_player.selected_servant = None
+                
+                # Deduct spell points
+                current_draft.captain_spell_points[banned_player_id] -= 1
                 
                 await select_interaction.response.send_message(
-                    f"**{new_servant}**를 선택했습니다!"
+                    f"**{banned_player.username}**의 **{old_servant}**가 밴되었습니다!\n"
+                    f"{banned_player.username}은(는) 새로운 서번트를 선택해야 합니다."
                 )
                 
-                # Continue command spell phase
+                # Handle reselection and continue spell phase
                 await self._continue_command_spell_phase()
             
             select.callback = reselect_callback
