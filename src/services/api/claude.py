@@ -50,8 +50,13 @@ class ClaudeAPI(BaseAPI[str]):
     
     # Web search settings
     WEB_SEARCH_ENABLED = True  # Enable/disable web search
-    WEB_SEARCH_MAX_USES = 3  # Limit searches per request (improved accuracy vs cost)
+    WEB_SEARCH_MAX_USES = 1  # Limit searches per request (optimized for cost efficiency)
     WEB_SEARCH_COST_PER_1000 = 10  # $10 per 1000 searches
+    
+    # Web search token optimization settings
+    WEB_SEARCH_RESULT_RETENTION_TURNS = 1  # Keep web search results for only 1 turn (current + previous)
+    WEB_SEARCH_AGGRESSIVE_CLEANUP = True  # Enable aggressive cleanup of web search results
+    WEB_SEARCH_CACHE_AGGRESSIVE = True  # Apply cache control more aggressively to web search results
     
     # Prompt caching settings
     PROMPT_CACHING_ENABLED = True  # Enable prompt caching for cost optimization
@@ -193,6 +198,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         self._usage_queue = []  # Queue for pending usage data
         self._batch_size = 5  # Save every 5 requests
         self._batch_lock = asyncio.Lock()
+        
+        # Initialize web search optimization settings with defaults
+        self.WEB_SEARCH_RESULT_RETENTION_TURNS = getattr(self, 'WEB_SEARCH_RESULT_RETENTION_TURNS', 1)
+        self.WEB_SEARCH_AGGRESSIVE_CLEANUP = getattr(self, 'WEB_SEARCH_AGGRESSIVE_CLEANUP', True)
+        self.WEB_SEARCH_CACHE_AGGRESSIVE = getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True)
 
     def _load_usage_data(self) -> None:
         """Load saved usage data from file"""
@@ -302,6 +312,23 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         self.WEB_SEARCH_MAX_USES = max(1, min(5, max_uses))  # Clamp between 1-5
         logger.info(f"Web search configured: enabled={enabled}, max_uses={self.WEB_SEARCH_MAX_USES}")
     
+    def configure_web_search_optimization(self, 
+                                        retention_turns: int = 1, 
+                                        aggressive_cleanup: bool = True,
+                                        aggressive_caching: bool = True) -> None:
+        """Configure web search token optimization settings
+        
+        Args:
+            retention_turns: Number of conversation turns to keep web search results (1-3, default 1)
+            aggressive_cleanup: Whether to aggressively remove old web search results
+            aggressive_caching: Whether to apply cache control more aggressively to web search results
+        """
+        self.WEB_SEARCH_RESULT_RETENTION_TURNS = max(1, min(3, retention_turns))
+        self.WEB_SEARCH_AGGRESSIVE_CLEANUP = aggressive_cleanup
+        self.WEB_SEARCH_CACHE_AGGRESSIVE = aggressive_caching
+        logger.info(f"Web search optimization configured: retention={self.WEB_SEARCH_RESULT_RETENTION_TURNS}, "
+                   f"aggressive_cleanup={aggressive_cleanup}, aggressive_caching={aggressive_caching}")
+    
     def get_web_search_config(self) -> Dict[str, Any]:
         """Get current web search configuration
         
@@ -312,7 +339,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             "enabled": self.WEB_SEARCH_ENABLED,
             "max_uses": self.WEB_SEARCH_MAX_USES,
             "requests_used": self._web_search_requests,
-            "total_cost": self._web_search_cost
+            "total_cost": self._web_search_cost,
+            "optimization": {
+                "retention_turns": getattr(self, 'WEB_SEARCH_RESULT_RETENTION_TURNS', 1),
+                "aggressive_cleanup": getattr(self, 'WEB_SEARCH_AGGRESSIVE_CLEANUP', True),
+                "aggressive_caching": getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True)
+            }
         }
     
     def configure_prompt_caching(self, enabled: bool = True) -> None:
@@ -502,6 +534,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if "encrypted_content" in error_msg:
                 logger.warning(f"Token counting failed due to encrypted web search content: {e}")
                 logger.info("This is expected - token counting API doesn't support encrypted_content from web search results")
+                logger.info("Note: Encrypted web search content DOES count toward actual input tokens despite counting API limitations")
             else:
                 logger.warning(f"Failed to count conversation tokens: {e}")
             
@@ -2045,19 +2078,33 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 if thinking_blocks_with_signatures > 0:
                     logger.info(f"✅ Preserved {thinking_blocks_with_signatures} thinking blocks with cryptographic signatures")
                 
-                # 📚 COOKBOOK: Cache Breakpoint 4 - Web Search Results (Discord Bot Enhancement)
-                # Apply strategic cache control for performance without breaking compliance
+                # 📚 COOKBOOK: Cache Breakpoint 4 - Web Search Results (Optimized Strategy)
+                # Apply strategic cache control for maximum token efficiency
                 if self.PROMPT_CACHING_ENABLED and search_used:
-                    # Find the last web_search_tool_result for caching (per official docs)
-                    for i in range(len(response.content) - 1, -1, -1):
-                        content_block = response.content[i]
-                        if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
-                            # Apply cache control to the last search result for efficiency
-                            # This is a controlled modification that shouldn't break thinking signatures
-                            if not hasattr(content_block, 'cache_control'):
-                                content_block.cache_control = {"type": "ephemeral"}
-                                logger.info("📚 Applied cache control to last web search result for multi-turn efficiency")
-                            break
+                    aggressive_caching = getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True)
+                    
+                    if aggressive_caching:
+                        # Apply cache control to ALL web search tool results for maximum efficiency
+                        cache_applied_count = 0
+                        for content_block in response.content:
+                            if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
+                                # Apply cache control to all search results for better token efficiency
+                                if not hasattr(content_block, 'cache_control'):
+                                    content_block.cache_control = {"type": "ephemeral"}
+                                    cache_applied_count += 1
+                        
+                        if cache_applied_count > 0:
+                            logger.info(f"📚 Applied aggressive cache control to {cache_applied_count} web search results "
+                                       f"for maximum token efficiency")
+                    else:
+                        # Conservative approach: cache only the last web search result
+                        for i in range(len(response.content) - 1, -1, -1):
+                            content_block = response.content[i]
+                            if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
+                                if not hasattr(content_block, 'cache_control'):
+                                    content_block.cache_control = {"type": "ephemeral"}
+                                    logger.info("📚 Applied cache control to last web search result")
+                                break
                 
             else:
                 # Text-only response - store as simple string for efficiency
@@ -2310,6 +2357,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 "active_sessions": compliance_status["total_active_sessions"],
                 "sessions_with_thinking": compliance_status["sessions_with_thinking"],
                 "exact_preservation_enabled": True
+            },
+            "web_search_optimization": {
+                "retention_turns": getattr(self, 'WEB_SEARCH_RESULT_RETENTION_TURNS', 1),
+                "aggressive_cleanup": getattr(self, 'WEB_SEARCH_AGGRESSIVE_CLEANUP', True),
+                "aggressive_caching": getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True),
+                "max_uses_optimized": self.WEB_SEARCH_MAX_USES == 1
             }
         }
 
@@ -2530,7 +2583,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             logger.info(f"Cleaned up {len(expired_users)} expired Claude chat sessions")
 
     def _optimize_conversation_history(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Optimize conversation history by removing stale web search results
+        """Optimize conversation history by removing stale web search results based on retention settings
         
         Args:
             messages: Current conversation messages
@@ -2541,7 +2594,30 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         if len(messages) < 2:
             return messages
             
+        # Get optimization settings with defaults
+        retention_turns = getattr(self, 'WEB_SEARCH_RESULT_RETENTION_TURNS', 1)
+        aggressive_cleanup = getattr(self, 'WEB_SEARCH_AGGRESSIVE_CLEANUP', True)
+        
+        if not aggressive_cleanup:
+            # Use original conservative approach if aggressive cleanup is disabled
+            retention_turns = 2  # Keep last 2 assistant messages (original behavior)
+            
         optimized_messages = []
+        assistant_message_count = 0
+        total_web_search_blocks_removed = 0
+        
+        # Count assistant messages from the end to determine retention
+        assistant_indices = []
+        for i, message in enumerate(messages):
+            if message.get("role") == "assistant":
+                assistant_indices.append(i)
+        
+        # Determine which assistant messages should retain web search results
+        messages_to_keep_search = set()
+        if assistant_indices:
+            # Keep web search results in the last N assistant messages based on retention_turns
+            keep_count = min(retention_turns, len(assistant_indices))
+            messages_to_keep_search.update(assistant_indices[-keep_count:])
         
         for i, message in enumerate(messages):
             if message.get("role") == "assistant":
@@ -2556,11 +2632,10 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     )
                     
                     if has_web_search:
-                        # Check if this is the most recent assistant message or if subsequent messages depend on search results
-                        is_recent = (i >= len(messages) - 2)  # Last or second-to-last message
+                        # Check if this message should retain web search results
+                        should_keep_search = i in messages_to_keep_search
                         
-                        if not is_recent:
-                            # For older messages with web search, keep only text and thinking blocks
+                        if not should_keep_search:
                             # Remove web search tool results to reduce token usage
                             filtered_content = []
                             web_search_blocks_removed = 0
@@ -2576,7 +2651,9 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                                     filtered_content.append(block)
                             
                             if web_search_blocks_removed > 0:
-                                logger.info(f"Removed {web_search_blocks_removed} stale web search blocks from message {i}")
+                                total_web_search_blocks_removed += web_search_blocks_removed
+                                logger.info(f"Removed {web_search_blocks_removed} web search blocks from message {i} "
+                                          f"(retention: {retention_turns} turns)")
                                 
                             # Only add the message if it still has content after filtering
                             if filtered_content:
@@ -2587,7 +2664,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                                 # If no content remains, skip this message entirely
                                 logger.info(f"Skipping message {i} as it contained only web search data")
                         else:
-                            # Keep recent messages with web search results as they may be relevant
+                            # Keep messages within retention period with web search results
                             optimized_messages.append(message)
                     else:
                         # No web search data, keep as-is
@@ -2602,8 +2679,10 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Log optimization results
         original_count = len(messages)
         optimized_count = len(optimized_messages)
-        if original_count != optimized_count:
-            logger.info(f"Conversation optimization: {original_count} → {optimized_count} messages")
+        if original_count != optimized_count or total_web_search_blocks_removed > 0:
+            logger.info(f"Web search optimization: {original_count} → {optimized_count} messages, "
+                       f"removed {total_web_search_blocks_removed} web search blocks "
+                       f"(retention: {retention_turns} turns)")
             
         return optimized_messages 
 
