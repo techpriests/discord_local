@@ -5,42 +5,28 @@ from contextlib import ExitStack
 import os
 import sys
 import asyncio
-import google.genai as genai  # Import the real package first
 
-# Set up mocks before any imports
-class MockHarmCategory:
-    """Mock HarmCategory enum"""
-    HARM_CATEGORY_HARASSMENT = "HARM_CATEGORY_HARASSMENT"
-    HARM_CATEGORY_HATE_SPEECH = "HARM_CATEGORY_HATE_SPEECH"
-    HARM_CATEGORY_SEXUALLY_EXPLICIT = "HARM_CATEGORY_SEXUALLY_EXPLICIT"
-    HARM_CATEGORY_DANGEROUS_CONTENT = "HARM_CATEGORY_DANGEROUS_CONTENT"
+# Mock anthropic module
+class MockAnthropicMessage:
+    def __init__(self, content="Test response"):
+        self.content = [{"type": "text", "text": content}]
+        self.usage = MagicMock()
+        self.usage.input_tokens = 10
+        self.usage.output_tokens = 5
+        self.stop_reason = "end_turn"
 
-class MockHarmBlockThreshold:
-    BLOCK_NONE = "BLOCK_NONE"
+class MockAnthropicClient:
+    def __init__(self, api_key=None, default_headers=None):
+        self.api_key = api_key
+        self.default_headers = default_headers
+        self.messages = MagicMock()
+        self.messages.create = AsyncMock(return_value=MockAnthropicMessage())
+        self.messages.count_tokens = AsyncMock(return_value=MagicMock(input_tokens=10))
 
-class MockGenerationConfig:
-    def __init__(self, temperature=None, top_p=None, top_k=None, max_output_tokens=None):
-        self.temperature = temperature
-        self.top_p = top_p
-        self.top_k = top_k
-        self.max_output_tokens = max_output_tokens
-
-# Create mock for genai module while preserving the real types
-mock_genai = MagicMock(wraps=genai)  # Wrap the real module
-mock_genai.types = MagicMock()
-mock_genai.types.HarmCategory = MockHarmCategory
-mock_genai.types.HarmBlockThreshold = MockHarmBlockThreshold
-mock_genai.types.GenerationConfig = MockGenerationConfig
-mock_genai.types.HttpOptions = MagicMock(return_value=MagicMock())
-mock_genai.Client = MagicMock()
-mock_genai.configure = MagicMock()
-mock_genai.GenerativeModel = MagicMock()
-
-mock_model = MagicMock()
-mock_model.generate_content = MagicMock(return_value=MagicMock(text="Test response"))
-mock_model.count_tokens = MagicMock(return_value=MagicMock(total_tokens=10))
-mock_model.aio.chats.create = MagicMock(return_value=MagicMock())
-mock_genai.GenerativeModel.return_value = mock_model
+# Create mock for anthropic module
+mock_anthropic = MagicMock()
+mock_anthropic.AsyncAnthropic = MockAnthropicClient
+sys.modules['anthropic'] = mock_anthropic
 
 # Mock psutil module
 mock_psutil = MagicMock()
@@ -63,16 +49,16 @@ def mock_config() -> Dict[str, str]:
     return {
         "DISCORD_TOKEN": "mock_discord_token",
         "STEAM_API_KEY": "mock_steam_api_key",
-        "GEMINI_API_KEY": "mock_gemini_api_key",
+        "CL_API_KEY": "mock_claude_api_key",
     }
 
 @pytest.fixture(autouse=True)
-def mock_genai_fixture():
-    """Mock google.generativeai module"""
-    return mock_genai
+def mock_anthropic_fixture():
+    """Mock anthropic module"""
+    return mock_anthropic
 
 @pytest.fixture
-def mock_api_service(mock_genai_fixture) -> MagicMock:
+def mock_api_service(mock_anthropic_fixture) -> MagicMock:
     """Create mock API service with all required methods"""
     service = MagicMock(spec=APIService)
     service.initialize = AsyncMock()
@@ -80,98 +66,62 @@ def mock_api_service(mock_genai_fixture) -> MagicMock:
     service.population = MagicMock()
     service.exchange = MagicMock()
     
-    # Create a proper mock for Gemini API
-    gemini = MagicMock()
+    # Create a proper mock for Claude API
+    claude = MagicMock()
     
-    # Set initial state using property mock to ensure proper behavior
-    enabled_prop = PropertyMock(return_value=False)
-    type(gemini)._is_enabled = enabled_prop
-    gemini._model = None  # Start with no model
-    gemini.api_key = "mock_gemini_api_key"
+    # Set initial state
+    claude._is_enabled = True
+    claude._client = None
+    claude.api_key = "mock_claude_api_key"
     
-    # Mock initialize to actually call configure and set up the model
+    # Mock initialize to set up the client
     async def mock_initialize():
         try:
-            # Load usage data first
-            await gemini._load_usage_data()
-            
-            # Configure API
-            mock_genai_fixture.configure(api_key=gemini.api_key)
-            mock_genai_fixture.http_options = MagicMock()
-            mock_genai_fixture.types.HttpOptions = MagicMock(return_value=MagicMock())
-            
-            # Get model
-            gemini._model = mock_genai_fixture.GenerativeModel(
-                model_name='gemini-2.5-pro-preview-05-06'
+            # Initialize the Anthropic client
+            claude._client = mock_anthropic_fixture.AsyncAnthropic(
+                api_key=claude.api_key,
+                default_headers={"anthropic-version": "2023-06-01"}
             )
-            
-            # Initialize locks
-            gemini._session_lock = AsyncMock()
-            gemini._save_lock = AsyncMock()
-            gemini._stats_lock = AsyncMock()
-            gemini._rate_limit_lock = AsyncMock()
-            gemini._search_lock = AsyncMock()
             
             # Initialize tracking state
-            gemini._chat_sessions = {}
-            gemini._last_interaction = {}
-            gemini._search_requests = []
-            gemini._last_search_disable = None
+            claude._chat_sessions = {}
+            claude._last_interaction = {}
+            claude._saved_usage = {}
+            claude._daily_requests = 0
+            claude._total_prompt_tokens = 0
+            claude._total_response_tokens = 0
+            claude._thinking_tokens_used = 0
+            claude._refusal_count = 0
+            claude._stop_reason_counts = {
+                "end_turn": 0,
+                "max_tokens": 0,
+                "stop_sequence": 0,
+                "tool_use": 0,
+                "pause_turn": 0,
+                "refusal": 0,
+                "unknown": 0
+            }
             
-            # Test generation
-            await asyncio.sleep(0)  # Simulate async operation
-            gemini._model.generate_content(
-                "Test message",
-                generation_config=gemini._generation_config,
-                safety_settings=gemini._safety_settings
-            )
-            
-            enabled_prop.return_value = True  # Update the property mock
             return True
             
         except Exception as e:
-            enabled_prop.return_value = False  # Update the property mock
-            raise ValueError(f"Failed to initialize Gemini API: {str(e)}")
+            raise ValueError(f"Failed to initialize Claude API: {str(e)}")
     
-    gemini.initialize = AsyncMock(side_effect=mock_initialize)
-    gemini.chat = AsyncMock()
-    gemini._load_usage_data = AsyncMock()
-    gemini._saved_usage = {}
+    claude.initialize = AsyncMock(side_effect=mock_initialize)
+    claude.chat = AsyncMock(return_value=("Test response", None))
+    claude._load_usage_data = AsyncMock()
     
     # Add required attributes for test verification
-    gemini._safety_settings = [
-        {
-            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-        },
-        {
-            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-        },
-        {
-            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-        },
-        {
-            "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-            "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-        }
-    ]
+    claude.MAX_TOTAL_TOKENS = 200000
+    claude.MAX_PROMPT_TOKENS = 180000
+    claude.THINKING_ENABLED = True
+    claude.THINKING_BUDGET_TOKENS = 16000
+    claude.MUELSYSE_CONTEXT = "You are Muelsyse, test context"
     
-    gemini._generation_config = mock_genai_fixture.types.GenerationConfig(
-        temperature=0.9,
-        top_p=1,
-        top_k=40,
-        max_output_tokens=24000  # MAX_TOTAL_TOKENS (32000) - MAX_PROMPT_TOKENS (8000)
-    )
-    
-    gemini.MAX_TOTAL_TOKENS = 32000
-    gemini.MAX_PROMPT_TOKENS = 8000
-    
-    # Set up the property mock for gemini_api
-    gemini_api = PropertyMock(return_value=gemini)
-    type(service).gemini_api = gemini_api
-    service.gemini = gemini
+    # Set up the property mock for claude_api
+    claude_api = PropertyMock(return_value=claude)
+    type(service).claude_api = claude_api
+    service.claude = claude
     
     service.validate_credentials = AsyncMock(return_value=True)
     
@@ -180,7 +130,7 @@ def mock_api_service(mock_genai_fixture) -> MagicMock:
         'steam': True,
         'population': True,
         'exchange': True,
-        'gemini': True
+        'claude': True
     }
     service.initialized = True
     service._cleanup_apis = AsyncMock()

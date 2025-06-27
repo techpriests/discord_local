@@ -245,6 +245,7 @@ class SystemCommands(BaseCommands):
                 name="🤖 AI 명령어",
                 value=(
                     "• 뮤 대화 [메시지] - AI와 대화하기\n"
+                    "• 뮤 알려줘 [메시지] - AI와 대화하기\n"
                     "• 뮤 대화종료 - 대화 세션 종료\n"
                     "• 뮤 사용량 - AI 시스템 상태 확인"
                 ),
