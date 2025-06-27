@@ -20,12 +20,12 @@ class ClaudeAPI(BaseAPI[str]):
     """Anthropic Claude API client implementation for text-only interactions"""
 
     # Token thresholds for Claude 3.5 Sonnet
-    MAX_TOTAL_TOKENS = 200000  # Maximum total tokens (prompt + response) per interaction
-    MAX_PROMPT_TOKENS = 180000  # Maximum tokens for user input
+    MAX_TOTAL_TOKENS = 20000  # Maximum total tokens (prompt + response) per interaction
+    MAX_PROMPT_TOKENS = 18000  # Maximum tokens for user input
     TOKEN_WARNING_THRESHOLD = 0.8  # Warning at 80% of limit to provide safety margin
     RESPONSE_BUFFER_TOKENS = 4000  # Buffer for responses
     REQUESTS_PER_MINUTE = 50  # Standard API rate limit for Claude
-    DAILY_TOKEN_LIMIT = 5_000_000  # Local limit: 5M tokens per day
+    DAILY_TOKEN_LIMIT = 1_000_000  # Local limit: 5M tokens per day
     
     # User-specific rate limits
     USER_REQUESTS_PER_MINUTE = 4  # Maximum requests per minute per user (every 15 seconds)
@@ -48,8 +48,18 @@ class ClaudeAPI(BaseAPI[str]):
     MAX_HISTORY_LENGTH = 10  # Maximum number of messages to keep in history
     CONTEXT_EXPIRY_MINUTES = 30  # Time until context expires
     
+    # Web search settings
+    WEB_SEARCH_ENABLED = True  # Enable/disable web search
+    WEB_SEARCH_MAX_USES = 1  # Limit searches per request (vs default 5)
+    WEB_SEARCH_COST_PER_1000 = 10  # $10 per 1000 searches
+    
+    # Prompt caching settings
+    PROMPT_CACHING_ENABLED = True  # Enable prompt caching for cost optimization
+    CACHE_BREAKPOINTS_MAX = 4  # Maximum cache breakpoints allowed by Anthropic
+    CACHE_MIN_TOKENS = 1024  # Minimum tokens required for caching (Claude Sonnet 4)
+    
     # Thinking settings
-    THINKING_ENABLED = False  # Disable thinking by default for efficiency (can be enabled per-request)
+    THINKING_ENABLED = True  # Enable thinking for better reasoning quality
     THINKING_BUDGET_TOKENS = 1024  # Budget for thinking tokens when enabled
     # Note: Claude will only use thinking when it deems necessary for complex reasoning
     # High thinking budgets significantly increase input token costs due to reservation
@@ -132,6 +142,16 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Add thinking tracking
         self._thinking_tokens_used = self._saved_usage.get("thinking_tokens_used", 0)
         
+        # Add web search tracking
+        self._web_search_requests = self._saved_usage.get("web_search_requests", 0)
+        self._web_search_cost = self._saved_usage.get("web_search_cost", 0.0)
+        
+        # Add prompt caching tracking
+        self._cache_creation_tokens = self._saved_usage.get("cache_creation_tokens", 0)
+        self._cache_read_tokens = self._saved_usage.get("cache_read_tokens", 0)
+        self._cache_hits = self._saved_usage.get("cache_hits", 0)
+        self._cache_misses = self._saved_usage.get("cache_misses", 0)
+        
         # Add stop reason tracking
         self._stop_reason_counts = self._saved_usage.get("stop_reason_counts", {
             "end_turn": 0,
@@ -204,6 +224,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     "token_usage_history": self._token_usage_history,
                     "refusal_count": self._refusal_count,
                     "thinking_tokens_used": self._thinking_tokens_used,
+                    "web_search_requests": self._web_search_requests,
+                    "web_search_cost": self._web_search_cost,
+                    "cache_creation_tokens": self._cache_creation_tokens,
+                    "cache_read_tokens": self._cache_read_tokens,
+                    "cache_hits": self._cache_hits,
+                    "cache_misses": self._cache_misses,
                     "stop_reason_counts": self._stop_reason_counts
                 }
                 
@@ -253,6 +279,66 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             "enabled": self.THINKING_ENABLED,
             "budget_tokens": self.THINKING_BUDGET_TOKENS,
             "tokens_used": self._thinking_tokens_used
+        }
+    
+    def configure_web_search(self, enabled: bool = True, max_uses: int = 1) -> None:
+        """Configure web search settings
+        
+        Args:
+            enabled: Whether to enable web search
+            max_uses: Maximum web searches per request (1-5)
+        """
+        self.WEB_SEARCH_ENABLED = enabled
+        self.WEB_SEARCH_MAX_USES = max(1, min(5, max_uses))  # Clamp between 1-5
+        logger.info(f"Web search configured: enabled={enabled}, max_uses={self.WEB_SEARCH_MAX_USES}")
+    
+    def get_web_search_config(self) -> Dict[str, Any]:
+        """Get current web search configuration
+        
+        Returns:
+            Dict[str, Any]: Current web search settings
+        """
+        return {
+            "enabled": self.WEB_SEARCH_ENABLED,
+            "max_uses": self.WEB_SEARCH_MAX_USES,
+            "requests_used": self._web_search_requests,
+            "total_cost": self._web_search_cost
+        }
+    
+    def configure_prompt_caching(self, enabled: bool = True) -> None:
+        """Configure prompt caching settings
+        
+        Args:
+            enabled: Whether to enable prompt caching for cost optimization
+        """
+        self.PROMPT_CACHING_ENABLED = enabled
+        logger.info(f"Prompt caching configured: enabled={enabled}")
+    
+    def get_prompt_caching_config(self) -> Dict[str, Any]:
+        """Get current prompt caching configuration and performance
+        
+        Returns:
+            Dict[str, Any]: Current prompt caching settings and stats
+        """
+        cache_hits = self._cache_hits
+        cache_misses = self._cache_misses
+        total_requests = cache_hits + cache_misses
+        hit_rate = (cache_hits / total_requests * 100) if total_requests > 0 else 0
+        
+        # Calculate cost savings (90% reduction on cache hits vs normal pricing)
+        cache_savings_tokens = self._cache_read_tokens * 0.9
+        estimated_savings = (cache_savings_tokens / 1_000_000) * 3.0  # $3/MTok for Claude Sonnet 4
+        
+        return {
+            "enabled": self.PROMPT_CACHING_ENABLED,
+            "min_tokens_required": self.CACHE_MIN_TOKENS,
+            "max_breakpoints": self.CACHE_BREAKPOINTS_MAX,
+            "cache_hits": cache_hits,
+            "cache_misses": cache_misses,
+            "hit_rate_percent": hit_rate,
+            "tokens_written": self._cache_creation_tokens,
+            "tokens_read": self._cache_read_tokens,
+            "estimated_cost_savings": estimated_savings
         }
     
 
@@ -1149,14 +1235,19 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     }]
                 }
                 
-                # Add thinking or temperature
+                # Add thinking if enabled
                 if self.THINKING_ENABLED:
                     continuation_params["thinking"] = {
                         "type": "enabled",
                         "budget_tokens": self.THINKING_BUDGET_TOKENS
                     }
-                else:
-                    continuation_params["temperature"] = 0.5
+                    logger.info(f"Thinking enabled with {self.THINKING_BUDGET_TOKENS} token budget")
+                    # Note: The thinking budget is reserved but only actual thinking usage counts toward output tokens
+                    # The budget allocation does get counted as part of input tokens in Anthropic's counting API
+                    # but actual thinking tokens are reported separately in the response usage
+                    # Note: temperature, top_k, and forced tool use are incompatible with thinking
+                # Temperature, top_k, and other sampling parameters are incompatible with thinking
+                # Since thinking is enabled, we omit all incompatible parameters
                 
                 # Continue the conversation
                 continuation_response = await self._client.messages.create(**continuation_params)
@@ -1314,22 +1405,6 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 # Process normal text lines
                 line = line.strip()
                 if line:
-                    # Add emojis to enhance readability
-                    if line.endswith('?'):
-                        line = '❓ ' + line
-                    elif line.startswith(('Note:', 'Warning:', '주의:', '참고:')):
-                        line = '📝 ' + line
-                    elif line.startswith(('Error:', '오류:', '에러:')):
-                        line = '⚠️ ' + line
-                    elif line.startswith(('Example:', '예시:', '예:')):
-                        line = '💡 ' + line
-                    elif line.startswith(('Step', '단계')):
-                        line = '✅ ' + line
-                    
-                    # Format lists consistently
-                    if line.startswith(('- ', '* ')):
-                        line = '📌 ' + line[2:]
-                    
                     processed_lines.append(line)
         
         # Join all processed lines
@@ -1458,26 +1533,6 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         if not line:
             return line
             
-        # Korean punctuation patterns
-        korean_endings = ['다', '요', '어', '아', '지', '네', '야', '죠', '까', '나']
-        
-        # Add emojis based on content and Korean context
-        if line.endswith('?') or line.endswith('까?'):
-            return '❓ ' + line
-        elif any(line.endswith(ending + '.') or line.endswith(ending + '!') for ending in korean_endings):
-            if '오류' in line or '에러' in line or '실패' in line:
-                return '⚠️ ' + line
-            elif '예시' in line or '예:' in line or '예를' in line:
-                return '💡 ' + line
-            elif '참고' in line or '주의' in line or '노트' in line:
-                return '📝 ' + line
-            elif '단계' in line or '방법' in line:
-                return '✅ ' + line
-        elif line.startswith(('- ', '* ', '• ')):
-            return '📌 ' + line[2:]
-        elif line.startswith(('1.', '2.', '3.', '4.', '5.')) and len(line) > 3:
-            return '✨ ' + line
-            
         return line
 
     def _join_korean_lines(self, lines: List[str]) -> str:
@@ -1516,8 +1571,6 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if prev_line.strip():
                 # Check if we need paragraph break
                 needs_break = (
-                    current_line.startswith(('📌', '✨', '💡', '⚠️', '📝', '✅', '❓')) or
-                    prev_line.startswith(('📌', '✨', '💡', '⚠️', '📝', '✅', '❓')) or
                     current_line.startswith('**') or
                     prev_line.endswith(':') or
                     current_line.startswith('#')
@@ -1594,19 +1647,30 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             conversation_tokens = await self._count_conversation_tokens(messages, include_thinking=self.THINKING_ENABLED)
             self._check_token_thresholds(conversation_tokens)
 
-            # Build API request parameters with system prompt
+            # Build API request parameters with prompt caching
             api_params = {
                 "model": "claude-sonnet-4-20250514",
                 "max_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
                 "messages": messages,
-                "system": self.MUELSYSE_CONTEXT,  # Official Anthropic system prompt for role assignment
-                # Temporarily disable web search to test token usage
-                # "tools": [{
-                #     "type": "web_search_20250305",
-                #     "name": "web_search",
-                #     "max_uses": 5
-                # }]
             }
+            
+            # Add web search tool with prompt caching (Cache Breakpoint 1: Tools)
+            if self.WEB_SEARCH_ENABLED:
+                web_search_tool = {
+                    "type": "web_search_20250305",
+                    "name": "web_search",
+                    "max_uses": self.WEB_SEARCH_MAX_USES,  # Reduced from default 5 to 1
+                }
+                
+                # Add cache control to tools if prompt caching is enabled
+                if self.PROMPT_CACHING_ENABLED:
+                    web_search_tool["cache_control"] = {"type": "ephemeral"}
+                
+                api_params["tools"] = [web_search_tool]
+                logger.info(f"Web search enabled with max_uses={self.WEB_SEARCH_MAX_USES}, caching={self.PROMPT_CACHING_ENABLED}")
+            
+            # Add system prompt (handled specially by Claude - auto-cached when stable)
+            api_params["system"] = self.MUELSYSE_CONTEXT
             
             # Add thinking if enabled
             if self.THINKING_ENABLED:
@@ -1618,10 +1682,9 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 # Note: The thinking budget is reserved but only actual thinking usage counts toward output tokens
                 # The budget allocation does get counted as part of input tokens in Anthropic's counting API
                 # but actual thinking tokens are reported separately in the response usage
-                # Note: temperature is incompatible with thinking, so we omit it
-            else:
-                # Only add temperature when thinking is disabled
-                api_params["temperature"] = 0.5
+                # Note: temperature, top_k, and forced tool use are incompatible with thinking
+            # Temperature, top_k, and other sampling parameters are incompatible with thinking
+            # Since thinking is enabled, we omit all incompatible parameters
             
             # Send message and get response with web search grounding and thinking
             response = await self._client.messages.create(**api_params)
@@ -1643,6 +1706,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             thinking_content = ""
             search_used = False
             thinking_used = False
+            tool_use_blocks = []  # Store tool_use blocks for conversation history
             source_links = []
             citations = []
             
@@ -1673,6 +1737,25 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     thinking_used = True
                     logger.info("Redacted thinking block detected (encrypted for safety)")
                     # Note: redacted_thinking contains encrypted data, still counts as thinking usage
+                
+                elif content_block.type == "tool_use":
+                    # Handle tool_use blocks (critical for thinking + tool workflows)
+                    if hasattr(content_block, 'name') and content_block.name == "web_search":
+                        search_used = True
+                        logger.info(f"Tool use detected: {content_block.name}")
+                        
+                        # Store complete tool_use block for conversation history (required by Anthropic)
+                        tool_block = {
+                            "type": "tool_use",
+                            "id": getattr(content_block, 'id', ''),
+                            "name": content_block.name,
+                            "input": getattr(content_block, 'input', {})
+                        }
+                        tool_use_blocks.append(tool_block)
+                        logger.info(f"Preserved tool_use block: {content_block.name} (id: {tool_block['id']})")
+                    else:
+                        # Handle other potential tool types
+                        logger.info(f"Unknown tool use detected: {getattr(content_block, 'name', 'unknown')}")
                         
                 elif content_block.type == "web_search_tool_result":
                     # Handle web search tool results (official structure)
@@ -1695,11 +1778,9 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                         search_used = True
                         logger.info("Web search detected via server_tool_use")
                         
-                elif content_block.type == "tool_use":
-                    # Legacy fallback for older tool_use format
-                    if hasattr(content_block, 'name') and content_block.name == "web_search":
-                        search_used = True
-                        logger.info("Web search detected via tool_use (legacy)")
+                else:
+                    # Log any unhandled content block types for debugging
+                    logger.warning(f"Unhandled content block type: {content_block.type}")
 
             # Process citations to extract additional sources
             for citation in citations:
@@ -1713,15 +1794,22 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                             source_links.append((title, url, domain))
                             logger.info(f"Added citation source: {title} - {url} ({domain})")
 
-            if not response_text:
-                raise ValueError("No text content in Claude response")
+            # Handle special case: tool_use without text response (Claude wants to use tools)
+            if tool_use_blocks and not response_text:
+                # This is a tool-only response - Claude is requesting to use tools
+                logger.info(f"Tool-only response detected with {len(tool_use_blocks)} tool requests")
+                # Set a default response indicating tool use is happening
+                response_text = "도구를 사용해서 정보를 찾고 있어..."
+                
+            if not response_text and not tool_use_blocks:
+                raise ValueError("No text content or tool use in Claude response")
 
             # Add assistant response to session (clean version without web search artifacts)
             # Store only the core response text to avoid web search contamination in future conversations
             clean_response_text = response_text
             
-            if thinking_used:
-                # Store response with thinking blocks but clean text content
+            if thinking_used or tool_use_blocks:
+                # Store response with thinking and/or tool blocks (required by Anthropic for multi-turn tool use)
                 assistant_content = []
                 
                 # Add all thinking and redacted_thinking blocks first
@@ -1738,18 +1826,46 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                             redacted_block["data"] = content_block.data
                         assistant_content.append(redacted_block)
                 
-                # Add clean text content (without web search citations that might contaminate future context)
-                assistant_content.append({
-                    "type": "text",
-                    "text": clean_response_text
-                })
+                # Add all tool_use blocks (critical for multi-turn tool workflows)
+                for tool_block in tool_use_blocks:
+                    assistant_content.append(tool_block)
+                    logger.info(f"Added tool_use block to conversation: {tool_block['name']}")
+                
+                # Add clean text content with cache control if search was used and caching is enabled
+                if clean_response_text:  # Only add text block if we have actual text content
+                    text_block = {
+                        "type": "text",
+                        "text": clean_response_text
+                    }
+                    
+                    # Cache Breakpoint 2: Conversation with web search results
+                    if search_used and self.PROMPT_CACHING_ENABLED:
+                        text_block["cache_control"] = {"type": "ephemeral"}
+                        logger.info("Added cache control to assistant response with web search results")
+                    
+                    assistant_content.append(text_block)
                 
                 messages.append({"role": "assistant", "content": assistant_content})
-                logger.info("Stored assistant response with thinking blocks (clean text)")
+                logger.info(f"Stored assistant response with {len(assistant_content)} content blocks (thinking: {thinking_used}, tools: {len(tool_use_blocks)})")
             else:
                 # Regular text-only response (clean version)
-                messages.append({"role": "assistant", "content": clean_response_text})
-                logger.info("Stored clean assistant response without web search artifacts")
+                if search_used and self.PROMPT_CACHING_ENABLED:
+                    # Cache Breakpoint 2: Conversation with web search results  
+                    messages.append({
+                        "role": "assistant", 
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": clean_response_text,
+                                "cache_control": {"type": "ephemeral"}
+                            }
+                        ]
+                    })
+                    logger.info("Stored assistant response with cache control (web search results)")
+                else:
+                    # No caching - store as simple string
+                    messages.append({"role": "assistant", "content": clean_response_text})
+                    logger.info("Stored clean assistant response without web search artifacts")
             
             # Trim conversation history if too long
             if len(messages) > self.MAX_HISTORY_LENGTH * 2:  # *2 because we have user+assistant pairs
@@ -1760,39 +1876,71 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             self._chat_sessions[user_id] = messages
 
             # Process response with inline citations (with timing)
-            processing_start = time.time()
+            processing_start = time.perf_counter()
             processed_response = self._process_response_with_citations(response_text, citations, search_used)
-            processing_time = time.time() - processing_start
-            logger.info(f"Text processing took: {processing_time:.3f}s")
+            processing_time = time.perf_counter() - processing_start
+            logger.info(f"Text processing took: {processing_time:.6f}s")
             
             # Add note about redacted thinking if present
-            thinking_start = time.time()
+            thinking_start = time.perf_counter()
             has_redacted_thinking = any(
                 content_block.type == "redacted_thinking" 
                 for content_block in response.content
             )
             if has_redacted_thinking:
                 processed_response += "\n\n*일부 추론 과정이 안전상의 이유로 암호화되었어.*"
-            thinking_time = time.time() - thinking_start
-            logger.info(f"Thinking check took: {thinking_time:.3f}s")
+            thinking_time = time.perf_counter() - thinking_start
+            logger.info(f"Thinking check took: {thinking_time:.6f}s")
 
-            # Track usage in background (non-blocking)
-            tracking_start = time.time()
+            # Track web search and cache usage if used
+            if hasattr(response, 'usage'):
+                usage = response.usage
+                
+                # Track web search usage
+                if search_used and hasattr(usage, 'server_tool_use'):
+                    web_search_count = usage.server_tool_use.get('web_search_requests', 0)
+                    if web_search_count > 0:
+                        self._web_search_requests += web_search_count
+                        search_cost = (web_search_count / 1000.0) * self.WEB_SEARCH_COST_PER_1000
+                        self._web_search_cost += search_cost
+                        logger.info(f"Web search: {web_search_count} requests, cost: ${search_cost:.4f}")
+                
+                # Track prompt caching performance 
+                if self.PROMPT_CACHING_ENABLED:
+                    cache_creation = getattr(usage, 'cache_creation_input_tokens', 0)
+                    cache_read = getattr(usage, 'cache_read_input_tokens', 0)
+                    
+                    if cache_creation > 0:
+                        self._cache_creation_tokens += cache_creation
+                        self._cache_misses += 1
+                        logger.info(f"Cache miss: {cache_creation:,} tokens written to cache")
+                    
+                    if cache_read > 0:
+                        self._cache_read_tokens += cache_read
+                        self._cache_hits += 1
+                        cache_savings_pct = ((cache_read * 3.0 - cache_read * 0.3) / (cache_read * 3.0)) * 100 if cache_read > 0 else 0
+                        logger.info(f"Cache hit: {cache_read:,} tokens read from cache ({cache_savings_pct:.1f}% cost savings)")
+                    
+                    if cache_creation == 0 and cache_read == 0:
+                        logger.info("No cache activity - request too small or caching disabled")
+
+            # Track usage in background (non-blocking) - only time the dispatch
+            tracking_start = time.perf_counter()
             asyncio.create_task(self._track_request_with_response_background(prompt, processed_response, response))
-            tracking_time = time.time() - tracking_start
-            logger.info(f"Usage tracking dispatch took: {tracking_time:.3f}s")
+            tracking_time = time.perf_counter() - tracking_start
+            logger.info(f"Usage tracking dispatch took: {tracking_time:.6f}s")
             
             # Track stop reason for normal completion (if not already tracked)
             if hasattr(response, 'stop_reason') and response.stop_reason:
                 self._track_stop_reason(response.stop_reason)
 
             # Format source links if available (with timing)
-            sources_start = time.time()
+            sources_start = time.perf_counter()
             formatted_sources = None
             if source_links:
                 formatted_sources = self._format_sources(source_links)
-            sources_time = time.time() - sources_start
-            logger.info(f"Source formatting took: {sources_time:.3f}s")
+            sources_time = time.perf_counter() - sources_start
+            logger.info(f"Source formatting took: {sources_time:.6f}s")
 
             return (processed_response, formatted_sources)
 
@@ -1886,6 +2034,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             "is_slowed_down": self._is_slowed_down,
             "error_count": self._error_count,
             "refusal_count": self._refusal_count,
+            "web_search_requests": self._web_search_requests,
+            "web_search_cost": self._web_search_cost,
+            "cache_creation_tokens": self._cache_creation_tokens,
+            "cache_read_tokens": self._cache_read_tokens,
+            "cache_hits": self._cache_hits,
+            "cache_misses": self._cache_misses,
             "stop_reason_counts": self._stop_reason_counts,
             "cpu_usage": self._cpu_usage,
             "memory_usage": self._memory_usage
@@ -1916,6 +2070,26 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Add thinking tokens if any were used
         if stats.get('thinking_tokens_used', 0) > 0:
             report += f"🧠 생각 토큰: {stats['thinking_tokens_used']:,} 토큰\n"
+            
+        # Add web search usage if any
+        if stats.get('web_search_requests', 0) > 0:
+            report += f"🔍 웹 검색: {stats['web_search_requests']:,}회 (${stats['web_search_cost']:.2f})\n"
+            
+        # Add cache performance if any cache activity
+        cache_hits = stats.get('cache_hits', 0)
+        cache_misses = stats.get('cache_misses', 0)
+        if cache_hits > 0 or cache_misses > 0:
+            cache_hit_rate = (cache_hits / (cache_hits + cache_misses)) * 100 if (cache_hits + cache_misses) > 0 else 0
+            cache_read_tokens = stats.get('cache_read_tokens', 0)
+            cache_creation_tokens = stats.get('cache_creation_tokens', 0)
+            
+            # Calculate approximate cache savings (90% cost reduction on cache hits)
+            cache_savings_tokens = cache_read_tokens * 0.9  # 90% savings
+            cache_savings_cost = (cache_savings_tokens / 1_000_000) * 3.0  # $3/MTok saved
+            
+            report += f"⚡ 캐시: 적중률 {cache_hit_rate:.1f}% ({cache_hits}/{cache_hits + cache_misses})\n"
+            if cache_savings_cost > 0.001:  # Only show if savings > $0.001
+                report += f"💰 캐시 절약: ${cache_savings_cost:.3f}\n"
             
         report += (
             f"⏱️ 최근 1시간: {stats['recent_requests_hour']:,}회\n"
