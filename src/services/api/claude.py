@@ -367,11 +367,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             count_params = {
                 "model": "claude-sonnet-4-20250514",
                 "messages": messages,
-                "tools": [{
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": 5
-                }]
+                # Temporarily disable web search tools for token counting test
+                # "tools": [{
+                #     "type": "web_search_20250305", 
+                #     "name": "web_search",
+                #     "max_uses": 5
+                # }]
             }
             
             # Add thinking if enabled
@@ -1335,11 +1336,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 "max_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
                 "messages": messages,
                 "system": self.MUELSYSE_CONTEXT,  # Official Anthropic system prompt for role assignment
-                "tools": [{
-                    "type": "web_search_20250305",
-                    "name": "web_search",
-                    "max_uses": 5
-                }]
+                # Temporarily disable web search to test token usage
+                # "tools": [{
+                #     "type": "web_search_20250305",
+                #     "name": "web_search",
+                #     "max_uses": 5
+                # }]
             }
             
             # Add thinking if enabled
