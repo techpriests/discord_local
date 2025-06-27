@@ -9,6 +9,7 @@ from urllib.parse import urlparse
 import asyncio
 import discord
 import psutil
+import time
 
 import anthropic
 from .base import BaseAPI, RateLimitConfig
@@ -157,6 +158,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         self._save_interval = timedelta(minutes=5)  # Save at most every 5 minutes
         self._pending_save = False
         self._save_lock = asyncio.Lock()
+        
+        # Background usage tracking with batching
+        self._usage_queue = []  # Queue for pending usage data
+        self._batch_size = 5  # Save every 5 requests
+        self._batch_lock = asyncio.Lock()
 
     def _load_usage_data(self) -> None:
         """Load saved usage data from file"""
@@ -255,9 +261,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         """Initialize Claude API resources"""
         await super().initialize()
         
-        # Initialize the Anthropic client with required headers
+        # Initialize the Anthropic client with required headers and timeout
+        # Official docs recommend 60+ minute timeout for Claude 4 models
         self._client = anthropic.AsyncAnthropic(
             api_key=self.api_key,
+            timeout=3600.0,  # 60 minutes as recommended for Claude 4
             default_headers={
                 "anthropic-version": "2023-06-01"  # Required by API spec
             }
@@ -646,6 +654,128 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             logger.error(f"Error tracking request with response: {e}")
             # Fallback to regular tracking
             await self._track_request(prompt, response_text)
+
+    async def _track_request_with_response_background(self, prompt: str, response_text: str, api_response: Any) -> None:
+        """Background version of usage tracking with batching
+        
+        Args:
+            prompt: User's input prompt
+            response_text: AI's response text
+            api_response: Claude API response object with usage information
+        """
+        try:
+            current_time = datetime.now()
+            
+            # Extract token counts from API response
+            prompt_tokens = 0
+            response_tokens = 0
+            thinking_tokens = 0
+            
+            if hasattr(api_response, 'usage'):
+                usage = api_response.usage
+                if hasattr(usage, 'input_tokens'):
+                    prompt_tokens = usage.input_tokens
+                if hasattr(usage, 'output_tokens'):
+                    response_tokens = usage.output_tokens
+                if hasattr(usage, 'thinking_tokens'):
+                    thinking_tokens = usage.thinking_tokens
+                    self._thinking_tokens_used += thinking_tokens
+            else:
+                # Fallback to estimation (but don't await token counting for speed)
+                prompt_tokens = len(prompt) // 4  # Rough estimation
+                response_tokens = len(response_text) // 4
+            
+            total_tokens = prompt_tokens + response_tokens
+            
+            # Add to usage queue
+            usage_data = {
+                "timestamp": current_time,
+                "prompt_tokens": prompt_tokens,
+                "response_tokens": response_tokens,
+                "thinking_tokens": thinking_tokens,
+                "total_tokens": total_tokens
+            }
+            
+            async with self._batch_lock:
+                self._usage_queue.append(usage_data)
+                
+                # Process batch if queue is full
+                if len(self._usage_queue) >= self._batch_size:
+                    await self._process_usage_batch()
+                    
+        except Exception as e:
+            logger.error(f"Error in background usage tracking: {e}")
+
+    async def _process_usage_batch(self) -> None:
+        """Process a batch of usage data and update statistics
+        
+        Note: This method assumes _batch_lock is already acquired
+        """
+        try:
+            if not self._usage_queue:
+                return
+                
+            current_time = datetime.now()
+            
+            # Process all queued usage data
+            for usage_data in self._usage_queue:
+                timestamp = usage_data["timestamp"]
+                prompt_tokens = usage_data["prompt_tokens"]
+                response_tokens = usage_data["response_tokens"]
+                thinking_tokens = usage_data["thinking_tokens"]
+                total_tokens = usage_data["total_tokens"]
+                
+                # Update daily requests (reset if new day)
+                if (timestamp - self._last_reset).days >= 1:
+                    self._daily_requests = 0
+                    self._last_reset = timestamp
+                    
+                self._daily_requests += 1
+                
+                # Update token counts
+                self._total_prompt_tokens += prompt_tokens
+                self._total_response_tokens += response_tokens
+                self._hourly_token_count += total_tokens
+                
+                # Update maximums
+                self._max_prompt_tokens = max(self._max_prompt_tokens, prompt_tokens)
+                self._max_response_tokens = max(self._max_response_tokens, response_tokens)
+                
+                # Track request sizes for analysis (keep only recent)
+                self._request_sizes.append({
+                    "timestamp": timestamp.isoformat(),
+                    "prompt_tokens": prompt_tokens,
+                    "response_tokens": response_tokens,
+                    "total_tokens": total_tokens
+                })
+                
+                # Add to token usage history
+                self._token_usage_history.append({
+                    "date": timestamp.date().isoformat(),
+                    "tokens": total_tokens
+                })
+            
+            # Clear the queue
+            queue_size = len(self._usage_queue)
+            self._usage_queue.clear()
+            
+            # Trim old data to prevent memory bloat
+            if len(self._request_sizes) > 100:
+                self._request_sizes = self._request_sizes[-100:]
+                
+            cutoff_date = (current_time - timedelta(days=30)).date()
+            self._token_usage_history = [
+                entry for entry in self._token_usage_history
+                if datetime.fromisoformat(entry["date"]).date() >= cutoff_date
+            ]
+            
+            # Schedule save (non-blocking)
+            asyncio.create_task(self._schedule_save())
+            
+            logger.debug(f"Processed {queue_size} usage records in batch")
+            
+        except Exception as e:
+            logger.error(f"Error processing usage batch: {e}")
 
     def _check_user_rate_limit(self, user_id: int) -> None:
         """Check user-specific rate limits
@@ -1212,7 +1342,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         return processed_response
 
     def _process_response_with_citations(self, response: str, citations: List[Any], search_used: bool = False) -> str:
-        """Process Claude's response with inline citations (Anthropic requirement)
+        """Process Claude's response with inline citations and improved Korean formatting
         
         Args:
             response: Raw response from Claude
@@ -1220,35 +1350,34 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             search_used: Whether search grounding was used
             
         Returns:
-            str: Processed response with inline clickable citations
+            str: Processed response with inline clickable citations and proper Korean formatting
         """
         if not response:
             return "미안해, 응답을 생성하지 못했어."
         
-        # If no citations or search used, fall back to regular processing
-        if not citations and not search_used:
-            return self._process_response(response, False)
-            
-        # Process citations to make them "clearly visible and clickable" (Anthropic requirement)
+        # Basic cleanup
         processed_response = response.strip()
         
-        # Create citation mapping for inline links
+        # Process citations first if they exist
         citation_map = {}
-        for i, citation in enumerate(citations, 1):
-            if hasattr(citation, 'url') and citation.url:
-                title = getattr(citation, 'title', f'Source {i}')
-                url = citation.url
-                
-                # Create clickable citation format
-                citation_key = f"[{i}]"
-                citation_link = f"[**[{i}]**]({url} \"{title}\")"
-                citation_map[citation_key] = citation_link
+        if citations:
+            for i, citation in enumerate(citations, 1):
+                if hasattr(citation, 'url') and citation.url:
+                    title = getattr(citation, 'title', f'Source {i}')
+                    url = citation.url
+                    
+                    # Create clickable citation format
+                    citation_key = f"[{i}]"
+                    citation_link = f"[**[{i}]**]({url} \"{title}\")"
+                    citation_map[citation_key] = citation_link
+            
+            # Replace citation markers with clickable links
+            for citation_key, citation_link in citation_map.items():
+                pattern = re.escape(citation_key)
+                processed_response = re.sub(pattern, citation_link, processed_response)
         
-        # Replace citation markers with clickable links
-        for citation_key, citation_link in citation_map.items():
-            # Look for citation patterns and replace with clickable links
-            pattern = re.escape(citation_key)
-            processed_response = re.sub(pattern, citation_link, processed_response)
+        # Apply Korean-friendly text processing
+        processed_response = self._format_korean_text(processed_response, search_used)
         
         # Add source section if citations exist
         if citation_map:
@@ -1260,27 +1389,162 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     domain = urlparse(url).netloc
                     processed_response += f"\n{i}. [{title}]({url}) - {domain}"
         
-        # Apply basic formatting for search grounded responses
-        if search_used:
-            # Minimal formatting to preserve search result integrity
-            lines = processed_response.split('\n')
-            processed_lines = []
-            in_code_block = False
-            
-            for line in lines:
-                if '```' in line:
-                    in_code_block = not in_code_block
-                    if in_code_block and line.strip() == '```':
-                        line = '```text'
-                processed_lines.append(line)
-            
-            processed_response = '\n'.join(processed_lines)
-        
         # Ensure response is not too long for Discord
         if len(processed_response) > 1900:
             processed_response = processed_response[:1897] + "..."
             
         return processed_response
+
+    def _format_korean_text(self, text: str, minimal_formatting: bool = False) -> str:
+        """Format text with Korean-friendly line breaks and styling
+        
+        Args:
+            text: Input text to format
+            minimal_formatting: If True, apply minimal formatting (for search results)
+            
+        Returns:
+            str: Formatted text with proper Korean handling
+        """
+        if not text:
+            return text
+            
+        # Split into lines for processing
+        lines = text.split('\n')
+        processed_lines = []
+        in_code_block = False
+        
+        for line in lines:
+            line = line.rstrip()  # Remove trailing whitespace
+            
+            # Handle code blocks
+            if '```' in line:
+                in_code_block = not in_code_block
+                if in_code_block and line.strip() == '```':
+                    line = '```text'
+                processed_lines.append(line)
+                continue
+                
+            # Don't modify content inside code blocks
+            if in_code_block:
+                processed_lines.append(line)
+                continue
+                
+            # Skip empty lines (will be handled later)
+            if not line.strip():
+                processed_lines.append('')
+                continue
+                
+            # Apply formatting if not minimal
+            if not minimal_formatting:
+                line = self._apply_korean_styling(line)
+            
+            processed_lines.append(line)
+        
+        # Join lines with proper spacing for Korean text
+        result = self._join_korean_lines(processed_lines)
+        
+        return result
+
+    def _apply_korean_styling(self, line: str) -> str:
+        """Apply Korean-friendly styling to a line of text
+        
+        Args:
+            line: Single line of text
+            
+        Returns:
+            str: Styled line with Korean-appropriate formatting
+        """
+        line = line.strip()
+        if not line:
+            return line
+            
+        # Korean punctuation patterns
+        korean_endings = ['다', '요', '어', '아', '지', '네', '야', '죠', '까', '나']
+        
+        # Add emojis based on content and Korean context
+        if line.endswith('?') or line.endswith('까?'):
+            return '❓ ' + line
+        elif any(line.endswith(ending + '.') or line.endswith(ending + '!') for ending in korean_endings):
+            if '오류' in line or '에러' in line or '실패' in line:
+                return '⚠️ ' + line
+            elif '예시' in line or '예:' in line or '예를' in line:
+                return '💡 ' + line
+            elif '참고' in line or '주의' in line or '노트' in line:
+                return '📝 ' + line
+            elif '단계' in line or '방법' in line:
+                return '✅ ' + line
+        elif line.startswith(('- ', '* ', '• ')):
+            return '📌 ' + line[2:]
+        elif line.startswith(('1.', '2.', '3.', '4.', '5.')) and len(line) > 3:
+            return '✨ ' + line
+            
+        return line
+
+    def _join_korean_lines(self, lines: List[str]) -> str:
+        """Join lines with Korean-appropriate spacing
+        
+        Args:
+            lines: List of processed lines
+            
+        Returns:
+            str: Joined text with proper Korean spacing
+        """
+        if not lines:
+            return ''
+            
+        result_lines = []
+        prev_line = ''
+        
+        for i, line in enumerate(lines):
+            current_line = line.strip()
+            
+            # Always keep code blocks as-is
+            if '```' in current_line:
+                result_lines.append(line)
+                prev_line = current_line
+                continue
+                
+            # Handle empty lines
+            if not current_line:
+                # Add empty line only if previous line wasn't empty
+                if prev_line.strip():
+                    result_lines.append('')
+                prev_line = current_line
+                continue
+                
+            # Korean text flow rules
+            if prev_line.strip():
+                # Check if we need paragraph break
+                needs_break = (
+                    current_line.startswith(('📌', '✨', '💡', '⚠️', '📝', '✅', '❓')) or
+                    prev_line.startswith(('📌', '✨', '💡', '⚠️', '📝', '✅', '❓')) or
+                    current_line.startswith('**') or
+                    prev_line.endswith(':') or
+                    current_line.startswith('#')
+                )
+                
+                if needs_break:
+                    # Add empty line for paragraph break
+                    if result_lines and result_lines[-1].strip():
+                        result_lines.append('')
+            
+            result_lines.append(line)
+            prev_line = current_line
+        
+        # Remove multiple consecutive empty lines
+        final_lines = []
+        empty_count = 0
+        
+        for line in result_lines:
+            if not line.strip():
+                empty_count += 1
+                if empty_count <= 1:  # Allow max 1 empty line
+                    final_lines.append(line)
+            else:
+                empty_count = 0
+                final_lines.append(line)
+        
+        return '\n'.join(final_lines).strip()
 
     async def chat(self, prompt: str, user_id: int) -> Tuple[str, Optional[str]]:
         """Send a chat message to Claude with web search grounding
@@ -1495,28 +1759,40 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Update chat session
             self._chat_sessions[user_id] = messages
 
-            # Process response with inline citations
+            # Process response with inline citations (with timing)
+            processing_start = time.time()
             processed_response = self._process_response_with_citations(response_text, citations, search_used)
+            processing_time = time.time() - processing_start
+            logger.info(f"Text processing took: {processing_time:.3f}s")
             
             # Add note about redacted thinking if present
+            thinking_start = time.time()
             has_redacted_thinking = any(
                 content_block.type == "redacted_thinking" 
                 for content_block in response.content
             )
             if has_redacted_thinking:
                 processed_response += "\n\n*일부 추론 과정이 안전상의 이유로 암호화되었어.*"
+            thinking_time = time.time() - thinking_start
+            logger.info(f"Thinking check took: {thinking_time:.3f}s")
 
-            # Track usage with actual token counts from API response
-            await self._track_request_with_response(prompt, processed_response, response)
+            # Track usage in background (non-blocking)
+            tracking_start = time.time()
+            asyncio.create_task(self._track_request_with_response_background(prompt, processed_response, response))
+            tracking_time = time.time() - tracking_start
+            logger.info(f"Usage tracking dispatch took: {tracking_time:.3f}s")
             
             # Track stop reason for normal completion (if not already tracked)
             if hasattr(response, 'stop_reason') and response.stop_reason:
                 self._track_stop_reason(response.stop_reason)
 
-            # Format source links if available
+            # Format source links if available (with timing)
+            sources_start = time.time()
             formatted_sources = None
             if source_links:
                 formatted_sources = self._format_sources(source_links)
+            sources_time = time.time() - sources_start
+            logger.info(f"Source formatting took: {sources_time:.3f}s")
 
             return (processed_response, formatted_sources)
 
@@ -1699,8 +1975,14 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         }
 
     async def close(self) -> None:
-        """Cleanup resources"""
+        """Cleanup resources and flush pending data"""
         try:
+            # Process any remaining usage data in the queue
+            if hasattr(self, '_usage_queue') and self._usage_queue:
+                async with self._batch_lock:
+                    await self._process_usage_batch()
+                    logger.info(f"Flushed {len(self._usage_queue)} pending usage records on shutdown")
+            
             # Save final usage data
             await self._save_usage_data()
             

@@ -293,9 +293,15 @@ class AICommands(BaseCommands):
         private: bool = False
     ):
         """Start a chat with the AI."""
+        import time
+        start_time = time.time()
+        
         try:
             # Immediately defer the response to prevent timeout
+            defer_start = time.time()
             await interaction.response.defer(ephemeral=private)
+            defer_time = time.time() - defer_start
+            logger.info(f"Discord defer took: {defer_time:.3f}s")
             
             # Check Claude state
             await self._check_claude_state()
@@ -304,10 +310,18 @@ class AICommands(BaseCommands):
             user_id = interaction.user.id
             
             # Process through Claude API directly
+            api_start = time.time()
             response, source_content = await self.api_service.claude.chat(message, user_id)
+            api_time = time.time() - api_start
+            logger.info(f"Claude API took: {api_time:.3f}s")
             
-            # Format and send response
+            # Format response for Discord
+            format_start = time.time()
             max_length = 4000  # Leave buffer for embed formatting
+            embed_data = None
+            view = None
+            
+            # Continue formatting response
             
             if len(response) > max_length:
                 # Split response into chunks
@@ -346,8 +360,33 @@ class AICommands(BaseCommands):
                     source_storage[source_id] = source_content
                     view = SourceView(source_id)
                 
-                # Send response
-                await interaction.followup.send(embed=embed, view=view)
+                # Send response with timeout protection
+                followup_start = time.time()
+                try:
+                    # Try followup first with a reasonable timeout
+                    await asyncio.wait_for(
+                        interaction.followup.send(embed=embed, view=view),
+                        timeout=15.0  # 15 second timeout for Discord followup
+                    )
+                    followup_time = time.time() - followup_start
+                    total_time = time.time() - start_time
+                    logger.info(f"Discord followup took: {followup_time:.3f}s")
+                    logger.info(f"Total command time: {total_time:.3f}s")
+                except asyncio.TimeoutError:
+                    logger.warning("Discord followup timed out, falling back to channel message")
+                    # Fallback: send directly to channel
+                    await interaction.channel.send(
+                        f"{interaction.user.mention}",
+                        embed=embed,
+                        view=view
+                    )
+                    fallback_time = time.time() - followup_start
+                    total_time = time.time() - start_time
+                    logger.info(f"Discord fallback took: {fallback_time:.3f}s")
+                    logger.info(f"Total command time: {total_time:.3f}s")
+                
+                format_time = time.time() - format_start
+                logger.info(f"Discord formatting took: {format_time:.3f}s")
                 
         except ValueError as e:
             # Handle expected errors
