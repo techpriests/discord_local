@@ -67,25 +67,27 @@ class ResponseView(View):
     def __init__(self, thinking_id: str = None, source_id: str = None):
         super().__init__()
         
+        # Both buttons are temporarily hidden
+        # To re-enable, uncomment the respective blocks below
+        
         # Add thinking button if thinking content is available
-        if thinking_id:
-            self.add_item(Button(
-                label="추론 과정",
-                custom_id=f"thinking_{thinking_id}",
-                style=discord.ButtonStyle.primary,
-                disabled=True,  # Disabled for now
-                emoji="💭"
-            ))
+        # if thinking_id:
+        #     self.add_item(Button(
+        #         label="추론 과정",
+        #         custom_id=f"thinking_{thinking_id}",
+        #         style=discord.ButtonStyle.primary,
+        #         emoji="💭"
+        #     ))
         
         # Add sources button (disabled since sources are inline)
-        if source_id:
-            self.add_item(Button(
-                label="참고 자료",
-                custom_id=f"sources_{source_id}",
-                style=discord.ButtonStyle.secondary,
-                disabled=True,  # Disabled since sources are now inline
-                emoji="📚"
-            ))
+        # if source_id:
+        #     self.add_item(Button(
+        #         label="참고 자료",
+        #         custom_id=f"sources_{source_id}",
+        #         style=discord.ButtonStyle.secondary,
+        #         disabled=True,  # Disabled since sources are now inline
+        #         emoji="📚"
+        #     ))
 
 
 class AICommands(BaseCommands):
