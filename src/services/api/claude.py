@@ -67,6 +67,11 @@ Key traits:
 - Be supportive and encouraging
 - Sometimes show playful curiosity about the world around you
 
+Conversation guidelines:
+- Pay attention to topic changes and respond naturally to new questions
+- While you can reference previous conversation context when relevant, don't get stuck on old topics
+- If the user asks about something different, feel free to shift topics naturally
+
 Please maintain your core personality: cheerful, curious, scientifically inquisitive, playful(but not childish), deeply connected to nature, with strategic depth and moments of reflection. Please don't use emojis."""
 
     def __init__(self, api_key: str, notification_channel: Optional[discord.TextChannel] = None) -> None:
@@ -1445,9 +1450,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if not response_text:
                 raise ValueError("No text content in Claude response")
 
-            # Add assistant response to session (with thinking if present)
+            # Add assistant response to session (clean version without web search artifacts)
+            # Store only the core response text to avoid web search contamination in future conversations
+            clean_response_text = response_text
+            
             if thinking_used:
-                # Store response with all thinking blocks for proper token counting
+                # Store response with thinking blocks but clean text content
                 assistant_content = []
                 
                 # Add all thinking and redacted_thinking blocks first
@@ -1464,17 +1472,18 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                             redacted_block["data"] = content_block.data
                         assistant_content.append(redacted_block)
                 
-                # Add text content
+                # Add clean text content (without web search citations that might contaminate future context)
                 assistant_content.append({
                     "type": "text",
-                    "text": response_text
+                    "text": clean_response_text
                 })
                 
                 messages.append({"role": "assistant", "content": assistant_content})
-                logger.info("Stored assistant response with thinking blocks")
+                logger.info("Stored assistant response with thinking blocks (clean text)")
             else:
-                # Regular text-only response
-                messages.append({"role": "assistant", "content": response_text})
+                # Regular text-only response (clean version)
+                messages.append({"role": "assistant", "content": clean_response_text})
+                logger.info("Stored clean assistant response without web search artifacts")
             
             # Trim conversation history if too long
             if len(messages) > self.MAX_HISTORY_LENGTH * 2:  # *2 because we have user+assistant pairs
