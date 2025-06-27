@@ -44,19 +44,47 @@ class TimedSourceStorage(OrderedDict):
         """Get current number of entries"""
         return len(self)
 
-# Initialize storage
+# Initialize storage for both sources and thinking content
 source_storage = TimedSourceStorage()
+thinking_storage = TimedSourceStorage()
 
 class SourceView(View):
-    """View with button to show sources"""
+    """View with button to show sources (deprecated - kept for compatibility)"""
     
     def __init__(self, source_id: str):
         super().__init__()
         self.add_item(Button(
-            label="View Sources", 
+            label="참고 자료", 
             custom_id=f"sources_{source_id}",
-            style=discord.ButtonStyle.secondary
+            style=discord.ButtonStyle.secondary,
+            disabled=True,  # Disabled since sources are now inline
+            emoji="📚"
         ))
+
+class ResponseView(View):
+    """View with buttons for thinking content and sources"""
+    
+    def __init__(self, thinking_id: str = None, source_id: str = None):
+        super().__init__()
+        
+        # Add thinking button if thinking content is available
+        if thinking_id:
+            self.add_item(Button(
+                label="추론 과정",
+                custom_id=f"thinking_{thinking_id}",
+                style=discord.ButtonStyle.primary,
+                emoji="💭"
+            ))
+        
+        # Add sources button (disabled since sources are inline)
+        if source_id:
+            self.add_item(Button(
+                label="참고 자료",
+                custom_id=f"sources_{source_id}",
+                style=discord.ButtonStyle.secondary,
+                disabled=True,  # Disabled since sources are now inline
+                emoji="📚"
+            ))
 
 
 class AICommands(BaseCommands):
@@ -120,20 +148,48 @@ class AICommands(BaseCommands):
 
     # Add method to handle button interactions
     async def handle_button_interaction(self, interaction: discord.Interaction) -> None:
-        """Handle button interactions for source viewing
+        """Handle button interactions for source and thinking viewing
         
         Args:
             interaction: The button interaction
         """
-        if interaction.data["custom_id"].startswith("sources_"):
-            source_id = interaction.data["custom_id"].replace("sources_", "")
+        custom_id = interaction.data["custom_id"]
+        
+        if custom_id.startswith("thinking_"):
+            thinking_id = custom_id.replace("thinking_", "")
+            try:
+                if thinking_id in thinking_storage:
+                    thinking_content = thinking_storage[thinking_id]
+                    
+                    # Create embed with thinking content
+                    embed = discord.Embed(
+                        title="💭 추론 과정",
+                        description=thinking_content,
+                        color=INFO_COLOR
+                    )
+                    
+                    # Send as a public message
+                    await interaction.response.send_message(embed=embed)
+                else:
+                    await interaction.response.send_message(
+                        "추론 과정을 찾을 수 없어. 다시 물어봐줄래?",
+                        ephemeral=True
+                    )
+            except Exception as e:
+                logger.error(f"Error retrieving thinking content: {e}", exc_info=True)
+                await interaction.response.send_message(
+                    "추론 과정을 가져오는 중 오류가 발생했어. 잠시 후에 다시 시도해줘!",
+                    ephemeral=True
+                )
+        elif custom_id.startswith("sources_"):
+            source_id = custom_id.replace("sources_", "")
             try:
                 if source_id in source_storage:
                     source_content = source_storage[source_id]
                     
                     # Create embed with sources
                     embed = discord.Embed(
-                        title="Sources",
+                        title="📚 참고 자료",
                         description=source_content,
                         color=INFO_COLOR
                     )
@@ -167,25 +223,42 @@ class AICommands(BaseCommands):
             ctx: Command context
         """
         try:
-            # Get current number of stored sources
+            # Get current number of stored sources and thinking content
             source_count = source_storage.get_entry_count()
+            thinking_count = thinking_storage.get_entry_count()
             
-            # Clear the storage
+            # Clear both storages
             source_storage.clear()
+            thinking_storage.clear()
             
             # Send confirmation
             embed = discord.Embed(
-                title="🧹 소스 기억 초기화",
-                description=f"소스 기억 {source_count}개가 깨끗하게 지워졌어!",
+                title="🧹 메모리 초기화",
+                description=f"소스 기억 {source_count}개와 추론 과정 {thinking_count}개가 깨끗하게 지워졌어!",
                 color=INFO_COLOR
             )
             await ctx.send(embed=embed)
             
-            logger.info(f"Sources memory cleared: {source_count} entries removed")
+            logger.info(f"Memory cleared: {source_count} sources, {thinking_count} thinking entries removed")
             
         except Exception as e:
-            logger.error(f"Error clearing sources memory: {e}", exc_info=True)
-            await ctx.send("소스 기억 초기화 중 오류가 발생했어. 다시 시도해볼래?")
+            logger.error(f"Error clearing memory: {e}", exc_info=True)
+            await ctx.send("메모리 초기화 중 오류가 발생했어. 다시 시도해볼래?")
+
+    async def send_response(self, ctx_or_interaction: CommandContext, **kwargs) -> None:
+        """Send response using the correct method based on context type
+        
+        Args:
+            ctx_or_interaction: Command context or interaction
+            **kwargs: Arguments to pass to send method
+        """
+        if isinstance(ctx_or_interaction, discord.Interaction):
+            if ctx_or_interaction.response.is_done():
+                await ctx_or_interaction.followup.send(**kwargs)
+            else:
+                await ctx_or_interaction.response.send_message(**kwargs)
+        else:
+            await ctx_or_interaction.send(**kwargs)
 
     @commands.command(
         name="대화",
@@ -222,7 +295,7 @@ class AICommands(BaseCommands):
             async with ctx.typing():
                 try:
                     # Get response from Claude
-                    response, source_content = await self.api_service.claude.chat(message, ctx.author.id)
+                    response, source_content, thinking_content = await self.api_service.claude.chat(message, ctx.author.id)
                     
                     # Split long responses into multiple messages
                     max_length = 4000  # Leave some buffer for embed formatting
@@ -236,15 +309,23 @@ class AICommands(BaseCommands):
                             color=INFO_COLOR
                         )
                         
-                        # If we have source content, include a button
+                        # Create view with thinking and source buttons
+                        view = None
+                        thinking_id = None
+                        source_id = None
+                        
+                        if thinking_content:
+                            thinking_id = str(uuid.uuid4())
+                            thinking_storage[thinking_id] = thinking_content
+                        
                         if source_content:
-                            # Generate a unique ID for this source
                             source_id = str(uuid.uuid4())
                             source_storage[source_id] = source_content
-                            view = SourceView(source_id)
-                            await ctx.send(embed=first_embed, view=view)
-                        else:
-                            await ctx.send(embed=first_embed)
+                        
+                        if thinking_id or source_id:
+                            view = ResponseView(thinking_id, source_id)
+                        
+                        await ctx.send(embed=first_embed, view=view)
                         
                         # Send remaining chunks as regular messages
                         for chunk in chunks[1:]:
@@ -256,15 +337,23 @@ class AICommands(BaseCommands):
                             color=INFO_COLOR
                         )
                         
-                        # If we have source content, include a button
+                        # Create view with thinking and source buttons
+                        view = None
+                        thinking_id = None
+                        source_id = None
+                        
+                        if thinking_content:
+                            thinking_id = str(uuid.uuid4())
+                            thinking_storage[thinking_id] = thinking_content
+                        
                         if source_content:
-                            # Generate a unique ID for this source
                             source_id = str(uuid.uuid4())
                             source_storage[source_id] = source_content
-                            view = SourceView(source_id)
-                            await ctx.send(embed=embed, view=view)
-                        else:
-                            await ctx.send(embed=embed)
+                        
+                        if thinking_id or source_id:
+                            view = ResponseView(thinking_id, source_id)
+                        
+                        await ctx.send(embed=embed, view=view)
                 except Exception as e:
                     logger.error(f"Error in Claude chat: {e}", exc_info=True)
                     raise ValueError("대화 처리 중 오류가 발생했어. 더 간단한 질문으로 다시 시도해볼래?") from e
@@ -311,7 +400,7 @@ class AICommands(BaseCommands):
             
             # Process through Claude API directly
             api_start = time.time()
-            response, source_content = await self.api_service.claude.chat(message, user_id)
+            response, source_content, thinking_content = await self.api_service.claude.chat(message, user_id)
             api_time = time.time() - api_start
             logger.info(f"Claude API took: {api_time:.3f}s")
             
@@ -333,12 +422,21 @@ class AICommands(BaseCommands):
                     color=INFO_COLOR
                 )
                 
-                # Add source view if needed
+                # Create view with thinking and source buttons
                 view = None
+                thinking_id = None
+                source_id = None
+                
+                if thinking_content:
+                    thinking_id = str(uuid.uuid4())
+                    thinking_storage[thinking_id] = thinking_content
+                
                 if source_content:
                     source_id = str(uuid.uuid4())
                     source_storage[source_id] = source_content
-                    view = SourceView(source_id)
+                
+                if thinking_id or source_id:
+                    view = ResponseView(thinking_id, source_id)
                 
                 # Send first response
                 await interaction.followup.send(embed=first_embed, view=view)
@@ -353,12 +451,21 @@ class AICommands(BaseCommands):
                     color=INFO_COLOR
                 )
                 
-                # Add source view if needed
+                # Create view with thinking and source buttons
                 view = None
+                thinking_id = None
+                source_id = None
+                
+                if thinking_content:
+                    thinking_id = str(uuid.uuid4())
+                    thinking_storage[thinking_id] = thinking_content
+                
                 if source_content:
                     source_id = str(uuid.uuid4())
                     source_storage[source_id] = source_content
-                    view = SourceView(source_id)
+                
+                if thinking_id or source_id:
+                    view = ResponseView(thinking_id, source_id)
                 
                 # Send response with timeout protection
                 followup_start = time.time()
@@ -428,7 +535,7 @@ class AICommands(BaseCommands):
             )
             
             # Get response from Claude
-            response, source_content = await self.api_service.claude.chat(message, user_id)
+            response, source_content, thinking_content = await self.api_service.claude.chat(message, user_id)
             
             # Split long responses into multiple messages
             max_length = 4000  # Leave some buffer for embed formatting
@@ -442,13 +549,21 @@ class AICommands(BaseCommands):
                     color=INFO_COLOR
                 )
                 
-                # If we have source content, include a button
+                # Create view with thinking and source buttons
                 view = None
+                thinking_id = None
+                source_id = None
+                
+                if thinking_content:
+                    thinking_id = str(uuid.uuid4())
+                    thinking_storage[thinking_id] = thinking_content
+                
                 if source_content:
-                    # Generate a unique ID for this source
                     source_id = str(uuid.uuid4())
                     source_storage[source_id] = source_content
-                    view = SourceView(source_id)
+                
+                if thinking_id or source_id:
+                    view = ResponseView(thinking_id, source_id)
                 
                 if isinstance(ctx_or_interaction, discord.Interaction):
                     await ctx_or_interaction.response.send_message(embed=first_embed, view=view)
@@ -468,13 +583,21 @@ class AICommands(BaseCommands):
                     color=INFO_COLOR
                 )
                 
-                # If we have source content, include a button
+                # Create view with thinking and source buttons
                 view = None
+                thinking_id = None
+                source_id = None
+                
+                if thinking_content:
+                    thinking_id = str(uuid.uuid4())
+                    thinking_storage[thinking_id] = thinking_content
+                
                 if source_content:
-                    # Generate a unique ID for this source
                     source_id = str(uuid.uuid4())
                     source_storage[source_id] = source_content
-                    view = SourceView(source_id)
+                
+                if thinking_id or source_id:
+                    view = ResponseView(thinking_id, source_id)
                 
                 if isinstance(ctx_or_interaction, discord.Interaction):
                     await ctx_or_interaction.response.send_message(embed=embed, view=view)

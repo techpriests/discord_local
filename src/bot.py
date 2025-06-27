@@ -28,7 +28,7 @@ from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
 
-# Help description for the bot V11
+# Help description for the bot V12
 HELP_DESCRIPTION = """
 **주요 명령어**:
 • `/chat` - AI와 대화하기
@@ -338,10 +338,15 @@ class DiscordBot(commands.Bot):
         # For component interactions like buttons
         if interaction.type == discord.InteractionType.component:
             try:
-                # Check if this is a source button
-                if interaction.data.get("custom_id", "").startswith("sources_"):
-                    # Get source_id from custom_id
-                    source_id = interaction.data.get("custom_id", "").replace("sources_", "")
+                # Check if this is a source or thinking button
+                custom_id = interaction.data.get("custom_id", "")
+                if custom_id.startswith("sources_") or custom_id.startswith("thinking_"):
+                    # Get content_id from custom_id
+                    content_id = ""
+                    if custom_id.startswith("sources_"):
+                        content_id = custom_id.replace("sources_", "")
+                    elif custom_id.startswith("thinking_"):
+                        content_id = custom_id.replace("thinking_", "")
                     
                     # Get AICommands instance
                     ai_commands = self.get_cog("AICommands")
@@ -349,10 +354,12 @@ class DiscordBot(commands.Bot):
                         # Handle the interaction
                         await ai_commands.handle_button_interaction(interaction)
                         
-                        # Clean up from source_storage in ai_commands
-                        from src.commands.ai import source_storage
-                        if source_id in source_storage:
-                            del source_storage[source_id]
+                        # Clean up from storage in ai_commands
+                        from src.commands.ai import source_storage, thinking_storage
+                        if custom_id.startswith("sources_") and content_id in source_storage:
+                            del source_storage[content_id]
+                        elif custom_id.startswith("thinking_") and content_id in thinking_storage:
+                            del thinking_storage[content_id]
                     else:
                         await interaction.response.send_message(
                             "명령어를 처리할 수 없어.",

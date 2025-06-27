@@ -1295,7 +1295,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Schedule save to persist counts
         asyncio.create_task(self._schedule_save())
 
-    async def _handle_stop_reason(self, response: Any, prompt: str, user_id: int, messages: List[Dict[str, Any]]) -> Optional[Tuple[str, Optional[str]]]:
+    async def _handle_stop_reason(self, response: Any, prompt: str, user_id: int, messages: List[Dict[str, Any]]) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
         """Handle different stop reasons according to Anthropic's official guidance
         
         Args:
@@ -1305,7 +1305,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             messages: Current conversation messages
             
         Returns:
-            Optional[Tuple[str, Optional[str]]]: Response tuple if stop reason needs special handling, None otherwise
+            Optional[Tuple[str, Optional[str], Optional[str]]]: Response tuple with thinking content if stop reason needs special handling, None otherwise
         """
         if not hasattr(response, 'stop_reason') or not response.stop_reason:
             return None
@@ -1335,12 +1335,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 # Add truncation notice
                 truncated_message = response_text.strip() + "\n\n*[응답이 길이 제한으로 잘렸어. 계속하려면 '계속해줘'라고 말해봐!]*"
                 await self._track_request(prompt, truncated_message)
-                return (truncated_message, None)
+                return (truncated_message, None, None)
             else:
                 # No content was generated before hitting limit
                 error_message = "응답이 너무 길어져서 생성할 수 없었어. 더 간단한 질문으로 다시 물어봐줄래?"
                 await self._track_request(prompt, error_message)
-                return (error_message, None)
+                return (error_message, None, None)
                 
         elif stop_reason == "stop_sequence":
             # Claude encountered a custom stop sequence
@@ -1355,11 +1355,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if response_text.strip():
                 # Return content up to stop sequence
                 await self._track_request(prompt, response_text)
-                return (response_text.strip(), None)
+                return (response_text.strip(), None, None)
             else:
                 error_message = "응답 생성 중 중단되었어. 다시 시도해볼래?"
                 await self._track_request(prompt, error_message)
-                return (error_message, None)
+                return (error_message, None, None)
                 
         elif stop_reason == "tool_use":
             # Claude wants to use a tool - for web search, this should be handled automatically
@@ -1376,11 +1376,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if response_text.strip():
                 tool_message = response_text.strip() + "\n\n*[도구 실행 중...]*"
                 await self._track_request(prompt, tool_message)
-                return (tool_message, None)
+                return (tool_message, None, None)
             else:
                 error_message = "도구를 사용하려고 했지만 실행에 실패했어. 다시 시도해볼래?"
                 await self._track_request(prompt, error_message)
-                return (error_message, None)
+                return (error_message, None, None)
                 
         elif stop_reason == "pause_turn":
             # Claude paused a long-running operation (e.g., complex web search)
@@ -1440,7 +1440,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 logger.error(f"Failed to continue paused conversation: {e}")
                 error_message = "복잡한 작업을 처리하는 중 문제가 발생했어. 다시 시도해볼래?"
                 await self._track_request(prompt, error_message)
-                return (error_message, None)
+                return (error_message, None, None)
                 
         elif stop_reason == "refusal":
             # Claude refused to respond due to safety concerns
@@ -1466,7 +1466,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             self._track_refusal()
             await self._track_request(prompt, refusal_message)
             
-            return (refusal_message, None)
+            return (refusal_message, None, None)
             
         else:
             # Unknown stop reason - log and handle gracefully
@@ -1482,11 +1482,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 # Return available content with a note
                 unknown_message = response_text.strip() + f"\n\n*[응답이 예상과 다르게 완료되었어 (stop_reason: {stop_reason})]*"
                 await self._track_request(prompt, unknown_message)
-                return (unknown_message, None)
+                return (unknown_message, None, None)
             else:
                 error_message = f"응답 생성 중 알 수 없는 문제가 발생했어 (stop_reason: {stop_reason}). 다시 시도해볼래?"
                 await self._track_request(prompt, error_message)
-                return (error_message, None)
+                return (error_message, None, None)
 
     def _process_response(self, response: str, search_used: bool = False) -> str:
         """Process and format Claude's response before sending
@@ -1775,8 +1775,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         
         return '\n'.join(final_lines).strip()
 
-    async def chat(self, prompt: str, user_id: int, tool_choice: Optional[Dict[str, Any]] = None) -> Tuple[str, Optional[str]]:
-        """Send a chat message to Claude with web search grounding
+    async def chat(self, prompt: str, user_id: int, tool_choice: Optional[Dict[str, Any]] = None) -> Tuple[str, Optional[str], Optional[str]]:
+        """Send a chat message to Claude with web search grounding and thinking
         
         Args:
             prompt: The user's message (text only)
@@ -1787,7 +1787,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                         - {"type": "tool", "name": "web_search"}: Force web search
 
         Returns:
-            Tuple[str, Optional[str]]: (Claude's response, Source links if available)
+            Tuple[str, Optional[str], Optional[str]]: (Claude's response, Source links if available, Thinking content if available)
 
         Raises:
             ValueError: If the request fails or limits are exceeded
@@ -2210,7 +2210,15 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             sources_time = time.perf_counter() - sources_start
             logger.info(f"Source formatting took: {sources_time:.6f}s")
 
-            return (processed_response, formatted_sources)
+            # Format thinking content if available (with timing) 
+            thinking_start = time.perf_counter()
+            formatted_thinking = None
+            if thinking_content and thinking_content.strip():
+                formatted_thinking = self._format_thinking(thinking_content, thinking_used)
+            thinking_format_time = time.perf_counter() - thinking_start
+            logger.info(f"Thinking formatting took: {thinking_format_time:.6f}s")
+
+            return (processed_response, formatted_sources, formatted_thinking)
 
         except anthropic.RateLimitError as e:
             self._track_error()
@@ -2292,6 +2300,78 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Truncate long titles but keep them readable
             display_title = title if len(title) <= 60 else title[:57] + "..."
             formatted += f"{i}. **[{display_title}]({url})**\n   {domain}\n\n"
+        
+        return formatted
+
+    def _format_thinking(self, thinking_content: str, thinking_used: bool = True) -> str:
+        """Format thinking content for display (similar to sources format)
+        
+        Args:
+            thinking_content: Raw thinking content from Claude (summarized)
+            thinking_used: Whether thinking was actually used
+            
+        Returns:
+            str: Formatted thinking content for Discord display
+        """
+        if not thinking_content or not thinking_content.strip():
+            return "No thinking content available"
+            
+        # Clean and format the thinking content
+        cleaned_content = thinking_content.strip()
+        
+        # Split into paragraphs for better readability
+        paragraphs = [p.strip() for p in cleaned_content.split('\n\n') if p.strip()]
+        if not paragraphs:
+            paragraphs = [cleaned_content]
+            
+        # Format for Discord display with Korean-friendly styling
+        formatted = "**추론 과정**\n\n"
+        
+        for i, paragraph in enumerate(paragraphs):
+            # Handle very long paragraphs by breaking them down
+            if len(paragraph) > 500:
+                # Split long paragraphs at sentence boundaries
+                sentences = paragraph.split('. ')
+                current_chunk = ""
+                
+                for j, sentence in enumerate(sentences):
+                    sentence = sentence.strip()
+                    if not sentence:
+                        continue
+                        
+                    # Add period back if it was removed by split (except for last sentence)
+                    if j < len(sentences) - 1 and not sentence.endswith('.'):
+                        sentence += '.'
+                    
+                    # Check if adding this sentence would make the chunk too long
+                    if len(current_chunk) + len(sentence) + 2 > 400:  # Leave room for formatting
+                        if current_chunk:
+                            formatted += f"```\n{current_chunk.strip()}\n```\n\n"
+                            current_chunk = sentence
+                        else:
+                            # Single sentence is very long, just add it
+                            formatted += f"```\n{sentence}\n```\n\n"
+                    else:
+                        current_chunk += (" " if current_chunk else "") + sentence
+                
+                # Add remaining content
+                if current_chunk.strip():
+                    formatted += f"```\n{current_chunk.strip()}\n```\n\n"
+            else:
+                # Normal length paragraph
+                formatted += f"```\n{paragraph}\n```\n\n"
+        
+        # Add footer with metadata
+        formatted += f"*추론 과정 요약 ({len(thinking_content)} 자)*"
+        
+        # Ensure the formatted content isn't too long for Discord
+        if len(formatted) > 1800:  # Leave room for other message content
+            # Truncate but preserve the structure
+            truncate_point = formatted.rfind('```\n\n', 0, 1600)
+            if truncate_point > 0:
+                formatted = formatted[:truncate_point + 5] + "\n\n*[추론 과정이 길어서 일부만 표시할거야]*"
+            else:
+                formatted = formatted[:1600] + "...\n\n*[추론 과정이 길어서 잘렸어]*"
         
         return formatted
 
@@ -2408,7 +2488,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             cache_savings_tokens = cache_read_tokens * 0.9  # 90% savings
             cache_savings_cost = (cache_savings_tokens / 1_000_000) * 3.0  # $3/MTok saved
             
-            report += f"⚡ 캐시: 적중률 {cache_hit_rate:.1f}% ({cache_hits}/{cache_hits + cache_misses})\n"
+            report += f"⚡ 캐시: 사용률 {cache_hit_rate:.1f}% ({cache_hits}/{cache_hits + cache_misses})\n"
             if cache_savings_cost > 0.001:  # Only show if savings > $0.001
                 report += f"💰 캐시 절약: ${cache_savings_cost:.3f}\n"
             
