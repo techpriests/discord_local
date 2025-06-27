@@ -91,3 +91,7 @@ data/*.json
 
 # Keep example files
 !.env.example
+
+# Temporary exclusions
+src/commands/mystery_game.py
+src/commands/mystery_skills.py

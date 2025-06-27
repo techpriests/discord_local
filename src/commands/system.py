@@ -958,10 +958,10 @@ class SystemCommands(BaseCommands):
             # Define critical modules to check (add more as needed)
             modules_to_check = [
                 {
-                    "name": "GeminiAPI", 
-                    "module_path": "src.services.api.gemini", 
-                    "class_name": "GeminiAPI",
-                    "instance": self.bot.api_service.gemini
+                    "name": "ClaudeAPI", 
+                    "module_path": "src.services.api.claude", 
+                    "class_name": "ClaudeAPI",
+                    "instance": self.bot.api_service.claude
                 }
                 # Add other important modules here as needed
             ]

@@ -23,6 +23,7 @@ from src.commands.system import SystemCommands
 from src.commands.arknights import ArknightsCommands
 from src.commands.ai import AICommands
 from src.commands.team_draft import TeamDraftCommands
+
 from src.services.api.service import APIService
 
 logger = logging.getLogger(__name__)
@@ -217,7 +218,7 @@ class DiscordBot(commands.Bot):
                     elif command_class == AICommands:
                         cog = command_class()
                         cog.bot = self  # Set bot instance for API access
-                    elif command_class == TeamDraftCommands:
+                    elif command_class in [TeamDraftCommands]:
                         cog = command_class(self)  # Pass bot as constructor parameter
                     else:
                         cog = command_class()
