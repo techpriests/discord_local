@@ -50,7 +50,7 @@ class ClaudeAPI(BaseAPI[str]):
     
     # Web search settings
     WEB_SEARCH_ENABLED = True  # Enable/disable web search
-    WEB_SEARCH_MAX_USES = 1  # Limit searches per request (vs default 5)
+    WEB_SEARCH_MAX_USES = 3  # Limit searches per request (improved accuracy vs cost)
     WEB_SEARCH_COST_PER_1000 = 10  # $10 per 1000 searches
     
     # Prompt caching settings
@@ -498,7 +498,13 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 return self._estimate_conversation_tokens_fallback(messages)
                 
         except Exception as e:
-            logger.warning(f"Failed to count conversation tokens: {e}")
+            error_msg = str(e)
+            if "encrypted_content" in error_msg:
+                logger.warning(f"Token counting failed due to encrypted web search content: {e}")
+                logger.info("This is expected - token counting API doesn't support encrypted_content from web search results")
+            else:
+                logger.warning(f"Failed to count conversation tokens: {e}")
+            
             # Fallback: estimate based on message content
             return self._estimate_conversation_tokens_fallback(messages)
 
@@ -543,14 +549,48 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                             processed_block["input"] = getattr(block, 'input', {})
                         elif block.type == "web_search_tool_result":
                             processed_block["tool_use_id"] = getattr(block, 'tool_use_id', '')
-                            processed_block["content"] = getattr(block, 'content', [])
+                            # Filter out encrypted content for token counting API compatibility
+                            original_content = getattr(block, 'content', [])
+                            filtered_content = []
+                            for item in original_content:
+                                if hasattr(item, 'type') and item.type == "web_search_result":
+                                    # Create sanitized version without encrypted_content for token counting
+                                    sanitized_item = {
+                                        "type": "web_search_result",
+                                        "url": getattr(item, 'url', ''),
+                                        "title": getattr(item, 'title', ''),
+                                        "page_age": getattr(item, 'page_age', '')
+                                        # Note: encrypted_content is excluded for token counting API compatibility
+                                    }
+                                    filtered_content.append(sanitized_item)
+                                elif isinstance(item, dict):
+                                    # Handle dict format, exclude encrypted_content
+                                    sanitized_item = {k: v for k, v in item.items() if k != "encrypted_content"}
+                                    filtered_content.append(sanitized_item)
+                                else:
+                                    # Keep other content types as-is
+                                    filtered_content.append(item)
+                            processed_block["content"] = filtered_content
                         # Note: Cache control is ignored for token counting as it doesn't affect token count
                         
                         processed_blocks.append(processed_block)
                         
                     elif isinstance(block, dict):  # Already dict format (cookbook user messages)
-                        # Clean copy without cache control for token counting
-                        clean_block = {k: v for k, v in block.items() if k != "cache_control"}
+                        # Clean copy without problematic fields for token counting
+                        clean_block = {k: v for k, v in block.items() if k not in ["cache_control"]}
+                        
+                        # Special handling for web_search_tool_result blocks with encrypted content
+                        if block.get("type") == "web_search_tool_result" and "content" in clean_block:
+                            filtered_content = []
+                            for item in clean_block["content"]:
+                                if isinstance(item, dict):
+                                    # Remove encrypted_content for token counting API compatibility
+                                    sanitized_item = {k: v for k, v in item.items() if k != "encrypted_content"}
+                                    filtered_content.append(sanitized_item)
+                                else:
+                                    filtered_content.append(item)
+                            clean_block["content"] = filtered_content
+                        
                         processed_blocks.append(clean_block)
                         
                 compatible_messages.append({"role": role, "content": processed_blocks})
@@ -588,6 +628,17 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                         elif block.type == "redacted_thinking":
                             # Estimate tokens for redacted thinking (encrypted data)
                             total_chars += len(getattr(block, 'data', '')) // 2
+                        elif block.type == "web_search_tool_result":
+                            # Estimate tokens for web search results (approximate)
+                            content = getattr(block, 'content', [])
+                            for item in content:
+                                if hasattr(item, 'title'):
+                                    total_chars += len(getattr(item, 'title', ''))
+                                if hasattr(item, 'url'):
+                                    total_chars += len(getattr(item, 'url', '')) // 2  # URLs are less token-dense
+                                # encrypted_content is harder to estimate, use rough approximation
+                                if hasattr(item, 'encrypted_content'):
+                                    total_chars += 500  # Rough estimate for search result content
                     elif isinstance(block, dict):  # Dict format
                         if block.get("type") == "text":
                             total_chars += len(block.get("text", ""))
@@ -595,6 +646,15 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                             total_chars += len(block.get("thinking", ""))
                         elif block.get("type") == "redacted_thinking":
                             total_chars += len(block.get("data", "")) // 2
+                        elif block.get("type") == "web_search_tool_result":
+                            # Estimate tokens for web search results (dict format)
+                            content = block.get("content", [])
+                            for item in content:
+                                if isinstance(item, dict):
+                                    total_chars += len(item.get("title", ""))
+                                    total_chars += len(item.get("url", "")) // 2
+                                    if "encrypted_content" in item:
+                                        total_chars += 500  # Rough estimate
         
         return total_chars // 4  # Rough estimation: 4 characters per token
 
@@ -1727,6 +1787,9 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Get or create chat session
             messages = await self._get_or_create_chat_session(user_id)
 
+            # Optimize conversation history by removing stale web search results
+            messages = self._optimize_conversation_history(messages)
+
             # 📚 COOKBOOK: Cache Breakpoint 3 - User Messages (Incremental Conversation Caching)
             # Cache last user message as conversation grows (official pattern)
             conversation_turns = len(messages) // 2  # Rough estimate: user+assistant pairs
@@ -1895,6 +1958,22 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     search_used = True
                     logger.info("Web search tool result detected")
                     
+                    # Check for errors in web search results (per official docs)
+                    if hasattr(content_block, 'content'):
+                        if isinstance(content_block.content, dict) and content_block.content.get('type') == 'web_search_tool_result_error':
+                            error_code = content_block.content.get('error_code', 'unknown')
+                            error_messages = {
+                                'too_many_requests': '웹 검색 요청 한도 초과',
+                                'invalid_input': '잘못된 검색 쿼리',
+                                'max_uses_exceeded': f'검색 횟수 한도 초과 (최대 {self.WEB_SEARCH_MAX_USES}회)',
+                                'query_too_long': '검색 쿼리가 너무 길어',
+                                'unavailable': '웹 검색 서비스 일시 불가'
+                            }
+                            user_message = error_messages.get(error_code, f'웹 검색 오류: {error_code}')
+                            logger.warning(f"Web search error: {error_code} - {user_message}")
+                            # Don't count failed searches toward usage (per docs)
+                            search_used = False
+                    
                     if hasattr(content_block, 'content') and content_block.content:
                         for result_item in content_block.content:
                             if hasattr(result_item, 'type') and result_item.type == "web_search_result":
@@ -1950,20 +2029,6 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     "content": response.content  # Preserve EXACT content blocks from Claude
                 }
                 
-                # 📚 COOKBOOK: Cache Breakpoint 4 - Web Search Results (Discord Bot Enhancement)
-                # Apply strategic cache control for performance without breaking compliance
-                if self.PROMPT_CACHING_ENABLED and search_used:
-                    # Find the last web_search_tool_result for caching (per official docs)
-                    for i in range(len(response.content) - 1, -1, -1):
-                        content_block = response.content[i]
-                        if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
-                            # Apply cache control to the last search result for efficiency
-                            # This is a controlled modification that shouldn't break thinking signatures
-                            if not hasattr(content_block, 'cache_control'):
-                                content_block.cache_control = {"type": "ephemeral"}
-                                logger.info("📚 Applied cache control to last web search result for multi-turn efficiency")
-                            break
-                
                 messages.append(assistant_message)
                 logger.info(f"✅ COMPLIANCE: Stored assistant response exactly as received from Claude with {len(response.content)} content blocks")
                 
@@ -1979,6 +2044,20 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 )
                 if thinking_blocks_with_signatures > 0:
                     logger.info(f"✅ Preserved {thinking_blocks_with_signatures} thinking blocks with cryptographic signatures")
+                
+                # 📚 COOKBOOK: Cache Breakpoint 4 - Web Search Results (Discord Bot Enhancement)
+                # Apply strategic cache control for performance without breaking compliance
+                if self.PROMPT_CACHING_ENABLED and search_used:
+                    # Find the last web_search_tool_result for caching (per official docs)
+                    for i in range(len(response.content) - 1, -1, -1):
+                        content_block = response.content[i]
+                        if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
+                            # Apply cache control to the last search result for efficiency
+                            # This is a controlled modification that shouldn't break thinking signatures
+                            if not hasattr(content_block, 'cache_control'):
+                                content_block.cache_control = {"type": "ephemeral"}
+                                logger.info("📚 Applied cache control to last web search result for multi-turn efficiency")
+                            break
                 
             else:
                 # Text-only response - store as simple string for efficiency
@@ -2448,7 +2527,85 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             del self._last_interaction[user_id]
         
         if expired_users:
-            logger.info(f"Cleaned up {len(expired_users)} expired Claude chat sessions") 
+            logger.info(f"Cleaned up {len(expired_users)} expired Claude chat sessions")
+
+    def _optimize_conversation_history(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Optimize conversation history by removing stale web search results
+        
+        Args:
+            messages: Current conversation messages
+            
+        Returns:
+            List[Dict[str, Any]]: Optimized messages with stale web search data removed
+        """
+        if len(messages) < 2:
+            return messages
+            
+        optimized_messages = []
+        
+        for i, message in enumerate(messages):
+            if message.get("role") == "assistant":
+                content = message.get("content", "")
+                
+                if isinstance(content, list):
+                    # Check if this message contains web search results
+                    has_web_search = any(
+                        (hasattr(block, 'type') and block.type in ["web_search_tool_result", "server_tool_use"]) or
+                        (isinstance(block, dict) and block.get("type") in ["web_search_tool_result", "server_tool_use"])
+                        for block in content
+                    )
+                    
+                    if has_web_search:
+                        # Check if this is the most recent assistant message or if subsequent messages depend on search results
+                        is_recent = (i >= len(messages) - 2)  # Last or second-to-last message
+                        
+                        if not is_recent:
+                            # For older messages with web search, keep only text and thinking blocks
+                            # Remove web search tool results to reduce token usage
+                            filtered_content = []
+                            web_search_blocks_removed = 0
+                            
+                            for block in content:
+                                block_type = getattr(block, 'type', None) or (block.get("type") if isinstance(block, dict) else None)
+                                
+                                if block_type in ["web_search_tool_result", "server_tool_use"]:
+                                    web_search_blocks_removed += 1
+                                    continue  # Skip web search blocks in older messages
+                                else:
+                                    # Keep text, thinking, and other important blocks
+                                    filtered_content.append(block)
+                            
+                            if web_search_blocks_removed > 0:
+                                logger.info(f"Removed {web_search_blocks_removed} stale web search blocks from message {i}")
+                                
+                            # Only add the message if it still has content after filtering
+                            if filtered_content:
+                                optimized_message = message.copy()
+                                optimized_message["content"] = filtered_content
+                                optimized_messages.append(optimized_message)
+                            else:
+                                # If no content remains, skip this message entirely
+                                logger.info(f"Skipping message {i} as it contained only web search data")
+                        else:
+                            # Keep recent messages with web search results as they may be relevant
+                            optimized_messages.append(message)
+                    else:
+                        # No web search data, keep as-is
+                        optimized_messages.append(message)
+                else:
+                    # Simple string content, keep as-is
+                    optimized_messages.append(message)
+            else:
+                # User messages, keep as-is
+                optimized_messages.append(message)
+        
+        # Log optimization results
+        original_count = len(messages)
+        optimized_count = len(optimized_messages)
+        if original_count != optimized_count:
+            logger.info(f"Conversation optimization: {original_count} → {optimized_count} messages")
+            
+        return optimized_messages 
 
     def get_compliance_status(self) -> Dict[str, Any]:
         """Get current compliance status and diagnostic information
