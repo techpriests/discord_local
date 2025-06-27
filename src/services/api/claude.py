@@ -1,6 +1,6 @@
 import logging
 from typing import Dict, Any, List, Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 import os
 import json
 import re
@@ -57,6 +57,7 @@ class ClaudeAPI(BaseAPI[str]):
     PROMPT_CACHING_ENABLED = True  # Enable prompt caching for cost optimization
     CACHE_BREAKPOINTS_MAX = 4  # Maximum cache breakpoints allowed by Anthropic
     CACHE_MIN_TOKENS = 1024  # Minimum tokens required for caching (Claude Sonnet 4)
+    CONVERSATION_CACHE_THRESHOLD = 3  # Cache conversation history after this many turns
     
     # Thinking settings
     THINKING_ENABLED = True  # Enable thinking for better reasoning quality
@@ -82,6 +83,13 @@ Conversation guidelines:
 - Pay attention to topic changes and respond naturally to new questions
 - While you can reference previous conversation context when relevant, don't get stuck on old topics
 - If the user asks about something different, feel free to shift topics naturally
+
+Web search guidelines (when web search tool is available):
+- Answer as many questions as you can using your existing knowledge
+- Only search the web for queries that you cannot confidently answer with your current knowledge
+- Use web search for current events, recent developments, real-time information, or specific facts you're unsure about
+- If someone asks about something that might have happened recently or involves current data, consider using web search
+- Don't search for general knowledge, basic facts, or topics you're confident about
 
 Please maintain your core personality: cheerful, curious, scientifically inquisitive, playful(but not childish), deeply connected to nature, with strategic depth and moments of reflection. Please don't use emojis."""
 
@@ -151,6 +159,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         self._cache_read_tokens = self._saved_usage.get("cache_read_tokens", 0)
         self._cache_hits = self._saved_usage.get("cache_hits", 0)
         self._cache_misses = self._saved_usage.get("cache_misses", 0)
+        
+
         
         # Add stop reason tracking
         self._stop_reason_counts = self._saved_usage.get("stop_reason_counts", {
@@ -282,11 +292,11 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         }
     
     def configure_web_search(self, enabled: bool = True, max_uses: int = 1) -> None:
-        """Configure web search settings
+        """Configure web search settings following official documentation
         
         Args:
-            enabled: Whether to enable web search
-            max_uses: Maximum web searches per request (1-5)
+            enabled: Whether to enable web search (Claude decides when to use it)
+            max_uses: Maximum web searches per request (1-5, default 1 for cost efficiency)
         """
         self.WEB_SEARCH_ENABLED = enabled
         self.WEB_SEARCH_MAX_USES = max(1, min(5, max_uses))  # Clamp between 1-5
@@ -402,7 +412,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     tools=[{
                         "type": "web_search_20250305",
                         "name": "web_search",
-                        "max_uses": 5
+                        "max_uses": 1
                     }]
                 )
             else:
@@ -429,9 +439,10 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         """Count tokens for a full conversation context with tools and thinking
         
         Args:
-            messages: List of message dictionaries (content can be str or list of content blocks)
+            messages: List of message dictionaries with EXACT preservation format from Claude API
+                     content can be: str, list of dicts, or raw Anthropic content blocks (compliance mode)
             include_thinking: Whether to include thinking budget in token calculation
-                             Note: This adds the thinking BUDGET (16K) to input tokens, not actual thinking usage
+                             Note: This adds the thinking BUDGET to input tokens, not actual thinking usage
             
         Returns:
             int: Number of tokens for the full conversation
@@ -439,34 +450,32 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         try:
             if not self._client:
                 # Fallback: estimate based on message content
-                total_chars = 0
-                for msg in messages:
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        total_chars += len(content)
-                    elif isinstance(content, list):
-                        # Handle content blocks (like thinking)
-                        for block in content:
-                            if isinstance(block, dict):
-                                if block.get("type") == "text":
-                                    total_chars += len(block.get("text", ""))
-                                elif block.get("type") == "thinking":
-                                    total_chars += len(block.get("thinking", ""))
-                                elif block.get("type") == "redacted_thinking":
-                                    # Estimate tokens for redacted thinking (encrypted data)
-                                    total_chars += len(block.get("data", "")) // 2  # Rough estimate for encrypted content
-                return total_chars // 4
+                return self._estimate_conversation_tokens_fallback(messages)
                 
-            # Build request parameters
+            # Build request parameters  
+            current_date = date.today().strftime("%B %d %Y")
+            system_prompt_with_date = f"{self.MUELSYSE_CONTEXT}\n\nToday's date is {current_date}."
+            
+            # Convert messages to compatible format for token counting while preserving structure
+            compatible_messages = self._prepare_messages_for_token_counting(messages)
+            
             count_params = {
                 "model": "claude-sonnet-4-20250514",
-                "messages": messages,
-                # Temporarily disable web search tools for token counting test
-                # "tools": [{
-                #     "type": "web_search_20250305", 
-                #     "name": "web_search",
-                #     "max_uses": 5
-                # }]
+                "messages": compatible_messages,
+                # Include system prompt in the same format as actual requests (list format for consistency)
+                "system": [
+                    {
+                        "type": "text",
+                        "text": system_prompt_with_date,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ] if self.PROMPT_CACHING_ENABLED else system_prompt_with_date,
+                # Include web search tools for accurate token counting
+                "tools": [{
+                    "type": "web_search_20250305", 
+                    "name": "web_search",
+                    "max_uses": self.WEB_SEARCH_MAX_USES
+                }]
             }
             
             # Add thinking if enabled
@@ -486,40 +495,108 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 return response.usage.input_tokens
             else:
                 logger.warning("Could not extract conversation token count, using fallback")
-                total_chars = 0
-                for msg in messages:
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        total_chars += len(content)
-                    elif isinstance(content, list):
-                        for block in content:
-                            if isinstance(block, dict):
-                                if block.get("type") == "text":
-                                    total_chars += len(block.get("text", ""))
-                                elif block.get("type") == "thinking":
-                                    total_chars += len(block.get("thinking", ""))
-                                elif block.get("type") == "redacted_thinking":
-                                    total_chars += len(block.get("data", "")) // 2
-                return total_chars // 4
+                return self._estimate_conversation_tokens_fallback(messages)
                 
         except Exception as e:
             logger.warning(f"Failed to count conversation tokens: {e}")
             # Fallback: estimate based on message content
-            total_chars = 0
-            for msg in messages:
-                content = msg.get("content", "")
-                if isinstance(content, str):
-                    total_chars += len(content)
-                elif isinstance(content, list):
-                    for block in content:
-                        if isinstance(block, dict):
-                            if block.get("type") == "text":
-                                total_chars += len(block.get("text", ""))
-                            elif block.get("type") == "thinking":
-                                total_chars += len(block.get("thinking", ""))
-                            elif block.get("type") == "redacted_thinking":
-                                total_chars += len(block.get("data", "")) // 2
-            return total_chars // 4
+            return self._estimate_conversation_tokens_fallback(messages)
+
+    def _prepare_messages_for_token_counting(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Prepare messages for token counting API, handling cookbook approach formats
+        
+        Args:
+            messages: Messages in various formats (string, content blocks, exact preservation)
+            
+        Returns:
+            List[Dict[str, Any]]: Messages compatible with token counting API
+        """
+        compatible_messages = []
+        
+        for msg in messages:
+            role = msg.get("role", "")
+            content = msg.get("content", "")
+            
+            if isinstance(content, str):
+                # Simple string content - use as-is (early conversation turns)
+                compatible_messages.append({"role": role, "content": content})
+                
+            elif isinstance(content, list):
+                # Content blocks format - handle both dict and Anthropic objects
+                processed_blocks = []
+                for block in content:
+                    if hasattr(block, 'type'):  # Anthropic content block object
+                        processed_block = {"type": block.type}
+                        
+                        if block.type == "text":
+                            processed_block["text"] = getattr(block, 'text', '')
+                        elif block.type == "thinking":
+                            processed_block["thinking"] = getattr(block, 'thinking', '')
+                            # Include signature if present for accurate token counting
+                            if hasattr(block, 'signature'):
+                                processed_block["signature"] = block.signature
+                        elif block.type == "redacted_thinking":
+                            processed_block["data"] = getattr(block, 'data', '')
+                        elif block.type == "server_tool_use":
+                            processed_block["id"] = getattr(block, 'id', '')
+                            processed_block["name"] = getattr(block, 'name', '')
+                            processed_block["input"] = getattr(block, 'input', {})
+                        elif block.type == "web_search_tool_result":
+                            processed_block["tool_use_id"] = getattr(block, 'tool_use_id', '')
+                            processed_block["content"] = getattr(block, 'content', [])
+                        # Note: Cache control is ignored for token counting as it doesn't affect token count
+                        
+                        processed_blocks.append(processed_block)
+                        
+                    elif isinstance(block, dict):  # Already dict format (cookbook user messages)
+                        # Clean copy without cache control for token counting
+                        clean_block = {k: v for k, v in block.items() if k != "cache_control"}
+                        processed_blocks.append(clean_block)
+                        
+                compatible_messages.append({"role": role, "content": processed_blocks})
+                
+            else:
+                # Fallback for unknown format
+                logger.warning(f"Unknown content format in message: {type(content)}")
+                compatible_messages.append({"role": role, "content": str(content)})
+                
+        return compatible_messages
+
+    def _estimate_conversation_tokens_fallback(self, messages: List[Dict[str, Any]]) -> int:
+        """Fallback token estimation when API counting fails
+        
+        Args:
+            messages: Messages in any format
+            
+        Returns:
+            int: Estimated token count
+        """
+        total_chars = 0
+        
+        for msg in messages:
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                # Handle content blocks
+                for block in content:
+                    if hasattr(block, 'type'):  # Anthropic content block object
+                        if block.type == "text":
+                            total_chars += len(getattr(block, 'text', ''))
+                        elif block.type == "thinking":
+                            total_chars += len(getattr(block, 'thinking', ''))
+                        elif block.type == "redacted_thinking":
+                            # Estimate tokens for redacted thinking (encrypted data)
+                            total_chars += len(getattr(block, 'data', '')) // 2
+                    elif isinstance(block, dict):  # Dict format
+                        if block.get("type") == "text":
+                            total_chars += len(block.get("text", ""))
+                        elif block.get("type") == "thinking":
+                            total_chars += len(block.get("thinking", ""))
+                        elif block.get("type") == "redacted_thinking":
+                            total_chars += len(block.get("data", "")) // 2
+        
+        return total_chars // 4  # Rough estimation: 4 characters per token
 
     def _check_token_thresholds(self, prompt_tokens: int) -> None:
         """Check if token usage is within acceptable limits
@@ -858,7 +935,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Schedule save (non-blocking)
             asyncio.create_task(self._schedule_save())
             
-            logger.debug(f"Processed {queue_size} usage records in batch")
+            logger.info(f"Processed {queue_size} usage records in batch")
             
         except Exception as e:
             logger.error(f"Error processing usage batch: {e}")
@@ -1214,25 +1291,36 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 
         elif stop_reason == "pause_turn":
             # Claude paused a long-running operation (e.g., complex web search)
-            logger.info("Claude paused for long-running operation")
+            logger.info("Claude paused for long-running operation - COMPLIANCE: preserving exact response")
             
             # For pause_turn, we should continue the conversation automatically
             try:
-                # Add the paused response to conversation
+                # 🔧 COMPLIANCE: Store the paused response EXACTLY as received from Claude
+                # This preserves thinking block signatures and tool result structures
                 if response.content:
-                    messages.append({"role": "assistant", "content": response.content})
+                    paused_message = {
+                        "role": "assistant", 
+                        "content": response.content  # Preserve EXACT content blocks
+                    }
+                    messages.append(paused_message)
+                    logger.info(f"✅ COMPLIANCE: Stored paused response exactly as received with {len(response.content)} content blocks")
                     
-                # Build continuation request parameters
+                # Build continuation request parameters with current date
+                from datetime import date
+                current_date = date.today().strftime("%B %d %Y")
+                system_prompt_with_date = f"{self.MUELSYSE_CONTEXT}\n\nToday's date is {current_date}."
+                
                 continuation_params = {
                     "model": "claude-sonnet-4-20250514",
                     "max_tokens": self.MAX_TOTAL_TOKENS - self.MAX_PROMPT_TOKENS,
                     "messages": messages,
-                    "system": self.MUELSYSE_CONTEXT,
+                    "system": system_prompt_with_date,  # Use consistent system prompt format
                     "tools": [{
                         "type": "web_search_20250305",
                         "name": "web_search",
-                        "max_uses": 5
-                    }]
+                        "max_uses": self.WEB_SEARCH_MAX_USES
+                    }],
+                    "tool_choice": {"type": "auto"}  # Consistent with main chat method
                 }
                 
                 # Add thinking if enabled
@@ -1241,13 +1329,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                         "type": "enabled",
                         "budget_tokens": self.THINKING_BUDGET_TOKENS
                     }
-                    logger.info(f"Thinking enabled with {self.THINKING_BUDGET_TOKENS} token budget")
-                    # Note: The thinking budget is reserved but only actual thinking usage counts toward output tokens
-                    # The budget allocation does get counted as part of input tokens in Anthropic's counting API
-                    # but actual thinking tokens are reported separately in the response usage
-                    # Note: temperature, top_k, and forced tool use are incompatible with thinking
-                # Temperature, top_k, and other sampling parameters are incompatible with thinking
-                # Since thinking is enabled, we omit all incompatible parameters
+                    logger.info(f"Thinking enabled for continuation with {self.THINKING_BUDGET_TOKENS} token budget")
+                    # Note: Temperature, top_k, and other sampling parameters are incompatible with thinking
                 
                 # Continue the conversation
                 continuation_response = await self._client.messages.create(**continuation_params)
@@ -1599,12 +1682,16 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         
         return '\n'.join(final_lines).strip()
 
-    async def chat(self, prompt: str, user_id: int) -> Tuple[str, Optional[str]]:
+    async def chat(self, prompt: str, user_id: int, tool_choice: Optional[Dict[str, Any]] = None) -> Tuple[str, Optional[str]]:
         """Send a chat message to Claude with web search grounding
         
         Args:
             prompt: The user's message (text only)
             user_id: Discord user ID
+            tool_choice: Optional tool choice parameter following official documentation
+                        - {"type": "auto"}: Claude decides (default)
+                        - {"type": "any"}: Must use one of the tools
+                        - {"type": "tool", "name": "web_search"}: Force web search
 
         Returns:
             Tuple[str, Optional[str]]: (Claude's response, Source links if available)
@@ -1640,8 +1727,28 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Get or create chat session
             messages = await self._get_or_create_chat_session(user_id)
 
-            # Add user message to session
-            messages.append({"role": "user", "content": prompt})
+            # 📚 COOKBOOK: Cache Breakpoint 3 - User Messages (Incremental Conversation Caching)
+            # Cache last user message as conversation grows (official pattern)
+            conversation_turns = len(messages) // 2  # Rough estimate: user+assistant pairs
+            
+            if (self.PROMPT_CACHING_ENABLED and conversation_turns >= self.CONVERSATION_CACHE_THRESHOLD):
+                # Apply cache control to user message for incremental conversation caching
+                user_message = {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": prompt,
+                            "cache_control": {"type": "ephemeral"}
+                        }
+                    ]
+                }
+                messages.append(user_message)
+                logger.info(f"📚 COOKBOOK: Applied user message caching at turn {conversation_turns + 1}")
+            else:
+                # Simple user message for early conversation turns
+                messages.append({"role": "user", "content": prompt})
+                logger.info(f"Added simple user message (turn {conversation_turns + 1})")
             
             # Check token limits with full conversation context (thinking budget counts as input tokens)
             conversation_tokens = await self._count_conversation_tokens(messages, include_thinking=self.THINKING_ENABLED)
@@ -1654,12 +1761,13 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 "messages": messages,
             }
             
-            # Add web search tool with prompt caching (Cache Breakpoint 1: Tools)
+            # 📚 COOKBOOK: Cache Breakpoint 1 - Tools
+            # Add web search tool with prompt caching following official patterns
             if self.WEB_SEARCH_ENABLED:
                 web_search_tool = {
                     "type": "web_search_20250305",
                     "name": "web_search",
-                    "max_uses": self.WEB_SEARCH_MAX_USES,  # Reduced from default 5 to 1
+                    "max_uses": self.WEB_SEARCH_MAX_USES,  # Optimized for cost efficiency
                 }
                 
                 # Add cache control to tools if prompt caching is enabled
@@ -1667,10 +1775,35 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     web_search_tool["cache_control"] = {"type": "ephemeral"}
                 
                 api_params["tools"] = [web_search_tool]
-                logger.info(f"Web search enabled with max_uses={self.WEB_SEARCH_MAX_USES}, caching={self.PROMPT_CACHING_ENABLED}")
+                
+                # Add tool choice (following official cookbook patterns)
+                if tool_choice:
+                    api_params["tool_choice"] = tool_choice
+                    logger.info(f"Tool choice specified: {tool_choice}")
+                else:
+                    # Explicitly set to "auto" as per cookbook best practices
+                    api_params["tool_choice"] = {"type": "auto"}
+                    logger.info(f"Tool choice set to auto - Claude will decide when to use web search")
+                
+                logger.info(f"Web search tool configured: max_uses={self.WEB_SEARCH_MAX_USES}, caching={self.PROMPT_CACHING_ENABLED}")
             
-            # Add system prompt (handled specially by Claude - auto-cached when stable)
-            api_params["system"] = self.MUELSYSE_CONTEXT
+            # 📚 COOKBOOK: Cache Breakpoint 2 - System Instructions
+            # Include current date as per cookbook best practices
+            current_date = date.today().strftime("%B %d %Y")
+            system_prompt_with_date = f"{self.MUELSYSE_CONTEXT}\n\nToday's date is {current_date}."
+            
+            if self.PROMPT_CACHING_ENABLED:
+                api_params["system"] = [
+                    {
+                        "type": "text",
+                        "text": system_prompt_with_date,
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+                logger.info(f"System prompt configured with cache control and current date: {current_date}")
+            else:
+                api_params["system"] = system_prompt_with_date
+                logger.info(f"System prompt configured with current date: {current_date}")
             
             # Add thinking if enabled
             if self.THINKING_ENABLED:
@@ -1804,73 +1937,61 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if not response_text and not tool_use_blocks:
                 raise ValueError("No text content or tool use in Claude response")
 
-            # Add assistant response to session (clean version without web search artifacts)
-            # Store only the core response text to avoid web search contamination in future conversations
-            clean_response_text = response_text
+            # 🔧 CRITICAL: MAXIMUM COMPLIANCE with official Extended Thinking + Tools cookbook
+            # Preserve EXACT thinking blocks with cryptographic signatures to prevent validation failures
+            # Store complete assistant response exactly as received for multi-turn conversations
             
-            if thinking_used or tool_use_blocks:
-                # Store response with thinking and/or tool blocks (required by Anthropic for multi-turn tool use)
-                assistant_content = []
+            if thinking_used or tool_use_blocks or search_used:
+                # COOKBOOK COMPLIANCE: Store response exactly as received from Claude API
+                # This preserves thinking block signatures and ensures proper tool conversation flow
+                # DO NOT reconstruct content blocks - use the exact response.content
+                assistant_message = {
+                    "role": "assistant", 
+                    "content": response.content  # Preserve EXACT content blocks from Claude
+                }
                 
-                # Add all thinking and redacted_thinking blocks first
-                for content_block in response.content:
-                    if content_block.type == "thinking":
-                        thinking_block = {"type": "thinking", "thinking": content_block.thinking}
-                        if hasattr(content_block, 'signature'):
-                            thinking_block["signature"] = content_block.signature
-                        assistant_content.append(thinking_block)
-                    elif content_block.type == "redacted_thinking":
-                        # Preserve redacted thinking blocks as-is for API compatibility
-                        redacted_block = {"type": "redacted_thinking"}
-                        if hasattr(content_block, 'data'):
-                            redacted_block["data"] = content_block.data
-                        assistant_content.append(redacted_block)
+                # 📚 COOKBOOK: Cache Breakpoint 4 - Web Search Results (Discord Bot Enhancement)
+                # Apply strategic cache control for performance without breaking compliance
+                if self.PROMPT_CACHING_ENABLED and search_used:
+                    # Find the last web_search_tool_result for caching (per official docs)
+                    for i in range(len(response.content) - 1, -1, -1):
+                        content_block = response.content[i]
+                        if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
+                            # Apply cache control to the last search result for efficiency
+                            # This is a controlled modification that shouldn't break thinking signatures
+                            if not hasattr(content_block, 'cache_control'):
+                                content_block.cache_control = {"type": "ephemeral"}
+                                logger.info("📚 Applied cache control to last web search result for multi-turn efficiency")
+                            break
                 
-                # Add all tool_use blocks (critical for multi-turn tool workflows)
-                for tool_block in tool_use_blocks:
-                    assistant_content.append(tool_block)
-                    logger.info(f"Added tool_use block to conversation: {tool_block['name']}")
+                messages.append(assistant_message)
+                logger.info(f"✅ COMPLIANCE: Stored assistant response exactly as received from Claude with {len(response.content)} content blocks")
                 
-                # Add clean text content with cache control if search was used and caching is enabled
-                if clean_response_text:  # Only add text block if we have actual text content
-                    text_block = {
-                        "type": "text",
-                        "text": clean_response_text
-                    }
-                    
-                    # Cache Breakpoint 2: Conversation with web search results
-                    if search_used and self.PROMPT_CACHING_ENABLED:
-                        text_block["cache_control"] = {"type": "ephemeral"}
-                        logger.info("Added cache control to assistant response with web search results")
-                    
-                    assistant_content.append(text_block)
+                # Log compliance details for debugging
+                content_types = [getattr(block, 'type', 'unknown') for block in response.content]
+                logger.info(f"Preserved content block types: {content_types}")
                 
-                messages.append({"role": "assistant", "content": assistant_content})
-                logger.info(f"Stored assistant response with {len(assistant_content)} content blocks (thinking: {thinking_used}, tools: {len(tool_use_blocks)})")
+                # Check for thinking signatures to verify compliance
+                thinking_blocks_with_signatures = sum(
+                    1 for block in response.content 
+                    if (hasattr(block, 'type') and block.type == "thinking" and 
+                        hasattr(block, 'signature'))
+                )
+                if thinking_blocks_with_signatures > 0:
+                    logger.info(f"✅ Preserved {thinking_blocks_with_signatures} thinking blocks with cryptographic signatures")
+                
             else:
-                # Regular text-only response (clean version)
-                if search_used and self.PROMPT_CACHING_ENABLED:
-                    # Cache Breakpoint 2: Conversation with web search results  
-                    messages.append({
-                        "role": "assistant", 
-                        "content": [
-                            {
-                                "type": "text",
-                                "text": clean_response_text,
-                                "cache_control": {"type": "ephemeral"}
-                            }
-                        ]
-                    })
-                    logger.info("Stored assistant response with cache control (web search results)")
-                else:
-                    # No caching - store as simple string
-                    messages.append({"role": "assistant", "content": clean_response_text})
-                    logger.info("Stored clean assistant response without web search artifacts")
+                # Text-only response - store as simple string for efficiency
+                # This path is used when no thinking or tools are involved
+                messages.append({"role": "assistant", "content": response_text})
+                logger.info("Stored text-only assistant response as simple string")
             
-            # Trim conversation history if too long
+            # Trim conversation history if too long, preserving web search efficiency
             if len(messages) > self.MAX_HISTORY_LENGTH * 2:  # *2 because we have user+assistant pairs
-                # Keep system message (if any) and recent conversation
+                # Keep recent conversation but be smart about web search results
+                # Recent messages are more likely to have cached web search results
                 messages = messages[-self.MAX_HISTORY_LENGTH * 2:]
+                logger.info(f"Trimmed conversation to {len(messages)} messages, preserving recent web search cache")
 
             # Update chat session
             self._chat_sessions[user_id] = messages
@@ -1898,12 +2019,17 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 
                 # Track web search usage
                 if search_used and hasattr(usage, 'server_tool_use'):
-                    web_search_count = usage.server_tool_use.get('web_search_requests', 0)
+                    # Use getattr instead of .get() since server_tool_use is a Pydantic model, not a dict
+                    server_tool_usage = usage.server_tool_use
+                    web_search_count = getattr(server_tool_usage, 'web_search_requests', 0)
                     if web_search_count > 0:
                         self._web_search_requests += web_search_count
                         search_cost = (web_search_count / 1000.0) * self.WEB_SEARCH_COST_PER_1000
                         self._web_search_cost += search_cost
                         logger.info(f"Web search: {web_search_count} requests, cost: ${search_cost:.4f}")
+                    else:
+                        # If no direct web_search_requests field, check if server tool use occurred
+                        logger.info("Web search tool used but no request count available")
                 
                 # Track prompt caching performance 
                 if self.PROMPT_CACHING_ENABLED:
@@ -1922,10 +2048,26 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                         logger.info(f"Cache hit: {cache_read:,} tokens read from cache ({cache_savings_pct:.1f}% cost savings)")
                     
                     if cache_creation == 0 and cache_read == 0:
-                        logger.info("No cache activity - request too small or caching disabled")
+                        logger.info(f"No cache activity - input tokens: {prompt_tokens:,}, threshold: 1024")
 
             # Track usage in background (non-blocking) - only time the dispatch
             tracking_start = time.perf_counter()
+            
+            # Log immediate token usage (before background processing)
+            if hasattr(response, 'usage'):
+                usage = response.usage
+                prompt_tokens = getattr(usage, 'input_tokens', 0)
+                response_tokens = getattr(usage, 'output_tokens', 0)
+                thinking_tokens = getattr(usage, 'thinking_tokens', 0)
+                total_tokens = prompt_tokens + response_tokens
+                
+                logger.info(f"Token usage - Prompt: {prompt_tokens:,}, Response: {response_tokens:,}, "
+                          f"Thinking: {thinking_tokens:,}, Total: {total_tokens:,}")
+                
+                # Log Korean usage summary
+                logger.info(f"사용량 - 입력: {prompt_tokens:,}토큰, 출력: {response_tokens:,}토큰, "
+                          f"사고: {thinking_tokens:,}토큰, 전체: {total_tokens:,}토큰")
+            
             asyncio.create_task(self._track_request_with_response_background(prompt, processed_response, response))
             tracking_time = time.perf_counter() - tracking_start
             logger.info(f"Usage tracking dispatch took: {tracking_time:.6f}s")
@@ -1950,15 +2092,50 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             raise ValueError("API 요청 한도에 도달했어. 잠시 후에 다시 시도해줄래?") from e
         except anthropic.APIError as e:
             self._track_error()
-            logger.error(f"Claude API error: {e}")
-            raise ValueError(f"Claude API 요청에 실패했어: {str(e)}") from e
+            error_message = str(e)
+            logger.error(f"Claude API error: {error_message}")
+            
+            # Handle specific compliance-related errors
+            if "signature" in error_message.lower() or "validation" in error_message.lower():
+                logger.error("🚨 COMPLIANCE ERROR: Thinking block signature validation failed")
+                # Clear potentially corrupted session to prevent further signature errors
+                if user_id in self._chat_sessions:
+                    del self._chat_sessions[user_id]
+                    logger.info(f"Cleared chat session for user {user_id} due to signature validation failure")
+                raise ValueError("대화 상태에 문제가 발생했어. 새로운 대화를 시작해줄래?") from e
+            elif "content block" in error_message.lower() or "format" in error_message.lower():
+                logger.error("🚨 COMPLIANCE ERROR: Content block format validation failed")
+                # Clear session and suggest retry
+                if user_id in self._chat_sessions:
+                    del self._chat_sessions[user_id]
+                    logger.info(f"Cleared chat session for user {user_id} due to content format error")
+                raise ValueError("메시지 형식에 문제가 발생했어. 새로운 대화를 시작해줄래?") from e
+            elif "thinking" in error_message.lower():
+                logger.error("🚨 COMPLIANCE ERROR: Thinking-related API error")
+                raise ValueError("추론 처리 중 문제가 발생했어. 다시 시도해볼래?") from e
+            else:
+                raise ValueError(f"Claude API 요청에 실패했어: {error_message}") from e
+                
         except Exception as e:
             self._track_error()
-            logger.error(f"Error in Claude chat: {e}")
-            if "rate limit" in str(e).lower() or "quota" in str(e).lower():
+            error_message = str(e)
+            logger.error(f"Error in Claude chat: {error_message}")
+            
+            # Handle specific error types that might indicate compliance issues
+            if "signature" in error_message.lower():
+                logger.error("🚨 CRITICAL: Signature-related error in chat processing")
+                # Clear the problematic session
+                if user_id in self._chat_sessions:
+                    del self._chat_sessions[user_id]
+                    logger.info(f"Cleared chat session for user {user_id} due to signature error")
+                raise ValueError("대화 보안에 문제가 발생했어. 새로운 대화를 시작해줄래?") from e
+            elif "content block" in error_message.lower():
+                logger.error("🚨 CRITICAL: Content block handling error")
+                raise ValueError("메시지 처리 중 구조적 문제가 발생했어. 다시 시도해볼래?") from e
+            elif "rate limit" in error_message.lower() or "quota" in error_message.lower():
                 raise ValueError("Claude API가 현재 과부하 상태야. 잠시 후에 다시 시도해줄래?") from e
             else:
-                raise ValueError(f"Claude API 요청에 실패했어: {str(e)}") from e
+                raise ValueError(f"Claude API 요청에 실패했어: {error_message}") from e
 
     def _format_sources(self, source_links: List[Tuple[str, str, str]]) -> str:
         """Format source links for display (matching Gemini format)
@@ -2017,6 +2194,9 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             if datetime.fromisoformat(req["timestamp"]) > current_time - timedelta(hours=1)
         )
         
+        # Get compliance status for enhanced reporting
+        compliance_status = self.get_compliance_status()
+        
         return {
             "service_name": "Claude API",
             "daily_requests": self._daily_requests,
@@ -2042,7 +2222,16 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             "cache_misses": self._cache_misses,
             "stop_reason_counts": self._stop_reason_counts,
             "cpu_usage": self._cpu_usage,
-            "memory_usage": self._memory_usage
+            "memory_usage": self._memory_usage,
+            # Enhanced compliance metrics
+            "compliance": {
+                "mode": compliance_status["compliance_mode"],
+                "version": compliance_status["implementation_version"],
+                "thinking_signature_rate": compliance_status["thinking_signature_preservation_rate"],
+                "active_sessions": compliance_status["total_active_sessions"],
+                "sessions_with_thinking": compliance_status["sessions_with_thinking"],
+                "exact_preservation_enabled": True
+            }
         }
 
     def get_formatted_report(self) -> str:
@@ -2260,3 +2449,205 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         
         if expired_users:
             logger.info(f"Cleaned up {len(expired_users)} expired Claude chat sessions") 
+
+    def get_compliance_status(self) -> Dict[str, Any]:
+        """Get current compliance status and diagnostic information
+        
+        Returns:
+            Dict[str, Any]: Compliance status and diagnostic data
+        """
+        total_sessions = len(self._chat_sessions)
+        sessions_with_thinking = 0
+        sessions_with_tools = 0
+        total_thinking_blocks = 0
+        total_thinking_with_signatures = 0
+        
+        # Analyze current chat sessions for compliance indicators
+        for user_id, messages in self._chat_sessions.items():
+            session_has_thinking = False
+            session_has_tools = False
+            
+            for message in messages:
+                if message.get("role") == "assistant":
+                    content = message.get("content", "")
+                    
+                    if isinstance(content, list):
+                        # Check for thinking and tool blocks in the content
+                        for block in content:
+                            if hasattr(block, 'type'):  # Anthropic content block object
+                                if block.type == "thinking":
+                                    session_has_thinking = True
+                                    total_thinking_blocks += 1
+                                    if hasattr(block, 'signature'):
+                                        total_thinking_with_signatures += 1
+                                elif block.type in ["server_tool_use", "web_search_tool_result"]:
+                                    session_has_tools = True
+                            elif isinstance(block, dict):  # Dict format
+                                if block.get("type") == "thinking":
+                                    session_has_thinking = True
+                                    total_thinking_blocks += 1
+                                    if "signature" in block:
+                                        total_thinking_with_signatures += 1
+                                elif block.get("type") in ["server_tool_use", "web_search_tool_result"]:
+                                    session_has_tools = True
+            
+            if session_has_thinking:
+                sessions_with_thinking += 1
+            if session_has_tools:
+                sessions_with_tools += 1
+        
+        # Calculate compliance metrics
+        thinking_signature_rate = (total_thinking_with_signatures / total_thinking_blocks * 100) if total_thinking_blocks > 0 else 0
+        
+        return {
+            "compliance_mode": "maximum",
+            "implementation_version": "2025-01-extended-thinking-tools",
+            "total_active_sessions": total_sessions,
+            "sessions_with_thinking": sessions_with_thinking,
+            "sessions_with_tools": sessions_with_tools,
+            "thinking_blocks_total": total_thinking_blocks,
+            "thinking_blocks_with_signatures": total_thinking_with_signatures,
+            "thinking_signature_preservation_rate": thinking_signature_rate,
+            "settings": {
+                "thinking_enabled": self.THINKING_ENABLED,
+                "thinking_budget": self.THINKING_BUDGET_TOKENS,
+                "web_search_enabled": self.WEB_SEARCH_ENABLED,
+                "prompt_caching_enabled": self.PROMPT_CACHING_ENABLED,
+                "exact_content_preservation": True
+            },
+            "error_tracking": {
+                "signature_validation_failures": 0,  # Would need to be tracked if we implement it
+                "content_format_errors": 0,
+                "recent_compliance_errors": []  # Would store recent compliance-related errors
+            }
+        }
+
+    def validate_conversation_compliance(self, user_id: int) -> Dict[str, Any]:
+        """Validate that a specific conversation maintains compliance standards
+        
+        Args:
+            user_id: Discord user ID to validate
+            
+        Returns:
+            Dict[str, Any]: Validation results and recommendations
+        """
+        if user_id not in self._chat_sessions:
+            return {
+                "status": "no_session",
+                "compliant": True,
+                "message": "No active session to validate"
+            }
+        
+        messages = self._chat_sessions[user_id]
+        issues = []
+        warnings = []
+        
+        thinking_blocks_found = 0
+        manual_reconstructions_detected = 0
+        signature_preservation_count = 0
+        
+        for i, message in enumerate(messages):
+            if message.get("role") == "assistant":
+                content = message.get("content", "")
+                
+                if isinstance(content, list):
+                    # Check each content block
+                    for j, block in enumerate(content):
+                        if hasattr(block, 'type'):  # Anthropic content block object (GOOD)
+                            if block.type == "thinking":
+                                thinking_blocks_found += 1
+                                if hasattr(block, 'signature'):
+                                    signature_preservation_count += 1
+                                else:
+                                    warnings.append(f"Message {i}, block {j}: Thinking block without signature")
+                        elif isinstance(block, dict):  # Manual reconstruction (BAD for compliance)
+                            if block.get("type") == "thinking":
+                                thinking_blocks_found += 1
+                                manual_reconstructions_detected += 1
+                                issues.append(f"Message {i}, block {j}: Manually reconstructed thinking block detected")
+                                if "signature" not in block:
+                                    issues.append(f"Message {i}, block {j}: Missing signature in thinking block")
+                                else:
+                                    # This could be a legacy format
+                                    warnings.append(f"Message {i}, block {j}: Dict-format thinking block with signature (legacy?)")
+        
+        # Determine compliance status
+        is_compliant = len(issues) == 0
+        signature_rate = (signature_preservation_count / thinking_blocks_found * 100) if thinking_blocks_found > 0 else 100
+        
+        result = {
+            "status": "compliant" if is_compliant else "non_compliant",
+            "compliant": is_compliant,
+            "thinking_blocks_found": thinking_blocks_found,
+            "signature_preservation_count": signature_preservation_count,
+            "signature_preservation_rate": signature_rate,
+            "manual_reconstructions": manual_reconstructions_detected,
+            "issues": issues,
+            "warnings": warnings,
+            "recommendations": []
+        }
+        
+        # Add recommendations based on findings
+        if manual_reconstructions_detected > 0:
+            result["recommendations"].append("Clear session and restart conversation to use exact preservation mode")
+        if signature_rate < 100 and thinking_blocks_found > 0:
+            result["recommendations"].append("Verify thinking block signature preservation in conversation storage")
+        if len(warnings) > 0:
+            result["recommendations"].append("Check for mixed legacy/compliance formats in conversation history")
+            
+        return result
+
+    async def test_compliance_implementation(self) -> Dict[str, Any]:
+        """Test the compliance implementation with a simple request
+        
+        Returns:
+            Dict[str, Any]: Test results and compliance verification
+        """
+        try:
+            logger.info("🧪 Testing maximum compliance implementation...")
+            
+            # Create a test conversation that should trigger thinking
+            test_prompt = "복잡한 생태계 문제를 분석해줘: 기후 변화가 생물 다양성에 미치는 영향을 설명하고, 라인랩에서 할 수 있는 연구 방향을 제안해줘."
+            test_user_id = 999999  # Special test user ID
+            
+            # Clear any existing test session
+            if test_user_id in self._chat_sessions:
+                del self._chat_sessions[test_user_id]
+            
+            # Run the test request
+            response, sources = await self.chat(test_prompt, test_user_id)
+            
+            # Analyze the results
+            compliance_validation = self.validate_conversation_compliance(test_user_id)
+            
+            # Clean up test session
+            if test_user_id in self._chat_sessions:
+                del self._chat_sessions[test_user_id]
+            
+            test_results = {
+                "test_status": "completed",
+                "response_generated": bool(response),
+                "sources_provided": bool(sources),
+                "compliance_validation": compliance_validation,
+                "implementation_working": compliance_validation.get("compliant", False),
+                "test_summary": {
+                    "thinking_blocks_preserved": compliance_validation.get("thinking_blocks_found", 0) > 0,
+                    "signatures_preserved": compliance_validation.get("signature_preservation_rate", 0) == 100,
+                    "manual_reconstructions_avoided": compliance_validation.get("manual_reconstructions", 0) == 0
+                }
+            }
+            
+            logger.info(f"✅ Compliance test completed: {'PASSED' if test_results['implementation_working'] else 'FAILED'}")
+            return test_results
+            
+        except Exception as e:
+            logger.error(f"❌ Compliance test failed: {e}")
+            return {
+                "test_status": "failed",
+                "error": str(e),
+                "implementation_working": False,
+                "test_summary": {
+                    "error_type": type(e).__name__,
+                    "compliance_risk": "high" if "signature" in str(e).lower() else "medium"
+                }
+            }
