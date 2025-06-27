@@ -643,6 +643,90 @@ class AICommands(BaseCommands):
             await ctx.send("❌ 생각 모드 설정 중 오류가 발생했어.")
 
     @commands.command(
+        name="대화기록",
+        help="현재 대화 세션의 기록을 확인합니다",
+        brief="대화 기록 확인",
+        aliases=["history", "기록"],
+        description="현재 진행 중인 대화 세션의 메시지 기록을 보여줘.\n"
+        "디버깅 및 문제 해결용 명령어야.\n\n"
+        "사용법:\n"
+        "• 뮤 대화기록 - 현재 대화 세션 기록 확인\n\n"
+        "참고:\n"
+        "• 관리자 전용 명령어\n"
+        "• 세션이 없으면 '대화 기록 없음'이 표시돼",
+        hidden=True  # Hide from help command for regular users
+    )
+    @commands.is_owner()  # Only bot owner can view conversation history
+    async def conversation_history(self, ctx: commands.Context) -> None:
+        """Show current conversation history for debugging"""
+        try:
+            claude_api = self.api_service.claude
+            user_id = ctx.author.id
+            
+            # Get conversation session
+            if user_id not in claude_api._chat_sessions:
+                await ctx.send("📭 현재 진행 중인 대화 세션이 없어.")
+                return
+                
+            messages = claude_api._chat_sessions[user_id]
+            
+            if not messages:
+                await ctx.send("📭 대화 기록이 비어있어.")
+                return
+            
+            # Create debug embed
+            embed = discord.Embed(
+                title="🔍 대화 기록 (디버그)",
+                description=f"총 {len(messages)}개의 메시지",
+                color=INFO_COLOR
+            )
+            
+            # Show last few messages for debugging
+            for i, msg in enumerate(messages[-6:], 1):  # Show last 6 messages
+                role = msg.get("role", "unknown")
+                content = msg.get("content", "")
+                
+                # Handle different content types
+                if isinstance(content, list):
+                    # Complex content with blocks
+                    content_summary = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            block_type = block.get("type", "unknown")
+                            if block_type == "text":
+                                text = block.get("text", "")[:100]
+                                content_summary.append(f"[텍스트] {text}...")
+                            elif block_type == "thinking":
+                                content_summary.append("[생각 블록]")
+                            elif block_type == "redacted_thinking":
+                                content_summary.append("[암호화된 생각]")
+                            else:
+                                content_summary.append(f"[{block_type}]")
+                    content_display = "\n".join(content_summary)
+                else:
+                    # Simple text content
+                    content_display = content[:200] + "..." if len(content) > 200 else content
+                
+                embed.add_field(
+                    name=f"{i}. {role.title()}",
+                    value=content_display or "(내용 없음)",
+                    inline=False
+                )
+            
+            if len(messages) > 6:
+                embed.add_field(
+                    name="참고",
+                    value=f"더 많은 메시지가 있어 (총 {len(messages)}개, 최근 6개만 표시)",
+                    inline=False
+                )
+            
+            await ctx.send(embed=embed)
+            
+        except Exception as e:
+            logger.error(f"Error in conversation history command: {e}", exc_info=True)
+            await ctx.send("❌ 대화 기록을 확인하는 중 오류가 발생했어.")
+
+    @commands.command(
         name="대화종료",
         help="현재 진행 중인 대화 세션을 종료할거야",
         brief="대화 세션 종료하기",
