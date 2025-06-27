@@ -60,7 +60,7 @@ class SourceView(View):
 
 
 class AICommands(BaseCommands):
-    """AI-related commands including Gemini integration"""
+    """AI-related commands including Claude integration"""
 
     def __init__(self) -> None:
         """Initialize AI commands"""
@@ -81,39 +81,39 @@ class AICommands(BaseCommands):
             raise ValueError("API 서비스가 초기화되지 않았어. 나중에 다시 시도해 줄래?")
         return self.bot.api_service
 
-    async def _check_gemini_state(self) -> bool:
-        """Check if Gemini API is available and ready for use.
+    async def _check_claude_state(self) -> bool:
+        """Check if Claude API is available and ready for use.
         
         Returns:
-            bool: True if Gemini API is available
+            bool: True if Claude API is available
             
         Raises:
-            ValueError: If Gemini API is not available or not initialized
+            ValueError: If Claude API is not available or not initialized
         """
         try:
-            logger.info("Checking Gemini API state...")
+            logger.info("Checking Claude API state...")
             
             # Check API service initialization
             logger.info(f"API service initialized: {self.api_service.initialized}")
             if not self.api_service.initialized:
                 raise ValueError("API 서비스가 초기화되지 않았어. 잠시 후에 다시 해볼래?")
             
-            # Check Gemini API instance
-            logger.info(f"Gemini API instance present: {self.api_service.gemini_api is not None}")
-            if not self.api_service.gemini_api:
+            # Check Claude API instance
+            logger.info(f"Claude API instance present: {self.api_service.claude_api is not None}")
+            if not self.api_service.claude_api:
                 raise ValueError("AI 기능이 비활성화되어 있어. 관리자에게 문의해줘!")
             
-            # Check Gemini API state
+            # Check Claude API state
             api_states = self.api_service.api_states
             logger.info(f"API states: {api_states}")
-            if not api_states.get("gemini", False):
+            if not api_states.get("claude", False):
                 raise ValueError("AI 서비스가 현재 사용할 수 없는 상태야. 나중에 다시 올래?")
             
-            logger.info("Gemini API state check passed")
+            logger.info("Claude API state check passed")
             return True
             
         except Exception as e:
-            logger.error(f"Error checking Gemini state: {e}", exc_info=True)
+            logger.error(f"Error checking Claude state: {e}", exc_info=True)
             if isinstance(e, ValueError):
                 raise
             raise ValueError("AI 서비스 상태 확인에 실패했습니다") from e
@@ -208,21 +208,21 @@ class AICommands(BaseCommands):
         "• 뮤 알려줘줘 오리지늄이 뭐야?"
     )
     async def chat(self, ctx: commands.Context, *, message: str) -> None:
-        """Chat with Gemini AI
+        """Chat with Claude AI
         
         Args:
             ctx: Command context
-            message: Message to send to Gemini
+            message: Message to send to Claude
         """
         try:
-            # Check Gemini state first
-            await self._check_gemini_state()
+            # Check Claude state first
+            await self._check_claude_state()
             
             # Send typing indicator while processing
             async with ctx.typing():
                 try:
-                    # Get response from Gemini
-                    response, source_content = await self.api_service.gemini.chat(message, ctx.author.id)
+                    # Get response from Claude
+                    response, source_content = await self.api_service.claude.chat(message, ctx.author.id)
                     
                     # Split long responses into multiple messages
                     max_length = 4000  # Leave some buffer for embed formatting
@@ -266,7 +266,7 @@ class AICommands(BaseCommands):
                         else:
                             await ctx.send(embed=embed)
                 except Exception as e:
-                    logger.error(f"Error in Gemini chat: {e}", exc_info=True)
+                    logger.error(f"Error in Claude chat: {e}", exc_info=True)
                     raise ValueError("대화 처리 중 오류가 발생했어. 더 간단한 질문으로 다시 시도해볼래?") from e
                 
         except ValueError as e:
@@ -297,14 +297,14 @@ class AICommands(BaseCommands):
             # Immediately defer the response to prevent timeout
             await interaction.response.defer(ephemeral=private)
             
-            # Check Gemini state
-            await self._check_gemini_state()
+            # Check Claude state
+            await self._check_claude_state()
             
             # Get user ID
             user_id = interaction.user.id
             
-            # Process through Gemini API directly
-            response, source_content = await self.api_service.gemini.chat(message, user_id)
+            # Process through Claude API directly
+            response, source_content = await self.api_service.claude.chat(message, user_id)
             
             # Format and send response
             max_length = 4000  # Leave buffer for embed formatting
@@ -376,10 +376,10 @@ class AICommands(BaseCommands):
         
         Args:
             ctx_or_interaction: Command context or interaction
-            message: Message to send to Gemini
+            message: Message to send to Claude
         """
         try:
-            await self._check_gemini_state()
+            await self._check_claude_state()
             
             # Get user ID based on context type
             user_id = (
@@ -388,8 +388,8 @@ class AICommands(BaseCommands):
                 else ctx_or_interaction.user.id
             )
             
-            # Get response from Gemini
-            response, source_content = await self.api_service.gemini.chat(message, user_id)
+            # Get response from Claude
+            response, source_content = await self.api_service.claude.chat(message, user_id)
             
             # Split long responses into multiple messages
             max_length = 4000  # Leave some buffer for embed formatting
@@ -474,15 +474,15 @@ class AICommands(BaseCommands):
         "• 시스템 상태 및 오류"
     )
     async def usage_prefix(self, ctx: commands.Context) -> None:
-        """Show Gemini AI usage statistics"""
+        """Show Claude AI usage statistics"""
         await self._handle_usage(ctx)
 
     @app_commands.command(
         name="ai_usage",
-        description="Gemini AI 사용량을 보여줘"
+        description="Claude AI 사용량을 보여줘"
     )
     async def usage_slash(self, interaction: discord.Interaction) -> None:
-        """Slash command for showing Gemini AI usage statistics"""
+        """Slash command for showing Claude AI usage statistics"""
         await self._handle_usage(interaction)
 
     @command_handler()
@@ -515,15 +515,15 @@ class AICommands(BaseCommands):
                 icon = status_icons[is_active]
                 status_text.append(f"{icon} {api_name.capitalize()}")
             
-            # If Gemini is available, add detailed stats
-            if api_states.get('gemini', False):
+            # If Claude is available, add detailed stats
+            if api_states.get('claude', False):
                 try:
                     # Get formatted report
-                    report = self.api_service.gemini.get_formatted_report()
+                    report = self.api_service.claude.get_formatted_report()
                     embed.description = report
                     
                     # Get health status
-                    health = self.api_service.gemini.health_status
+                    health = self.api_service.claude.health_status
                     
                     status_text.append("\n**서비스 상태:**")
                     # Service status
@@ -549,10 +549,10 @@ class AICommands(BaseCommands):
                     if health["error_count"] > 0:
                         status_text.append(f"\n⚠️ 최근 오류: {health['error_count']}회")
                 except Exception as e:
-                    logger.error(f"Error getting Gemini stats: {e}")
-                    status_text.append("\n⚠️ Gemini 상세 정보를 가져오는데 실패했어. 미안해!")
+                    logger.error(f"Error getting Claude stats: {e}")
+                    status_text.append("\n⚠️ Claude 상세 정보를 가져오는데 실패했어. 미안해!")
             else:
-                status_text.append("\n**Gemini AI 서비스:**")
+                status_text.append("\n**Claude AI 서비스:**")
                 status_text.append("❌ 현재 사용할 수 없어. 미안해!")
                 status_text.append("AI 기능이 일시적으로 꺼져있어. 나중에 다시 와볼래?")
             
@@ -585,7 +585,7 @@ class AICommands(BaseCommands):
     async def end_chat(self, ctx: commands.Context) -> None:
         """End current chat session"""
         try:
-            if self.api_service.gemini.end_chat_session(ctx.author.id):
+            if self.api_service.claude.end_chat_session(ctx.author.id):
                 embed = discord.Embed(
                     title="✅ 대화 세션 종료",
                     description="대화 세션이 끝났어!\n새로운 대화를 언제든 시작할 수 있어.",

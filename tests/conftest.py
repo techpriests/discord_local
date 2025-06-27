@@ -269,7 +269,7 @@ async def bot(mock_config, mock_api_service, mock_command_tree) -> AsyncGenerato
                     "• 뮤 명령어 - 한글 접두사\n"
                     "• pt command - 영문 접두사\n\n"
                     "AI 명령어:\n"
-                    "• 대화 - Gemini AI와 대화하기"
+                    "• 대화 - Claude AI와 대화하기"
                 )
             )
             await ctx.send(embed=embed)

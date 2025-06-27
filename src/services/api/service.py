@@ -6,7 +6,7 @@ import discord
 from src.services.api.exchange import ExchangeAPI
 from src.services.api.population import PopulationAPI
 from src.services.api.steam import SteamAPI
-from src.services.api.gemini import GeminiAPI
+from src.services.api.claude import ClaudeAPI
 from src.services.api.base import BaseAPI
 from src.services.api.dnf import DNFAPI
 
@@ -37,7 +37,7 @@ class APIService:
         self._steam_api: Optional[SteamAPI] = None
         self._population_api: Optional[PopulationAPI] = None
         self._exchange_api: Optional[ExchangeAPI] = None
-        self._gemini_api: Optional[GeminiAPI] = None
+        self._claude_api: Optional[ClaudeAPI] = None
         self._dnf_api: Optional[DNFAPI] = None
         
         # Track initialization state
@@ -46,7 +46,7 @@ class APIService:
             "steam": False,
             "population": False,
             "exchange": False,
-            "gemini": False,
+            "claude": False,
             "dnf": False
         }
         logger.info("API service instance created with initial states: %s", self._api_states)
@@ -144,28 +144,28 @@ class APIService:
         return self._exchange_api
 
     @property
-    def gemini_api(self) -> Optional[GeminiAPI]:
-        """Get Gemini API client
+    def claude_api(self) -> Optional[ClaudeAPI]:
+        """Get Claude API client
         
         Returns:
-            Optional[GeminiAPI]: Gemini API client or None if not available
+            Optional[ClaudeAPI]: Claude API client or None if not available
         """
-        return self._gemini_api
+        return self._claude_api
 
     @property
-    def gemini(self) -> GeminiAPI:
-        """Get Gemini API client
+    def claude(self) -> ClaudeAPI:
+        """Get Claude API client
         
         Returns:
-            GeminiAPI: Gemini API client
+            ClaudeAPI: Claude API client
             
         Raises:
-            ValueError: If Gemini API is not initialized
+            ValueError: If Claude API is not initialized
         """
         self._ensure_initialized()
-        if not self._gemini_api:
-            raise ValueError("Gemini API is not available - API key not provided")
-        return self._gemini_api
+        if not self._claude_api:
+            raise ValueError("Claude API is not available - API key not provided")
+        return self._claude_api
 
     def dnf(self) -> DNFAPI:
         """Get DNF API client
@@ -202,15 +202,15 @@ class APIService:
             self._api_states["exchange"] = True
             logger.info("Initialized Exchange API")
 
-            # Initialize Gemini API if credentials provided
-            if "GEMINI_API_KEY" in credentials:
-                self._gemini_api = GeminiAPI(
-                    credentials["GEMINI_API_KEY"],
+            # Initialize Claude API if credentials provided
+            if "CL_API_KEY" in credentials:
+                self._claude_api = ClaudeAPI(
+                    credentials["CL_API_KEY"],
                     self._notification_channel
                 )
-                await self._gemini_api.initialize()
-                self._api_states["gemini"] = True
-                logger.info("Initialized Gemini API")
+                await self._claude_api.initialize()
+                self._api_states["claude"] = True
+                logger.info("Initialized Claude API")
 
             # Initialize DNF API with Neople API key
             if "NEOPLE_API_KEY" in credentials:
@@ -267,8 +267,8 @@ class APIService:
                 ("Exchange", self._exchange_api)
             ]
             
-            if self._gemini_api:
-                apis_to_validate.append(("Gemini", self._gemini_api))
+            if self._claude_api:
+                apis_to_validate.append(("Claude", self._claude_api))
 
             for api_name, api in apis_to_validate:
                 try:
@@ -297,7 +297,7 @@ class APIService:
                 ("Population", self._population_api),
                 ("Exchange", self._exchange_api),
                 ("DNF", self._dnf_api),
-                ("Gemini", self._gemini_api)
+                ("Claude", self._claude_api)
             ]
             await self._cleanup_apis(apis_to_cleanup)
             
@@ -310,7 +310,7 @@ class APIService:
             self._population_api = None
             self._exchange_api = None
             self._dnf_api = None
-            self._gemini_api = None
+            self._claude_api = None
             
             logger.info("All API clients cleaned up")
             
@@ -339,8 +339,8 @@ class APIService:
         Args:
             channel: New notification channel to use
         """
-        if self._gemini_api:
-            self._gemini_api.update_notification_channel(channel)
+        if self._claude_api:
+            self._claude_api.update_notification_channel(channel)
 
     def _reset_api_states(self) -> None:
         """Reset all API initialization states"""

@@ -110,7 +110,7 @@ jobs:
           # Use environment variables in docker-compose
           echo "DISCORD_TOKEN=${{ secrets.DISCORD_TOKEN }}" > .env
           echo "STEAM_API_KEY=${{ secrets.STEAM_API_KEY }}" >> .env
-          echo "GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}" >> .env
+          echo "CL_API_KEY=${{ secrets.CL_API_KEY }}" >> .env
           echo "GIT_COMMIT=$GIT_COMMIT" >> .env
           echo "GIT_BRANCH=$GIT_BRANCH" >> .env
           

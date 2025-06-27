@@ -220,10 +220,11 @@ class TeamDraftCommands(BaseCommands):
                 # Parse player mentions
                 players = await self._parse_players(ctx_or_interaction, players_str)
                 
-                if len(players) != team_size:
+                total_players_needed = team_size * 2  # Total players for both teams
+                if len(players) != total_players_needed:
                     await self.send_error(
                         ctx_or_interaction, 
-                        f"정확히 {team_size}명의 플레이어가 필요해. (현재: {len(players)}명)\n"
+                        f"정확히 {total_players_needed}명의 플레이어가 필요해. (현재: {len(players)}명)\n"
                         #"💡 **팁**: 테스트 모드를 사용해볼래?"
                     )
                     return
