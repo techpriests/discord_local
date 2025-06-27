@@ -73,6 +73,7 @@ class ResponseView(View):
                 label="추론 과정",
                 custom_id=f"thinking_{thinking_id}",
                 style=discord.ButtonStyle.primary,
+                disabled=True,  # Disabled for now
                 emoji="💭"
             ))
         
