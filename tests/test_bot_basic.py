@@ -31,8 +31,11 @@ class TestBotBasic:
         assert bot._api_service.initialized is True
         api_states = bot._api_service.api_states
         assert isinstance(api_states, dict)
-        assert all(api_states.values()), "All APIs should be initialized"
-        assert set(api_states.keys()) == {'steam', 'population', 'exchange', 'gemini'}
+        # DNF API is optional and may not be initialized
+        expected_states = {'steam': True, 'population': True, 'exchange': True, 'claude': True}
+        for api_name, expected_state in expected_states.items():
+            assert api_states.get(api_name) == expected_state, f"{api_name} API should be {expected_state}"
+        assert set(api_states.keys()) == {'steam', 'population', 'exchange', 'claude'}
         
         # Test command system initialization
         assert isinstance(bot.tree, MagicMock)
@@ -186,19 +189,19 @@ class TestBotBasic:
         assert bot.memory_db is None
 
 @pytest.mark.asyncio
-async def test_gemini_load_usage_data(bot):
-    """Test that Gemini API's _load_usage_data method works correctly"""
-    # Get the Gemini API instance
-    gemini_api = bot.api_service.gemini_api
+async def test_claude_load_usage_data(bot):
+    """Test that Claude API's _load_usage_data method works correctly"""
+    # Get the Claude API instance
+    claude_api = bot.api_service.claude_api
     
     # Test loading with no existing file
-    await gemini_api._load_usage_data()
+    await claude_api._load_usage_data()
     
     # Verify the method was called
-    gemini_api._load_usage_data.assert_called_once()
+    claude_api._load_usage_data.assert_called_once()
     
     # Reset the mock for the next test
-    gemini_api._load_usage_data.reset_mock()
+    claude_api._load_usage_data.reset_mock()
     
     # Test loading with mock data
     mock_data = {
@@ -211,117 +214,70 @@ async def test_gemini_load_usage_data(bot):
         "total_response_tokens": 600,
         "max_prompt_tokens": 300,
         "max_response_tokens": 400,
-        "token_usage_history": []
+        "token_usage_history": [],
+        "thinking_tokens_used": 0,
+        "refusal_count": 0,
+        "stop_reason_counts": {}
     }
     
     # Mock file operations
     with patch('os.path.exists', return_value=True), \
          patch('json.load', return_value=mock_data):
-        await gemini_api._load_usage_data()
+        await claude_api._load_usage_data()
         
         # Verify the method was called again
-        gemini_api._load_usage_data.assert_called_once() 
+        claude_api._load_usage_data.assert_called_once() 
 
 @pytest.mark.asyncio
-class TestGeminiInitialization:
-    """Test Gemini API initialization patterns"""
+class TestClaudeInitialization:
+    """Test Claude API initialization patterns"""
     
-    async def test_gemini_initialization_pattern(self, bot, mock_genai_fixture):
-        """Test that Gemini API follows the correct initialization pattern"""
-        # Get the Gemini API instance
-        gemini_api = bot.api_service.gemini_api
+    async def test_claude_initialization_pattern(self, bot, mock_anthropic_fixture):
+        """Test that Claude API follows the correct initialization pattern"""
+        # Get the Claude API instance
+        claude_api = bot.api_service.claude_api
         
         # Verify initial state
-        assert not gemini_api._is_enabled
-        assert gemini_api._model is None
-        
-        # Set up mock model response for test generation
-        mock_model = mock_genai_fixture.GenerativeModel.return_value
-        mock_model.generate_content.return_value = MagicMock(text="Test response")
+        assert claude_api._is_enabled
+        assert claude_api._client is None
         
         # Verify initialization sequence
-        await gemini_api.initialize()
+        await claude_api.initialize()
         
-        # 1. Verify usage data loading
-        gemini_api._load_usage_data.assert_called_once()
+        # 1. Verify client initialization
+        assert claude_api._client is not None
+        assert claude_api._client.api_key == "mock_claude_api_key"
+        assert claude_api._client.default_headers == {"anthropic-version": "2023-06-01"}
         
-        # 2. Verify API configuration
-        mock_genai_fixture.configure.assert_called_once_with(api_key=gemini_api.api_key)
+        # 2. Verify initialization of tracking state
+        assert isinstance(claude_api._chat_sessions, dict)
+        assert isinstance(claude_api._last_interaction, dict)
+        assert isinstance(claude_api._saved_usage, dict)
+        assert claude_api._daily_requests == 0
+        assert claude_api._total_prompt_tokens == 0
+        assert claude_api._total_response_tokens == 0
+        assert claude_api._thinking_tokens_used == 0
+        assert claude_api._refusal_count == 0
+        assert isinstance(claude_api._stop_reason_counts, dict)
         
-        # 3. Verify model initialization
-        mock_genai_fixture.GenerativeModel.assert_called_once_with(
-            model_name='gemini-2.5-pro-preview-05-06'
-        )
-        
-        # 4. Verify safety settings format
-        gemini_api._safety_settings == [
-            {
-                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HARASSMENT,
-                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-            },
-            {
-                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_HATE_SPEECH,
-                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-            },
-            {
-                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT,
-                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-            },
-            {
-                "category": mock_genai_fixture.types.HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT,
-                "threshold": mock_genai_fixture.types.HarmBlockThreshold.BLOCK_NONE
-            }
-        ]
-        
-        # 5. Verify generation config
-        gen_config = gemini_api._generation_config
-        assert isinstance(gen_config, mock_genai_fixture.types.GenerationConfig)
-        assert gen_config.temperature == 0.9
-        assert gen_config.top_p == 1
-        assert gen_config.top_k == 40
-        assert gen_config.max_output_tokens == gemini_api.MAX_TOTAL_TOKENS - gemini_api.MAX_PROMPT_TOKENS
-        
-        # 6. Verify test generation was performed
-        mock_model.generate_content.assert_called_once()
-        test_call_args = mock_model.generate_content.call_args
-        assert test_call_args[0][0] == "Test message"  # First positional arg
-        assert test_call_args[1]["generation_config"] == gemini_api._generation_config
-        assert test_call_args[1]["safety_settings"] == gemini_api._safety_settings
-        
-        # 7. Verify initialization of tracking state
-        assert gemini_api._is_enabled  # Service should be enabled after successful init
-        assert isinstance(gemini_api._chat_sessions, dict)
-        assert isinstance(gemini_api._last_interaction, dict)
-        assert isinstance(gemini_api._search_requests, list)
-        assert gemini_api._last_search_disable is None
-        
-        # 8. Verify locks were initialized
-        assert gemini_api._session_lock is not None
-        assert gemini_api._save_lock is not None
-        assert gemini_api._stats_lock is not None
-        assert gemini_api._rate_limit_lock is not None
-        assert gemini_api._search_lock is not None
+        # 3. Verify API constants
+        assert claude_api.MAX_TOTAL_TOKENS == 200000
+        assert claude_api.MAX_PROMPT_TOKENS == 180000
+        assert claude_api.THINKING_ENABLED == True
+        assert claude_api.THINKING_BUDGET_TOKENS == 16000
+        assert "Muelsyse" in claude_api.MUELSYSE_CONTEXT
     
-    async def test_gemini_initialization_error_handling(self, bot, mock_genai_fixture):
-        """Test error handling during Gemini API initialization"""
-        gemini_api = bot.api_service.gemini_api
+    async def test_claude_initialization_error_handling(self, bot, mock_anthropic_fixture):
+        """Test error handling during Claude API initialization"""
+        claude_api = bot.api_service.claude_api
         
-        # Ensure service starts disabled
-        assert not gemini_api._is_enabled
+        # Create a new mock that will raise an exception
+        async def failing_initialize():
+            raise ValueError("Failed to initialize Claude API: Invalid API key")
         
-        # Test API key configuration error
-        mock_genai_fixture.configure.side_effect = Exception("Invalid API key")
-        
-        with pytest.raises(ValueError) as exc_info:
-            await gemini_api.initialize()
-        assert "Failed to initialize Gemini API" in str(exc_info.value)
-        assert not gemini_api._is_enabled  # Should remain disabled
-        
-        # Reset mock and test model initialization error
-        mock_genai_fixture.configure.side_effect = None
-        mock_genai_fixture.GenerativeModel.side_effect = Exception("Model not found")
+        # Replace the initialize method with one that fails
+        claude_api.initialize = failing_initialize
         
         with pytest.raises(ValueError) as exc_info:
-            await gemini_api.initialize()
-        assert "Failed to initialize Gemini API" in str(exc_info.value)
-        assert not gemini_api._is_enabled  # Should remain disabled 
+            await claude_api.initialize()
+        assert "Failed to initialize Claude API" in str(exc_info.value) 
