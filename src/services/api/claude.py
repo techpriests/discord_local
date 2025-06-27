@@ -48,9 +48,10 @@ class ClaudeAPI(BaseAPI[str]):
     CONTEXT_EXPIRY_MINUTES = 30  # Time until context expires
     
     # Thinking settings
-    THINKING_ENABLED = True  # Enable extended thinking for complex queries
-    THINKING_BUDGET_TOKENS = 16000  # Budget for thinking tokens (16K default)
+    THINKING_ENABLED = False  # Disable thinking by default for efficiency (can be enabled per-request)
+    THINKING_BUDGET_TOKENS = 1024  # Budget for thinking tokens when enabled
     # Note: Claude will only use thinking when it deems necessary for complex reasoning
+    # High thinking budgets significantly increase input token costs due to reservation
     
     # Character role definition for Claude system prompt (as per Anthropic's official recommendation)
     MUELSYSE_CONTEXT = """You are Muelsyse(뮤엘시스), Director of the Ecological Section at Rhine Lab, an operator from Arknights (명일방주). [Arknights is a tower defense mobile game; Muelsyse is a character known for her cheerful personality, and ecological expertise.]
@@ -220,12 +221,12 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         """
         self._notification_channel = channel
 
-    def configure_thinking(self, enabled: bool = True, budget_tokens: int = 16000) -> None:
+    def configure_thinking(self, enabled: bool = True, budget_tokens: int = 1024) -> None:
         """Configure thinking settings
         
         Args:
             enabled: Whether to enable thinking
-            budget_tokens: Maximum tokens to use for thinking (default 16K)
+            budget_tokens: Maximum tokens to use for thinking (default 1K)
         """
         self.THINKING_ENABLED = enabled
         self.THINKING_BUDGET_TOKENS = budget_tokens
@@ -242,6 +243,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             "budget_tokens": self.THINKING_BUDGET_TOKENS,
             "tokens_used": self._thinking_tokens_used
         }
+    
+
 
     async def initialize(self) -> None:
         """Initialize Claude API resources"""
@@ -328,7 +331,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         
         Args:
             messages: List of message dictionaries (content can be str or list of content blocks)
-            include_thinking: Whether to include thinking in token calculation
+            include_thinking: Whether to include thinking budget in token calculation
+                             Note: This adds the thinking BUDGET (16K) to input tokens, not actual thinking usage
             
         Returns:
             int: Number of tokens for the full conversation
@@ -1316,8 +1320,8 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             # Add user message to session
             messages.append({"role": "user", "content": prompt})
             
-            # Check token limits with full conversation context (more accurate)
-            conversation_tokens = await self._count_conversation_tokens(messages)
+            # Check token limits with full conversation context (thinking budget counts as input tokens)
+            conversation_tokens = await self._count_conversation_tokens(messages, include_thinking=self.THINKING_ENABLED)
             self._check_token_thresholds(conversation_tokens)
 
             # Build API request parameters with system prompt
@@ -1340,6 +1344,9 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                     "budget_tokens": self.THINKING_BUDGET_TOKENS
                 }
                 logger.info(f"Thinking enabled with {self.THINKING_BUDGET_TOKENS} token budget")
+                # Note: The thinking budget is reserved but only actual thinking usage counts toward output tokens
+                # The budget allocation does get counted as part of input tokens in Anthropic's counting API
+                # but actual thinking tokens are reported separately in the response usage
                 # Note: temperature is incompatible with thinking, so we omit it
             else:
                 # Only add temperature when thinking is disabled

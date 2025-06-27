@@ -569,6 +569,80 @@ class AICommands(BaseCommands):
             raise ValueError("사용량 정보를 가져오는데 실패했어. 미안!") from e
 
     @commands.command(
+        name="생각모드",
+        help="Extended thinking 모드를 설정합니다",
+        brief="생각 모드 설정",
+        aliases=["thinking", "생각"],
+        description="뮤엘시스의 생각 모드를 설정해.\n"
+        "복잡한 질문에 대해 더 깊이 생각할 수 있게 해줘.\n\n"
+        "사용법:\n"
+        "• 뮤 생각모드 - 현재 설정 확인\n"
+        "• 뮤 생각모드 켜기 - 생각 모드 활성화\n"
+        "• 뮤 생각모드 끄기 - 생각 모드 비활성화 (기본값)\n\n"
+        "참고:\n"
+        "• 생각 모드는 복잡한 추론이 필요한 질문에 유용해\n"
+        "• 토큰 사용량이 증가할 수 있어 (1024 토큰 예산)\n"
+        "• Claude가 필요하다고 판단할 때만 실제로 생각해",
+        hidden=True  # Hide from help command for regular users
+    )
+    @commands.is_owner()  # Only bot owner can configure thinking
+    async def thinking_mode(self, ctx: commands.Context, mode: str = None) -> None:
+        """Configure thinking mode"""
+        try:
+            claude_api = self.api_service.claude
+            
+            if mode is None:
+                # Show current configuration
+                config = claude_api.get_thinking_config()
+                status = "켜짐" if config["enabled"] else "꺼짐"
+                
+                embed = discord.Embed(
+                    title="🧠 생각 모드 설정",
+                    color=INFO_COLOR
+                )
+                embed.add_field(
+                    name="현재 상태",
+                    value=status,
+                    inline=False
+                )
+                embed.add_field(
+                    name="토큰 예산",
+                    value=f"{config['budget_tokens']:,} 토큰",
+                    inline=True
+                )
+                embed.add_field(
+                    name="사용된 생각 토큰",
+                    value=f"{config['tokens_used']:,} 토큰",
+                    inline=True
+                )
+                embed.add_field(
+                    name="모드 설명",
+                    value="• **켜기**: 모든 질문에 생각 모드 활성화 (토큰 사용량 증가)\n"
+                          "• **끄기**: 생각 모드 비활성화 (기본값, 효율적)",
+                    inline=False
+                )
+                
+                await ctx.send(embed=embed)
+                return
+            
+            mode_lower = mode.lower()
+            
+            if mode_lower in ["켜기", "on", "enable", "켜", "활성화"]:
+                claude_api.configure_thinking(enabled=True, budget_tokens=1024)
+                await ctx.send("🧠 생각 모드가 **활성화**되었어! 토큰 사용량이 증가할 수 있어.")
+                
+            elif mode_lower in ["끄기", "off", "disable", "꺼", "비활성화"]:
+                claude_api.configure_thinking(enabled=False, budget_tokens=1024)
+                await ctx.send("🧠 생각 모드가 **비활성화**되었어. 토큰 사용량이 줄어들 거야.")
+                
+            else:
+                await ctx.send("❌ 올바른 모드를 입력해줘: `켜기`, `끄기`")
+                
+        except Exception as e:
+            logger.error(f"Error in thinking mode command: {e}", exc_info=True)
+            await ctx.send("❌ 생각 모드 설정 중 오류가 발생했어.")
+
+    @commands.command(
         name="대화종료",
         help="현재 진행 중인 대화 세션을 종료할거야",
         brief="대화 세션 종료하기",
