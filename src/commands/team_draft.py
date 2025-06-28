@@ -1427,6 +1427,10 @@ class TeamDraftCommands(BaseCommands):
         if not draft.captain_ban_progress.get(current_captain, False):
             return  # Current captain hasn't finished yet
         
+        # Invalidate the completed captain's interface session to prevent further edits
+        if current_captain in draft.ban_interface_sessions:
+            del draft.ban_interface_sessions[current_captain]
+        
         # Find next captain in order
         current_index = draft.captain_ban_order.index(current_captain)
         if current_index + 1 < len(draft.captain_ban_order):
