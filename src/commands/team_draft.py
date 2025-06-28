@@ -922,16 +922,26 @@ class TeamDraftCommands(BaseCommands):
         available_servants = list(draft.available_servants - confirmed_servants - draft.banned_servants)
         
         # Auto-select for fake players who need to reselect
+        completed_fake_players = set()
         for servant, conflict_user_ids in draft.conflicted_servants.items():
             for user_id in conflict_user_ids:
                 if user_id != draft.real_user_id and available_servants:  # Fake player needs reselection
                     new_servant = random.choice(available_servants)
                     draft.players[user_id].selected_servant = new_servant
                     available_servants.remove(new_servant)
+                    completed_fake_players.add(user_id)
                     logger.info(f"Auto-reselected {new_servant} for fake player {draft.players[user_id].username}")
         
-        # Clear conflicts after auto-completion
-        draft.conflicted_servants.clear()
+        # Remove only completed fake players from conflicts, preserve real user's conflict
+        for servant in list(draft.conflicted_servants.keys()):
+            # Remove fake players who completed reselection from this conflict
+            draft.conflicted_servants[servant] = [
+                user_id for user_id in draft.conflicted_servants[servant] 
+                if user_id not in completed_fake_players
+            ]
+            # Remove empty conflict entries
+            if not draft.conflicted_servants[servant]:
+                del draft.conflicted_servants[servant]
 
     async def _check_reselection_completion(self, draft: DraftSession) -> None:
         """Check if reselection phase is complete and proceed if so"""
@@ -1339,7 +1349,7 @@ class TeamDraftCommands(BaseCommands):
         # Show current system bans
         if draft.system_bans:
             system_ban_text = ", ".join(draft.system_bans)
-            embed.add_field(name="시스템 밴", value=system_ban_text, inline=False)
+            embed.add_field(name="문 셀 밴", value=system_ban_text, inline=False)
         
         # Show current banning captain
         current_captain_name = draft.players[draft.current_banning_captain].username
@@ -1399,7 +1409,7 @@ class TeamDraftCommands(BaseCommands):
         # Show system bans
         if draft.system_bans:
             system_ban_text = ", ".join(draft.system_bans)
-            embed.add_field(name="🎲 시스템 자동 밴", value=system_ban_text, inline=False)
+            embed.add_field(name="🎲 문 셀 밴", value=system_ban_text, inline=False)
         
         # Show each captain's bans in order
         for i, captain_id in enumerate(draft.captain_ban_order):
@@ -1470,7 +1480,7 @@ class TeamDraftCommands(BaseCommands):
             # Show current system bans
             if draft.system_bans:
                 system_ban_text = ", ".join(draft.system_bans)
-                embed.add_field(name="시스템 밴", value=system_ban_text, inline=False)
+                embed.add_field(name="문 셀 밴", value=system_ban_text, inline=False)
             
             # Show completed captain bans in order
             completed_bans = []
