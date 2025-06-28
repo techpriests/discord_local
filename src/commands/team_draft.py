@@ -1819,6 +1819,20 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                 )
                 return
             
+            # During reselection phase, only allow conflicted players to re-select
+            if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
+                conflicted_players = set()
+                for user_ids in view.draft.conflicted_servants.values():
+                    conflicted_players.update(user_ids)
+                
+                if self.player_id not in conflicted_players:
+                    player_name = view.draft.players[self.player_id].username
+                    await interaction.response.send_message(
+                        f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
+                        "중복으로 인해 재선택이 필요한 플레이어만 변경할 수 있어.", ephemeral=True
+                    )
+                    return
+            
             # Generate new session ID and invalidate any existing sessions
             session_id = view.bot_commands._generate_session_id()
             view.draft.selection_interface_sessions[self.player_id] = session_id
@@ -2052,6 +2066,20 @@ class ConfirmSelectionButton(discord.ui.Button):
             )
             return
         
+        # During reselection phase, only allow conflicted players to confirm
+        if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
+            conflicted_players = set()
+            for user_ids in view.draft.conflicted_servants.values():
+                conflicted_players.update(user_ids)
+            
+            if self.player_id not in conflicted_players:
+                player_name = view.draft.players[self.player_id].username
+                await interaction.response.send_message(
+                    f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
+                    "중복으로 인해 재선택이 필요한 플레이어만 변경할 수 있어.", ephemeral=True
+                )
+                return
+        
         # Validate session
         current_session = view.draft.selection_interface_sessions.get(self.player_id)
         if current_session != view.session_id:
@@ -2070,6 +2098,9 @@ class ConfirmSelectionButton(discord.ui.Button):
         # Save selection
         view.draft.players[self.player_id].selected_servant = view.selected_servant
         view.draft.selection_progress[self.player_id] = True
+        
+        # Invalidate session to prevent further changes after confirmation
+        view.draft.selection_interface_sessions[self.player_id] = view.bot_commands._generate_session_id()
         
         player_name = view.draft.players[self.player_id].username
         
@@ -2200,6 +2231,20 @@ class ReopenSelectionInterfaceButton(discord.ui.Button):
                 "이미 선택을 완료했어.", ephemeral=True
             )
             return
+        
+        # During reselection phase, only allow conflicted players to reopen interface
+        if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
+            conflicted_players = set()
+            for user_ids in view.draft.conflicted_servants.values():
+                conflicted_players.update(user_ids)
+            
+            if self.player_id not in conflicted_players:
+                player_name = view.draft.players[self.player_id].username
+                await interaction.response.send_message(
+                    f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
+                    "중복으로 인해 재선택이 필요한 플레이어만 인터페이스를 다시 열 수 있어.", ephemeral=True
+                )
+                return
         
         # Generate new session ID and create fresh interface
         session_id = view.bot_commands._generate_session_id()
@@ -2824,6 +2869,9 @@ class ConfirmCaptainBanButton(discord.ui.Button):
         # Save ban
         view.draft.captain_bans[self.captain_id] = [view.selected_ban]
         view.draft.captain_ban_progress[self.captain_id] = True
+        
+        # Invalidate session to prevent further changes after confirmation
+        view.draft.ban_interface_sessions[self.captain_id] = view.bot_commands._generate_session_id()
         
         captain_name = view.draft.players[self.captain_id].username
         
