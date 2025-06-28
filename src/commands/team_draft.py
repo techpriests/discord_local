@@ -1629,8 +1629,7 @@ class PrivateBanView(discord.ui.View):
         
         if available_in_category:
             dropdown = PrivateBanCharacterDropdown(self.draft, self.bot_commands, available_in_category, self.current_category, self.captain_id)
-            # Insert before the confirmation button (which should be last)
-            self.children.insert(-1, dropdown)
+            self.add_item(dropdown)
 
     def _add_confirmation_button(self):
         """Add confirmation button"""
@@ -1959,7 +1958,7 @@ class PrivateSelectionView(discord.ui.View):
         """Add character selection dropdown for current category"""
         # Remove existing character dropdown if any
         for item in self.children[:]:
-            if isinstance(item, PrivateSelectionCharacterDropdown):
+            if isinstance(item, (PrivateSelectionCharacterDropdown, EmptySelectionDropdown)):
                 self.remove_item(item)
         
         # Get available characters for current category (exclude banned)
@@ -1972,15 +1971,14 @@ class PrivateSelectionView(discord.ui.View):
         if not available_in_category:
             # Create a disabled dropdown showing no characters available
             dropdown = EmptySelectionDropdown(self.current_category)
-            self.children.insert(-1, dropdown)
+            self.add_item(dropdown)
         else:
             # Create normal dropdown with available characters
             dropdown = PrivateSelectionCharacterDropdown(
                 self.draft, self.bot_commands, available_in_category, 
                 self.current_category, self.player_id
             )
-            # Insert before the confirmation button (which should be last)
-            self.children.insert(-1, dropdown)
+            self.add_item(dropdown)
 
     def _add_confirmation_button(self):
         """Add confirmation button"""
