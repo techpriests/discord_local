@@ -2159,6 +2159,94 @@ class TeamSelectionView(discord.ui.View):
         current_captain = draft.current_picking_captain
         if current_captain and draft.pending_team_selections.get(current_captain):
             self.add_item(ConfirmTeamSelectionButton(current_captain))
+            
+            # Add remove buttons for each pending selection
+            pending_selections = draft.pending_team_selections[current_captain]
+            for i, player_id in enumerate(pending_selections):
+                if i < 4:  # Limit to 4 remove buttons to avoid Discord limits
+                    player_name = draft.players[player_id].username
+                    self.add_item(RemovePlayerButton(player_id, player_name, i))
+
+
+class RemovePlayerButton(discord.ui.Button):
+    """Button to remove a player from pending selections"""
+    
+    def __init__(self, player_id: int, player_name: str, index: int):
+        super().__init__(
+            label=f"❌ {player_name[:15]}",  # Truncate long names
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"remove_player_{player_id}",
+            row=2 + (index // 5)  # Put remove buttons on separate rows
+        )
+        self.player_id = player_id
+        self.player_name = player_name
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Remove player from pending selections"""
+        user_id = interaction.user.id
+        view: TeamSelectionView = self.view
+        
+        # Validate current phase
+        if view.draft.phase != DraftPhase.TEAM_SELECTION:
+            await interaction.response.send_message(
+                "팀 선택 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
+        current_captain = view.draft.current_picking_captain
+        
+        # Validate captain permission
+        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
+            # In test mode, real user can remove for any captain
+            pass
+        elif user_id != current_captain:
+            await interaction.response.send_message(
+                "자신의 선택만 수정할 수 있어.", ephemeral=True
+            )
+            return
+        
+        # Validate it's still the captain's turn
+        if view.draft.current_picking_captain != current_captain:
+            await interaction.response.send_message(
+                "지금은 네 차례가 아니야.", ephemeral=True
+            )
+            return
+        
+        # Check if captain already completed this round
+        current_round = view.draft.team_selection_round
+        if (current_captain in view.draft.team_selection_progress and 
+            current_round in view.draft.team_selection_progress[current_captain] and
+            view.draft.team_selection_progress[current_captain][current_round]):
+            await interaction.response.send_message(
+                "이번 라운드 선택을 이미 완료했어. 더 이상 변경할 수 없어.", ephemeral=True
+            )
+            return
+        
+        # Remove player from pending selections
+        if (current_captain in view.draft.pending_team_selections and 
+            self.player_id in view.draft.pending_team_selections[current_captain]):
+            
+            view.draft.pending_team_selections[current_captain].remove(self.player_id)
+            captain_team = view.draft.players[current_captain].team
+            remaining_count = len(view.draft.pending_team_selections[current_captain])
+            
+            # Get max picks for feedback
+            round_info = view.bot_commands.team_selection_patterns[view.draft.team_size][view.draft.team_selection_round - 1]
+            is_first_pick = current_captain == view.draft.first_pick_captain
+            max_picks = round_info["first_pick"] if is_first_pick else round_info["second_pick"]
+            
+            await interaction.response.send_message(
+                f"❌ **{self.player_name}**을(를) 팀 {captain_team} 후보에서 제거했어!\n"
+                f"현재 선택: ({remaining_count}/{max_picks})", 
+                ephemeral=True
+            )
+            
+            # Refresh interface to update buttons
+            await view.bot_commands._refresh_team_selection_interface(view.draft)
+        else:
+            await interaction.response.send_message(
+                f"**{self.player_name}**은(는) 선택 목록에 없어.", ephemeral=True
+            )
 
 
 class PlayerDropdown(discord.ui.Select):
