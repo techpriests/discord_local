@@ -2057,7 +2057,7 @@ class TeamDraftCommands(BaseCommands):
                 main_embed = discord.Embed(
                     title=f"🏆 {team_format} 드래프트 완료!",
                     description="**최종 로스터가 확정됐어!**\n"
-                               "모든 플레이어들 수고했어! 🎉",
+                               "모두들 수고했어! 🎉",
                     color=SUCCESS_COLOR
                 )
                 
@@ -2271,7 +2271,7 @@ class PlayerDropdown(discord.ui.Select):
         ]
         
         super().__init__(
-            placeholder="팀원 선택(주의: 메뉴에서 고르자마자 선택이 확정돼!)",
+            placeholder="팀원 선택(고른 뒤 선택 확정 버튼을 눌러줘)",
             options=options,
             min_values=1,
             max_values=1
