@@ -1772,56 +1772,83 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Open private selection interface for the player"""
-        user_id = interaction.user.id
-        view: EphemeralSelectionView = self.view
-        
-        # In test mode, allow the real user to select for anyone
-        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
-            pass
-        elif user_id != self.player_id:
+        try:
+            user_id = interaction.user.id
+            view: EphemeralSelectionView = self.view
+            
+            logger.info(f"Selection interface button clicked by user {user_id} for player {self.player_id}")
+            
+            # In test mode, allow the real user to select for anyone
+            if view.draft.is_test_mode and user_id == view.draft.real_user_id:
+                logger.info(f"Test mode: allowing real user {user_id} to select for player {self.player_id}")
+                pass
+            elif user_id != self.player_id:
+                logger.info(f"User {user_id} tried to access player {self.player_id}'s interface")
+                await interaction.response.send_message(
+                    "자신의 선택 인터페이스만 사용할 수 있어.", ephemeral=True
+                )
+                return
+            
+            # Generate new session ID and invalidate any existing sessions
+            session_id = view.bot_commands._generate_session_id()
+            view.draft.selection_interface_sessions[self.player_id] = session_id
+            logger.info(f"Generated session ID {session_id} for player {self.player_id}")
+            
+            # Check if already completed
+            player_name = view.draft.players[self.player_id].username
+            current_selection = view.draft.players[self.player_id].selected_servant
+            
+            if view.draft.selection_progress.get(self.player_id, False):
+                logger.info(f"Player {self.player_id} already completed selection: {current_selection}")
+                if current_selection:
+                    await interaction.response.send_message(
+                        f"이미 선택을 완료했어: **{current_selection}**\n"
+                        "변경하려면 다시 선택하고 확정해줘.", 
+                        ephemeral=True, 
+                        view=PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
+                    )
+                else:
+                    await interaction.response.send_message(
+                        "선택을 완료했지만 서번트가 없어. 다시 선택해줘.", 
+                        ephemeral=True,
+                        view=PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
+                    )
+                return
+            
+            # Open private selection interface
+            logger.info(f"Opening new selection interface for player {self.player_id}")
+            private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
+            logger.info(f"Created PrivateSelectionView with {len(private_view.children)} UI elements")
+            
             await interaction.response.send_message(
-                "자신의 선택 인터페이스만 사용할 수 있어.", ephemeral=True
+                f"⚔️ **{player_name}의 개인 서번트 선택**\n"
+                "원하는 서번트를 한 명 선택해줘.\n"
+                "다른 플레이어는 네 선택을 볼 수 없어.",
+                ephemeral=True,
+                view=private_view
             )
-            return
-        
-        # Generate new session ID and invalidate any existing sessions
-        session_id = view.bot_commands._generate_session_id()
-        view.draft.selection_interface_sessions[self.player_id] = session_id
-        
-        # Check if already completed
-        player_name = view.draft.players[self.player_id].username
-        current_selection = view.draft.players[self.player_id].selected_servant
-        
-        if view.draft.selection_progress.get(self.player_id, False):
-            if current_selection:
-                await interaction.response.send_message(
-                    f"이미 선택을 완료했어: **{current_selection}**\n"
-                    "변경하려면 다시 선택하고 확정해줘.", 
-                    ephemeral=True, 
-                    view=PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
-                )
-            else:
-                await interaction.response.send_message(
-                    "선택을 완료했지만 서번트가 없어. 다시 선택해줘.", 
-                    ephemeral=True,
-                    view=PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
-                )
-            return
-        
-        # Open private selection interface
-        await interaction.response.send_message(
-            f"⚔️ **{player_name}의 개인 서번트 선택**\n"
-            "원하는 서번트를 한 명 선택해줘.\n"
-            "다른 플레이어는 네 선택을 볼 수 없어.",
-            ephemeral=True,
-            view=PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
-        )
+            logger.info(f"Successfully sent ephemeral selection interface to player {self.player_id}")
+            
+        except Exception as e:
+            logger.error(f"Error in selection interface button callback: {e}", exc_info=True)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "선택 인터페이스 열기에 실패했어. 다시 시도해줘.", ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        "선택 인터페이스 열기에 실패했어. 다시 시도해줘.", ephemeral=True
+                    )
+            except Exception as followup_error:
+                logger.error(f"Failed to send error message: {followup_error}", exc_info=True)
 
 
 class PrivateSelectionView(discord.ui.View):
     """Private selection interface for individual players"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', player_id: int, session_id: str):
+        logger.info(f"Initializing PrivateSelectionView for player {player_id}, session {session_id}")
         super().__init__(timeout=600.0)
         self.draft = draft
         self.bot_commands = bot_commands
@@ -1829,6 +1856,26 @@ class PrivateSelectionView(discord.ui.View):
         self.session_id = session_id
         self.current_category = "세이버"
         self.selected_servant = draft.players[player_id].selected_servant  # Allow editing
+        
+        try:
+            # Add category buttons
+            logger.info(f"Adding category buttons for player {player_id}")
+            self._add_category_buttons()
+            logger.info(f"Added {len([c for c in self.children if hasattr(c, 'category')])} category buttons")
+            
+            # Add character dropdown for current category
+            logger.info(f"Adding character dropdown for category {self.current_category}")
+            self._add_character_dropdown()
+            logger.info(f"Added character dropdown, total children: {len(self.children)}")
+            
+            # Add confirmation button
+            logger.info(f"Adding confirmation button")
+            self._add_confirmation_button()
+            logger.info(f"PrivateSelectionView initialization complete, total UI elements: {len(self.children)}")
+            
+        except Exception as e:
+            logger.error(f"Error during PrivateSelectionView initialization: {e}", exc_info=True)
+            raise
     
     async def on_timeout(self) -> None:
         """Handle interface timeout - add reopen button to public message"""
@@ -1839,13 +1886,6 @@ class PrivateSelectionView(discord.ui.View):
                 await self.bot_commands._add_reopen_selection_interface_button(self.draft, self.player_id)
         except Exception as e:
             logger.error(f"Error handling selection interface timeout: {e}")
-        
-        # Add category buttons
-        self._add_category_buttons()
-        # Add character dropdown for current category
-        self._add_character_dropdown()
-        # Add confirmation button
-        self._add_confirmation_button()
 
     def _add_category_buttons(self):
         """Add category selection buttons"""
