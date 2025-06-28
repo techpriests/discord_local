@@ -580,6 +580,7 @@ class TeamDraftCommands(BaseCommands):
         embed = discord.Embed(
             title="⚔️ 서번트 선택 단계",
             description="모든 플레이어가 개별적으로 서번트를 선택 중이야.\n"
+                       "**👇 자신의 닉네임 버튼을 눌러서 서번트를 선택해!**\n"
                        "선택 내용은 모든 플레이어가 완료된 후에 공개될거야.",
             color=INFO_COLOR
         )
@@ -632,6 +633,7 @@ class TeamDraftCommands(BaseCommands):
             embed = discord.Embed(
                 title="⚔️ 서번트 선택 단계",
                 description="모든 플레이어가 개별적으로 서번트를 선택 중이야.\n"
+                           "**👇 자신의 닉네임 버튼을 눌러서 서번트를 선택해!**\n"
                            "선택 내용은 모든 플레이어가 완료된 후에 공개될거야.",
                 color=INFO_COLOR
             )
@@ -1535,12 +1537,10 @@ class PrivateBanView(discord.ui.View):
         except Exception as e:
             logger.error(f"Error handling ban interface timeout: {e}")
         
-        # Add category buttons
-        self._add_category_buttons()
-        # Add character dropdown for current category
-        self._add_character_dropdown()
-        # Add confirmation button
-        self._add_confirmation_button()
+        # Remove these broken lines that try to modify a timed-out view - Discord doesn't allow this
+        # self._add_category_buttons()
+        # self._add_character_dropdown()
+        # self._add_confirmation_button()
 
     def _add_category_buttons(self):
         """Add category selection buttons"""
@@ -1655,7 +1655,7 @@ class PrivateBanCharacterDropdown(discord.ui.Select):
             options=options,
             min_values=0,
             max_values=min(2, len(options)),
-            row=4  # Place at bottom
+            row=4
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -1765,7 +1765,6 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
             label=f"{player_name}",
             style=discord.ButtonStyle.primary,
             custom_id=f"open_selection_{player_id}",
-            emoji="⚔️",
             row=index // 5  # 5 buttons per row
         )
         self.player_id = player_id
@@ -1821,7 +1820,7 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
             logger.info(f"Created PrivateSelectionView with {len(private_view.children)} UI elements")
             
             await interaction.response.send_message(
-                f"⚔️ **{player_name}의 개인 서번트 선택**\n"
+                f"**{player_name}의 개인 서번트 선택**\n"
                 "원하는 서번트를 한 명 선택해줘.\n"
                 "다른 플레이어는 네 선택을 볼 수 없어.",
                 ephemeral=True,
@@ -1908,13 +1907,14 @@ class PrivateSelectionView(discord.ui.View):
             if char not in self.draft.banned_servants
         ]
         
-        if available_in_category:
-            dropdown = PrivateSelectionCharacterDropdown(
-                self.draft, self.bot_commands, available_in_category, 
-                self.current_category, self.player_id
-            )
-            # Insert before the confirmation button (which should be last)
-            self.children.insert(-1, dropdown)
+        # Always create dropdown - there should always be some available characters
+        # since max bans = 4 and each category has 5+ characters
+        dropdown = PrivateSelectionCharacterDropdown(
+            self.draft, self.bot_commands, available_in_category, 
+            self.current_category, self.player_id
+        )
+        # Insert before the confirmation button (which should be last)
+        self.children.insert(-1, dropdown)
 
     def _add_confirmation_button(self):
         """Add confirmation button"""
@@ -2201,7 +2201,7 @@ class ReopenSelectionInterfaceButton(discord.ui.Button):
         private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
         
         await interaction.response.send_message(
-            f"⚔️ **{player_name}의 개인 서번트 선택 (재시도)**\n"
+            f"**{player_name}의 개인 서번트 선택 (재시도)**\n"
             "원하는 서번트를 한 명 선택해줘.\n"
             "다른 플레이어는 네 선택을 볼 수 없어.",
             ephemeral=True,
@@ -2230,6 +2230,11 @@ class CaptainVotingView(discord.ui.View):
 
     async def _finalize_voting(self) -> None:
         """Finalize captain voting and proceed to next phase"""
+        # Prevent timeout triggers from interfering with later phases
+        if self.draft.phase != DraftPhase.CAPTAIN_VOTING:
+            logger.warning(f"Captain voting timeout triggered during wrong phase: {self.draft.phase}")
+            return
+            
         # Count votes
         vote_counts = {}
         for player_id in self.draft.players.keys():
