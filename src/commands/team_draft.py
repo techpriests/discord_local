@@ -119,6 +119,14 @@ class DraftSession:
     selection_progress_message_id: Optional[int] = None
     selection_buttons_message_id: Optional[int] = None  # Separate message for buttons
     last_progress_update_hash: Optional[str] = field(default=None)  # Prevent unnecessary view recreation
+    
+    # Active views tracking for memory management
+    active_views: Dict[int, List[discord.ui.View]] = field(default_factory=dict)  # channel_id -> views
+
+    def __post_init__(self):
+        """Initialize computed fields after dataclass creation"""
+        # This is called automatically after __init__
+        pass
 
 
 class TeamDraftCommands(BaseCommands):
@@ -134,6 +142,9 @@ class TeamDraftCommands(BaseCommands):
         self.bot = bot
         self.active_drafts: Dict[int, DraftSession] = {}  # channel_id -> DraftSession
         self.draft_start_times: Dict[int, float] = {}  # channel_id -> timestamp
+        
+        # View tracking for memory management
+        self.active_views: Dict[int, List[discord.ui.View]] = {}  # channel_id -> views
         
         # Start cleanup task
         if bot:
@@ -238,6 +249,41 @@ class TeamDraftCommands(BaseCommands):
         if self.bot:
             return self.bot.get_channel(draft.channel_id)
         return None
+
+    def _register_view(self, channel_id: int, view: discord.ui.View) -> None:
+        """Register a view for memory management tracking"""
+        if channel_id not in self.active_views:
+            self.active_views[channel_id] = []
+        self.active_views[channel_id].append(view)
+        logger.debug(f"Registered view for channel {channel_id}. Total views: {len(self.active_views[channel_id])}")
+
+    async def _cleanup_views(self, channel_id: int) -> None:
+        """Stop and cleanup all views for a channel"""
+        if channel_id in self.active_views:
+            views = self.active_views[channel_id]
+            logger.info(f"Cleaning up {len(views)} views for channel {channel_id}")
+            
+            for view in views:
+                try:
+                    if not view.is_finished():
+                        view.stop()
+                        logger.debug(f"Stopped view: {type(view).__name__}")
+                except Exception as e:
+                    logger.warning(f"Error stopping view {type(view).__name__}: {e}")
+            
+            # Clear the list
+            del self.active_views[channel_id]
+            logger.info(f"Completed view cleanup for channel {channel_id}")
+
+    async def _cleanup_all_message_ids(self, draft: DraftSession) -> None:
+        """Clean up all message IDs to prevent memory leaks"""
+        draft.captain_vote_message_id = None
+        draft.status_message_id = None
+        draft.ban_progress_message_id = None
+        draft.selection_progress_message_id = None
+        draft.selection_buttons_message_id = None
+        draft.last_progress_update_hash = None
+        logger.debug(f"Cleaned up all message IDs for channel {draft.channel_id}")
 
     async def _create_draft_thread(self, draft: DraftSession) -> Optional[discord.Thread]:
         """Create a thread for the draft"""
@@ -1484,14 +1530,21 @@ class TeamDraftCommands(BaseCommands):
             await self.send_error(ctx_or_interaction, "진행 중인 드래프트가 없어.")
             return
         
-        # Clean up message IDs to prevent memory leaks
+        # Get draft for cleanup
         draft = self.active_drafts[channel_id]
-        draft.selection_buttons_message_id = None
-        draft.selection_progress_message_id = None
         
+        # Stop all active views to prevent memory leaks
+        await self._cleanup_views(channel_id)
+        
+        # Clean up all message IDs to prevent memory leaks
+        await self._cleanup_all_message_ids(draft)
+        
+        # Remove from tracking
         del self.active_drafts[channel_id]
         if channel_id in self.draft_start_times:
             del self.draft_start_times[channel_id]
+        
+        logger.info(f"Draft cancelled in channel {channel_id} with full cleanup")
         await self.send_success(ctx_or_interaction, "드래프트를 취소했어.")
 
     def _sanitize_username(self, username: str) -> str:
@@ -1542,9 +1595,13 @@ class TeamDraftCommands(BaseCommands):
                     # Clean up draft state
                     if channel_id in self.active_drafts:
                         draft = self.active_drafts[channel_id]
-                        # Clean up message IDs to prevent memory leaks
-                        draft.selection_buttons_message_id = None
-                        draft.selection_progress_message_id = None
+                        
+                        # Stop all active views to prevent memory leaks
+                        await self._cleanup_views(channel_id)
+                        
+                        # Clean up all message IDs to prevent memory leaks
+                        await self._cleanup_all_message_ids(draft)
+                        
                         del self.active_drafts[channel_id]
                     if channel_id in self.draft_start_times:
                         del self.draft_start_times[channel_id]
@@ -1962,15 +2019,21 @@ class TeamDraftCommands(BaseCommands):
             except Exception as e:
                 logger.warning(f"Failed to send final roster to main channel: {e}")
         
-        # Clean up
+        # Clean up with comprehensive memory management
         if current_channel_id in self.active_drafts:
             draft = self.active_drafts[current_channel_id]
-            # Clean up message IDs to prevent memory leaks
-            draft.selection_buttons_message_id = None
-            draft.selection_progress_message_id = None
+            
+            # Stop all active views to prevent memory leaks
+            await self._cleanup_views(current_channel_id)
+            
+            # Clean up all message IDs to prevent memory leaks
+            await self._cleanup_all_message_ids(draft)
+            
             del self.active_drafts[current_channel_id]
         if current_channel_id in self.draft_start_times:
             del self.draft_start_times[current_channel_id]
+        
+        logger.info(f"Draft completed in channel {current_channel_id} with full cleanup")
 
     async def _check_voting_completion(self, view: 'CaptainVotingView') -> bool:
         """Check if voting should be completed"""
@@ -2649,7 +2712,7 @@ class ReopenBanInterfaceView(discord.ui.View):
     """View with reopen button for expired ban interfaces"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', captain_id: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.captain_id = captain_id
@@ -2705,7 +2768,7 @@ class ReopenSelectionInterfaceView(discord.ui.View):
     """View with reopen button for expired selection interfaces"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', player_id: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.player_id = player_id
@@ -2780,7 +2843,7 @@ class ReopenCaptainBanInterfaceView(discord.ui.View):
     """View with reopen button for expired captain ban interfaces"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', captain_id: int):
-        super().__init__(timeout=None)
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.captain_id = captain_id
@@ -3150,21 +3213,12 @@ class OpenCaptainBanInterfaceButton(discord.ui.Button):
             current_bans = view.draft.captain_bans.get(self.captain_id, [])
             if current_bans:
                 ban_text = current_bans[0]
-                # If it's no longer their turn, don't allow editing
-                if view.draft.current_banning_captain != self.captain_id:
-                    await interaction.response.send_message(
-                        f"이미 밴을 완료했어: **{ban_text}**\n"
-                        "밴이 공개된 후에는 변경할 수 없어.", 
-                        ephemeral=True
-                    )
-                else:
-                    # Still their turn, allow editing
-                    await interaction.response.send_message(
-                        f"이미 밴을 완료했어: **{ban_text}**\n"
-                        "변경하려면 다시 선택하고 확정해줘.", 
-                        ephemeral=True, 
-                        view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id)
-                    )
+                # Ban completed and recorded - no editing allowed
+                await interaction.response.send_message(
+                    f"이미 밴을 완료했어: **{ban_text}**\n"
+                    "확정된 밴은 변경할 수 없어.", 
+                    ephemeral=True
+                )
             else:
                 # No bans recorded but marked complete - allow them to select
                 await interaction.response.send_message(
@@ -3291,8 +3345,11 @@ class PrivateCaptainBanCategoryButton(discord.ui.Button):
         """Handle category button click"""
         view: PrivateCaptainBanView = self.view
         
-        # Validate user is the captain
-        if interaction.user.id != view.captain_id:
+        # Validate user is the captain (with test mode support)
+        if view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id:
+            # In test mode, allow the real user to access any captain's interface
+            pass
+        elif interaction.user.id != view.captain_id:
             await interaction.response.send_message(
                 "이 인터페이스는 네가 사용할 수 없어.", ephemeral=True
             )
@@ -3336,8 +3393,11 @@ class PrivateCaptainBanCharacterDropdown(discord.ui.Select):
         """Handle character ban selection"""
         view: PrivateCaptainBanView = self.view
         
-        # Validate user is the captain
-        if interaction.user.id != self.captain_id:
+        # Validate user is the captain (with test mode support)
+        if view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id:
+            # In test mode, allow the real user to access any captain's interface
+            pass
+        elif interaction.user.id != self.captain_id:
             await interaction.response.send_message(
                 "이 인터페이스는 네가 사용할 수 없어.", ephemeral=True
             )
@@ -3370,8 +3430,11 @@ class ConfirmCaptainBanButton(discord.ui.Button):
         """Confirm captain ban selection"""
         view: PrivateCaptainBanView = self.view
         
-        # Validate user is the captain
-        if interaction.user.id != self.captain_id:
+        # Validate user is the captain (with test mode support)
+        if view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id:
+            # In test mode, allow the real user to access any captain's interface
+            pass
+        elif interaction.user.id != self.captain_id:
             await interaction.response.send_message(
                 "이 인터페이스는 네가 사용할 수 없어.", ephemeral=True
             )
