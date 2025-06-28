@@ -1256,14 +1256,14 @@ class TeamDraftCommands(BaseCommands):
             b_bans = [b for b in system_bans if b in draft.servant_tiers["B"]]
             
             if s_bans:
-                ban_details.append(f"**S 티어**: {', '.join(s_bans)}")
+                ban_details.append(f"**갑**: {', '.join(s_bans)}")
             if a_bans:
-                ban_details.append(f"**A 티어**: {', '.join(a_bans)}")
+                ban_details.append(f"**을**: {', '.join(a_bans)}")
             if b_bans:
-                ban_details.append(f"**B 티어**: {', '.join(b_bans)}")
+                ban_details.append(f"**병**: {', '.join(b_bans)}")
             
-            embed.add_field(name="밴된 서번트", value="\n".join(ban_details), inline=False)
-            embed.add_field(name="총 시스템 밴", value=f"{len(system_bans)}개", inline=True)
+            embed.add_field(name="추방된 서번트", value="\n".join(ban_details), inline=False)
+            embed.add_field(name="문 셀 밴", value=f"{len(system_bans)}개", inline=True)
         
         await self._safe_api_call(
             lambda: channel.send(embed=embed),
@@ -1294,7 +1294,7 @@ class TeamDraftCommands(BaseCommands):
         # Announce dice roll results
         embed = discord.Embed(
             title="🎲 팀장 밴 순서 결정",
-            description="주사위로 어느 팀장이 먼저 밴할지 결정했어.",
+            description="주사위로 어느 팀장이 먼저 밴할지 정했어.",
             color=INFO_COLOR
         )
         
@@ -1307,7 +1307,7 @@ class TeamDraftCommands(BaseCommands):
         
         first_captain_name = draft.players[draft.captain_ban_order[0]].username
         embed.add_field(name="먼저 밴하는 팀장", value=first_captain_name, inline=True)
-        embed.add_field(name="밴 개수", value="각 팀장마다 1개씩", inline=True)
+        embed.add_field(name="밴 횟수", value="팀장마다 1명씩", inline=True)
         
         await self._safe_api_call(
             lambda: channel.send(embed=embed),
@@ -1609,15 +1609,15 @@ class PlayerDropdown(discord.ui.Select):
         
         options = [
             discord.SelectOption(
-                label=f"{player.username}",
-                description=f"서번트: {draft.confirmed_servants[player.user_id]}",
+                label=f"{draft.confirmed_servants[player.user_id]}",
+                description=f"마스터: {player.username}",
                 value=str(player.user_id)
             )
             for player in available_players[:25]  # Discord limit
         ]
         
         super().__init__(
-            placeholder="팀원 선택...",
+            placeholder="팀원 선택(주의: 메뉴에서 고르자마자 선택이 확정돼!)",
             options=options,
             min_values=1,
             max_values=1
@@ -2263,9 +2263,20 @@ class ReopenCaptainBanInterfaceButton(discord.ui.Button):
             
         # Check if already completed bans
         if view.draft.captain_ban_progress.get(self.captain_id, False):
-            await interaction.response.send_message(
-                "이미 밴을 완료했어.", ephemeral=True
-            )
+            current_bans = view.draft.captain_bans.get(self.captain_id, [])
+            if current_bans and view.draft.current_banning_captain != self.captain_id:
+                # Ban completed and it's no longer their turn - don't allow editing
+                ban_text = current_bans[0]
+                await interaction.response.send_message(
+                    f"이미 밴을 완료했어: **{ban_text}**\n"
+                    "밴이 공개된 후에는 변경할 수 없어.", 
+                    ephemeral=True
+                )
+            else:
+                # Either no bans recorded or still their turn
+                await interaction.response.send_message(
+                    "이미 밴을 완료했어.", ephemeral=True
+                )
             return
         
         # Generate new session ID and create fresh interface
@@ -2567,13 +2578,23 @@ class OpenCaptainBanInterfaceButton(discord.ui.Button):
             current_bans = view.draft.captain_bans.get(self.captain_id, [])
             if current_bans:
                 ban_text = current_bans[0]
-                await interaction.response.send_message(
-                    f"이미 밴을 완료했어: **{ban_text}**\n"
-                    "변경하려면 다시 선택하고 확정해줘.", 
-                    ephemeral=True, 
-                    view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id, session_id)
-                )
+                # If it's no longer their turn, don't allow editing
+                if view.draft.current_banning_captain != self.captain_id:
+                    await interaction.response.send_message(
+                        f"이미 밴을 완료했어: **{ban_text}**\n"
+                        "밴이 공개된 후에는 변경할 수 없어.", 
+                        ephemeral=True
+                    )
+                else:
+                    # Still their turn, allow editing
+                    await interaction.response.send_message(
+                        f"이미 밴을 완료했어: **{ban_text}**\n"
+                        "변경하려면 다시 선택하고 확정해줘.", 
+                        ephemeral=True, 
+                        view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id, session_id)
+                    )
             else:
+                # No bans recorded but marked complete - allow them to select
                 await interaction.response.send_message(
                     "밴을 완료했지만 선택이 없어. 다시 선택해줘.", 
                     ephemeral=True,
