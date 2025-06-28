@@ -872,17 +872,29 @@ class TeamDraftCommands(BaseCommands):
         draft.available_servants = draft.available_servants - taken_servants - draft.banned_servants
         
         embed = discord.Embed(
-            title="🔄 서번트 재선택",
-            description="중복으로 인해 서번트를 다시 선택해야 하는 플레이어들이 있어.\n"
-                       "**현재 카테고리: 세이버**\n"
-                       "❌ 표시된 서번트는 이미 선택되었거나 금지되어 선택할 수 없어.",
+            title="⚔️ 서번트 선택 결과 - 중복이 있어",
+            description="중복 선택된 서번트가 있네. 주사위로 결정하자.\n"
+                       "일부 서번트는 확정되었고, 중복된 플레이어들은 재선택해야 해.",
             color=INFO_COLOR
         )
         
-        reselect_names = [draft.players[uid].username for uid in reselect_users]
-        embed.add_field(name="재선택 대상", value="\n".join(reselect_names), inline=False)
+        # Show confirmed servants (locked in)
+        if draft.confirmed_servants:
+            confirmed_list = []
+            for player_id, servant in draft.confirmed_servants.items():
+                player_name = draft.players[player_id].username
+                confirmed_list.append(f"🔒 {servant}: {player_name}")
+            embed.add_field(
+                name="✅ 확정된 서번트 (수정 불가)",
+                value="\n".join(confirmed_list),
+                inline=False
+            )
         
-        # Show available characters in first category
+        # Show reselection targets  
+        reselect_names = [draft.players[uid].username for uid in reselect_users]
+        embed.add_field(name="🔄 재선택 대상", value="\n".join(reselect_names), inline=False)
+        
+        # Show available characters in first category (exclude confirmed + banned)
         available_saber = [
             char for char in draft.servant_categories["세이버"] 
             if char not in taken_servants and char not in draft.banned_servants
@@ -897,7 +909,7 @@ class TeamDraftCommands(BaseCommands):
         embed.add_field(
             name="📋 재선택 방법",
             value="각자의 개인 선택 버튼을 사용해서 재선택해줘.\n"
-                  "❌ 표시된 서번트는 이미 선택되어 있어.",
+                  "🔒 확정된 서번트와 ❌ 금지된 서번트는 선택할 수 없어.",
             inline=False
         )
         
@@ -1658,6 +1670,13 @@ class PlayerDropdown(discord.ui.Select):
         """Handle player selection"""
         user_id = interaction.user.id
         
+        # Validate current phase - reject if not in team selection phase
+        if self.draft.phase != DraftPhase.TEAM_SELECTION:
+            await interaction.response.send_message(
+                "팀 선택 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
         # In test mode, allow the real user to select for both teams
         if self.draft.is_test_mode and user_id == self.draft.real_user_id:
             # Real user can pick for any captain in test mode
@@ -1750,6 +1769,13 @@ class CompleteButton(discord.ui.Button):
         """Handle team completion"""
         view: FinalSwapView = self.view
         user_id = interaction.user.id
+        
+        # Validate current phase - reject if not in final swap phase
+        if view.draft.phase != DraftPhase.FINAL_SWAP:
+            await interaction.response.send_message(
+                "최종 교체 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
         
         # Check if user is captain of this team
         player = view.draft.players.get(user_id)
@@ -1871,6 +1897,16 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
             
             if view.draft.selection_progress.get(self.player_id, False):
                 logger.info(f"Player {self.player_id} already completed selection: {current_selection}")
+                
+                # Security: Never reveal servant choice to other players, even in edge cases
+                if user_id != self.player_id and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
+                    await interaction.response.send_message(
+                        "이미 선택을 완료했어.", 
+                        ephemeral=True
+                    )
+                    return
+                
+                # Safe to show detailed info only to the actual player (or test mode real user)
                 if current_selection:
                     await interaction.response.send_message(
                         f"이미 선택을 완료했어: **{current_selection}**\n"
@@ -1971,10 +2007,16 @@ class PrivateSelectionView(discord.ui.View):
             if isinstance(item, (PrivateSelectionCharacterDropdown, EmptySelectionDropdown)):
                 self.remove_item(item)
         
-        # Get available characters for current category (exclude banned)
+        # Get available characters for current category (exclude banned and confirmed)
+        excluded_servants = self.draft.banned_servants.copy()
+        
+        # During reselection, also exclude confirmed servants to prevent infinite loops
+        if self.draft.phase == DraftPhase.SERVANT_RESELECTION:
+            excluded_servants.update(self.draft.confirmed_servants.values())
+        
         available_in_category = [
             char for char in self.draft.servant_categories[self.current_category]
-            if char not in self.draft.banned_servants
+            if char not in excluded_servants
         ]
         
         # Check if category has any available characters
@@ -2008,13 +2050,18 @@ class PrivateSelectionView(discord.ui.View):
             color=INFO_COLOR
         )
         
-        # Show characters in current category with ban status
+        # Show characters in current category with status
         chars_in_category = self.draft.servant_categories[new_category]
-        char_list = "\n".join([
-            f"{'❌' if char in self.draft.banned_servants else '•'} {char}" 
-            for char in chars_in_category
-        ])
-        embed.add_field(name=f"{new_category} 서번트 목록", value=char_list, inline=False)
+        char_list = []
+        for char in chars_in_category:
+            if char in self.draft.banned_servants:
+                char_list.append(f"❌ {char}")
+            elif char in self.draft.confirmed_servants.values() and self.draft.phase == DraftPhase.SERVANT_RESELECTION:
+                char_list.append(f"🔒 {char}")
+            else:
+                char_list.append(f"• {char}")
+        
+        embed.add_field(name=f"{new_category} 서번트 목록", value="\n".join(char_list), inline=False)
         
         await interaction.response.edit_message(embed=embed, view=self)
 
@@ -2466,6 +2513,13 @@ class CaptainVoteButton(discord.ui.Button):
         """Handle vote button click"""
         user_id = interaction.user.id
         view: CaptainVotingView = self.view
+        
+        # Validate current phase - reject if not in captain voting phase
+        if view.draft.phase != DraftPhase.CAPTAIN_VOTING:
+            await interaction.response.send_message(
+                "캡틴 투표 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
         
         # Check if user is part of the draft
         if user_id not in view.draft.players:
