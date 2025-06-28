@@ -1878,7 +1878,8 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                 for user_ids in view.draft.conflicted_servants.values():
                     conflicted_players.update(user_ids)
                 
-                if self.player_id not in conflicted_players:
+                # In test mode, allow real user to access any player's interface for testing
+                if self.player_id not in conflicted_players and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
                     player_name = view.draft.players[self.player_id].username
                     await interaction.response.send_message(
                         f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
@@ -2310,7 +2311,8 @@ class ReopenSelectionInterfaceButton(discord.ui.Button):
             for user_ids in view.draft.conflicted_servants.values():
                 conflicted_players.update(user_ids)
             
-            if self.player_id not in conflicted_players:
+            # In test mode, allow real user to access any player's interface for testing
+            if self.player_id not in conflicted_players and not (view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id):
                 player_name = view.draft.players[self.player_id].username
                 await interaction.response.send_message(
                     f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
