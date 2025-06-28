@@ -703,6 +703,10 @@ class TeamDraftCommands(BaseCommands):
                     servant = random.choice(available_servants)
                     player.selected_servant = servant
                     draft.selection_progress[player_id] = True
+                    
+                    # Invalidate session to prevent interface reopening after auto-completion
+                    draft.selection_interface_sessions[player_id] = self._generate_session_id()
+                    
                     available_servants.remove(servant)
                     logger.info(f"Auto-selected {servant} for fake player {player.username}")
 
@@ -786,6 +790,7 @@ class TeamDraftCommands(BaseCommands):
                 for user_id in conflicts[servant]:  # Use original conflict list
                     if user_id != winner_id:
                         current_draft.players[user_id].selected_servant = None
+                        current_draft.selection_progress[user_id] = False  # Allow reselection
                 
                 # Add to embed with tie information
                 roll_text = "\n".join([
@@ -1859,15 +1864,13 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                 if current_selection:
                     await interaction.response.send_message(
                         f"이미 선택을 완료했어: **{current_selection}**\n"
-                        "변경하려면 다시 선택하고 확정해줘.", 
-                        ephemeral=True, 
-                        view=PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
+                        "더 이상 변경할 수 없어.", 
+                        ephemeral=True
                     )
                 else:
                     await interaction.response.send_message(
-                        "선택을 완료했지만 서번트가 없어. 다시 선택해줘.", 
-                        ephemeral=True,
-                        view=PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
+                        "선택을 완료했지만 서번트가 없어. 시스템 오류일 수 있으니 관리자에게 문의해줘.", 
+                        ephemeral=True
                     )
                 return
             
