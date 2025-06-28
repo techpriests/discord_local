@@ -62,8 +62,8 @@ class DraftSession:
     
     # Servant tier definitions for ban system
     servant_tiers: Dict[str, List[str]] = field(default_factory=lambda: {
-        "S": ["헤클", "길가", "네로", "가재"],
-        "A": ["세이버", "란슬", "카르나", "룰러"],
+        "S": ["헤클", "길가", "란슬", "가재"],  # '란슬' moved to S, '네로' moved to A
+        "A": ["세이버", "네로", "카르나", "룰러"],  # '네로' moved to A, '란슬' moved to S
         "B": ["디미", "이칸", "산노", "서문", "바토리"]
     })
     
@@ -1711,11 +1711,14 @@ class TeamDraftCommands(BaseCommands):
         available_a_tier = [s for s in draft.servant_tiers["A"] if s in draft.available_servants]
         available_b_tier = [s for s in draft.servant_tiers["B"] if s in draft.available_servants]
         
-        # 1 random from S tier
-        if available_s_tier:
+        # 2 random from S tier (if possible)
+        s_bans = []
+        for _ in range(min(2, len(available_s_tier))):
             s_ban = random.choice(available_s_tier)
+            s_bans.append(s_ban)
             system_bans.append(s_ban)
             draft.available_servants.discard(s_ban)
+            available_s_tier.remove(s_ban)
             available_a_tier = [s for s in available_a_tier if s != s_ban]  # Remove from other tiers if duplicate
             available_b_tier = [s for s in available_b_tier if s != s_ban]
         
