@@ -17,6 +17,8 @@ from src.utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
 
 logger = logging.getLogger(__name__)
 
+# Hot reload test comment - this should trigger the deployment action
+
 
 class DraftPhase(Enum):
     """Phases of the draft system"""
