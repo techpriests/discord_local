@@ -1377,13 +1377,13 @@ class TeamDraftCommands(BaseCommands):
 
     async def _complete_servant_bans(self, draft: DraftSession) -> None:
         """Complete servant ban phase and reveal banned servants"""
-        # Collect all banned servants
+        # Collect all banned servants (captain bans are already in banned_servants)
         all_captain_bans = []
         for captain_id, bans in draft.captain_bans.items():
             all_captain_bans.extend(bans)
         
-        # Add captain bans to total banned set
-        draft.banned_servants.update(all_captain_bans)
+        # Captain bans are already added to banned_servants when confirmed
+        # No need to update banned_servants again
         
         embed = discord.Embed(
             title="🚫 서번트 밴 결과",
@@ -1466,6 +1466,18 @@ class TeamDraftCommands(BaseCommands):
             if draft.system_bans:
                 system_ban_text = ", ".join(draft.system_bans)
                 embed.add_field(name="시스템 밴", value=system_ban_text, inline=False)
+            
+            # Show completed captain bans in order
+            completed_bans = []
+            for i, captain_id in enumerate(draft.captain_ban_order):
+                captain_name = draft.players[captain_id].username
+                if draft.captain_ban_progress.get(captain_id, False):
+                    captain_bans = draft.captain_bans.get(captain_id, [])
+                    ban_text = captain_bans[0] if captain_bans else "없음"
+                    completed_bans.append(f"{i+1}. {captain_name}: {ban_text}")
+            
+            if completed_bans:
+                embed.add_field(name="완료된 팀장 밴", value="\n".join(completed_bans), inline=False)
             
             # Show current banning captain
             if draft.current_banning_captain:
@@ -2869,6 +2881,9 @@ class ConfirmCaptainBanButton(discord.ui.Button):
         # Save ban
         view.draft.captain_bans[self.captain_id] = [view.selected_ban]
         view.draft.captain_ban_progress[self.captain_id] = True
+        
+        # Immediately add the ban to banned_servants to prevent other captains from selecting it
+        view.draft.banned_servants.add(view.selected_ban)
         
         # Invalidate session to prevent further changes after confirmation
         view.draft.ban_interface_sessions[self.captain_id] = view.bot_commands._generate_session_id()
