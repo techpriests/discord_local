@@ -98,6 +98,7 @@ class DraftSession:
     current_picking_captain: Optional[int] = None
     picks_this_round: Dict[int, int] = field(default_factory=dict)  # captain_id -> picks_made
     pending_team_selections: Dict[int, List[int]] = field(default_factory=dict)  # captain_id -> [pending_player_ids]
+    team_selection_progress: Dict[int, Dict[int, bool]] = field(default_factory=dict)  # captain_id -> {round -> completed}
     
     # Servant ban phase - enhanced for new system
     banned_servants: Set[str] = field(default_factory=set)
@@ -120,13 +121,7 @@ class DraftSession:
     selection_buttons_message_id: Optional[int] = None  # Separate message for buttons
     last_progress_update_hash: Optional[str] = field(default=None)  # Prevent unnecessary view recreation
     
-    # Active views tracking for memory management
-    active_views: Dict[int, List[discord.ui.View]] = field(default_factory=dict)  # channel_id -> views
-
-    def __post_init__(self):
-        """Initialize computed fields after dataclass creation"""
-        # This is called automatically after __init__
-        pass
+    # Note: Active views tracking moved to TeamDraftCommands class for centralized memory management
 
 
 class TeamDraftCommands(BaseCommands):
@@ -256,6 +251,20 @@ class TeamDraftCommands(BaseCommands):
             self.active_views[channel_id] = []
         self.active_views[channel_id].append(view)
         logger.debug(f"Registered view for channel {channel_id}. Total views: {len(self.active_views[channel_id])}")
+        
+        # Set timeout callback for automatic cleanup
+        view.on_timeout = self._create_view_timeout_callback(channel_id, view)
+
+    def _create_view_timeout_callback(self, channel_id: int, view: discord.ui.View):
+        """Create a timeout callback for automatic view cleanup"""
+        async def timeout_callback():
+            try:
+                if channel_id in self.active_views and view in self.active_views[channel_id]:
+                    self.active_views[channel_id].remove(view)
+                    logger.debug(f"Removed timed-out view from channel {channel_id}")
+            except Exception as e:
+                logger.warning(f"Error in view timeout callback: {e}")
+        return timeout_callback
 
     async def _cleanup_views(self, channel_id: int) -> None:
         """Stop and cleanup all views for a channel"""
@@ -294,7 +303,45 @@ class TeamDraftCommands(BaseCommands):
                 return None
             
             team_format = f"{draft.team_size}v{draft.team_size}"
-            thread_name = f"🏆 팀 드래프트 ({team_format})"
+            
+            # Generate unique thread name with numbering
+            base_name = f"팀 드래프트 ({team_format})"
+            thread_name = f"🏆 {base_name}"
+            
+            # Check for existing threads with similar names and add numbering
+            try:
+                # Get all active threads in the channel
+                active_threads = []
+                async for thread in main_channel.archived_threads(limit=100):
+                    active_threads.append(thread)
+                
+                # Also check current active threads
+                if hasattr(main_channel, 'threads'):
+                    active_threads.extend(main_channel.threads)
+                
+                # Find existing draft threads and determine next number
+                existing_numbers = []
+                for thread in active_threads:
+                    if base_name in thread.name:
+                        # Extract number from thread name if it exists
+                        import re
+                        match = re.search(rf"{re.escape(base_name)} #(\d+)", thread.name)
+                        if match:
+                            existing_numbers.append(int(match.group(1)))
+                        elif thread.name == f"🏆 {base_name}":
+                            existing_numbers.append(1)  # Original thread is #1
+                
+                # Determine next available number
+                if existing_numbers:
+                    next_number = max(existing_numbers) + 1
+                    thread_name = f"🏆 {base_name} #{next_number}"
+                
+            except Exception as e:
+                logger.warning(f"Could not check existing threads for numbering: {e}")
+                # Fallback to timestamp-based naming if thread enumeration fails
+                import time
+                timestamp = int(time.time()) % 10000  # Last 4 digits of timestamp
+                thread_name = f"🏆 {base_name} #{timestamp}"
             
             # Create the thread
             thread = await main_channel.create_thread(
@@ -411,6 +458,7 @@ class TeamDraftCommands(BaseCommands):
                     if message:
                         # Create a view with just the reopen button for this captain
                         view = ReopenCaptainBanInterfaceView(draft, self, captain_id)
+                        self._register_view(draft.channel_id, view)
                         await message.edit(view=view)
         except Exception as e:
             logger.error(f"Error adding reopen captain ban interface button: {e}")
@@ -425,6 +473,7 @@ class TeamDraftCommands(BaseCommands):
                     if message:
                         # Create a view with just the reopen button for this player
                         view = ReopenSelectionInterfaceView(draft, self, player_id)
+                        self._register_view(draft.channel_id, view)
                         await message.edit(view=view)
         except Exception as e:
             logger.error(f"Error adding reopen selection interface button: {e}")
@@ -755,6 +804,7 @@ class TeamDraftCommands(BaseCommands):
         
         # Create voting view
         view = CaptainVotingView(draft, self)
+        self._register_view(draft.channel_id, view)
         
         # Send to draft thread if available, otherwise use the original interaction context
         draft_channel = self._get_draft_channel(draft)
@@ -938,6 +988,7 @@ class TeamDraftCommands(BaseCommands):
         
         # Create static button view (this will never be recreated)
         view = EphemeralSelectionView(current_draft, self)
+        self._register_view(current_draft.channel_id, view)
         try:
             button_message = await self._safe_api_call(
                 lambda: channel.send(embed=button_embed, view=view), 
@@ -1193,8 +1244,10 @@ class TeamDraftCommands(BaseCommands):
 
     async def _start_servant_reselection(self, draft: DraftSession, channel_id: int) -> None:
         """Start servant reselection for conflict losers"""
-        channel = self.bot.get_channel(channel_id)
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(draft)
         if not channel:
+            logger.warning(f"Could not get draft channel for servant reselection")
             return
         
         # Increment reselection round and check for infinite loops
@@ -1339,6 +1392,8 @@ class TeamDraftCommands(BaseCommands):
         draft.team_selection_round = 1
         draft.current_picking_captain = draft.first_pick_captain
         draft.picks_this_round = {captain1: 0, captain2: 0}
+        # Initialize team selection progress tracking
+        draft.team_selection_progress = {captain1: {}, captain2: {}}
         
         # Assign captains to teams
         draft.players[captain1].team = 1
@@ -1408,6 +1463,7 @@ class TeamDraftCommands(BaseCommands):
                 # Move to next round
                 draft.team_selection_round += 1
                 draft.picks_this_round = {draft.captains[0]: 0, draft.captains[1]: 0}
+                # Reset progress tracking for new round (don't clear history, just don't mark new round as completed yet)
                 draft.current_picking_captain = draft.first_pick_captain
         
         # Show current picking status and available players
@@ -1470,6 +1526,7 @@ class TeamDraftCommands(BaseCommands):
         
         # Create selection view with confirmation button
         view = TeamSelectionView(draft, self, available_players)
+        self._register_view(draft.channel_id, view)
         
         # Send to thread with interactive view
         await self._safe_api_call(
@@ -1925,6 +1982,7 @@ class TeamDraftCommands(BaseCommands):
             # Keep the same view if not all captains are done
             if not all(draft.captain_ban_progress.values()):
                 view = EphemeralCaptainBanView(draft, self)
+                self._register_view(draft.channel_id, view)
                 await message.edit(embed=embed, view=view)
             else:
                 await message.edit(embed=embed, view=None)
@@ -2079,6 +2137,7 @@ class TeamDraftCommands(BaseCommands):
         embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
         
         view = FinalSwapView(draft, self)
+        self._register_view(draft.channel_id, view)
         await self._safe_api_call(
             lambda: channel.send(embed=embed, view=view),
             bucket=f"final_swap_{draft.channel_id}"
@@ -2143,6 +2202,17 @@ class PlayerDropdown(discord.ui.Select):
         elif user_id != self.draft.current_picking_captain:
             await interaction.response.send_message(
                 "지금은 네 차례가 아니야.", ephemeral=True
+            )
+            return
+        
+        # CRITICAL: Check if captain already completed their selections for this round
+        current_captain = self.draft.current_picking_captain
+        current_round = self.draft.team_selection_round
+        if (current_captain in self.draft.team_selection_progress and 
+            current_round in self.draft.team_selection_progress[current_captain] and
+            self.draft.team_selection_progress[current_captain][current_round]):
+            await interaction.response.send_message(
+                "이번 라운드 선택을 이미 완료했어. 더 이상 선택할 수 없어.", ephemeral=True
             )
             return
         
@@ -2869,10 +2939,28 @@ class ReopenCaptainBanInterfaceButton(discord.ui.Button):
         """Reopen captain ban interface for this captain"""
         view: ReopenCaptainBanInterfaceView = self.view
         
+        # CRITICAL: Check if draft phase has moved beyond banning
+        if view.draft.phase != DraftPhase.SERVANT_BAN:
+            await interaction.response.send_message(
+                "밴 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
         # Check if it's the current captain's turn
         if view.draft.current_banning_captain != self.captain_id:
             await interaction.response.send_message(
                 "지금은 네 차례가 아니야. 순서를 기다려줘.", ephemeral=True
+            )
+            return
+        
+        # CRITICAL: Additional check - if captain already completed their ban AND it's no longer their turn
+        if (view.draft.captain_ban_progress.get(self.captain_id, False) and 
+            view.draft.current_banning_captain != self.captain_id):
+            current_bans = view.draft.captain_bans.get(self.captain_id, [])
+            ban_text = current_bans[0] if current_bans else "없음"
+            await interaction.response.send_message(
+                f"이미 밴을 완료했어: **{ban_text}**\n"
+                "완료된 밴은 더 이상 변경할 수 없어.", ephemeral=True
             )
             return
         
@@ -3190,10 +3278,28 @@ class OpenCaptainBanInterfaceButton(discord.ui.Button):
         user_id = interaction.user.id
         view: EphemeralCaptainBanView = self.view
         
+        # CRITICAL: Check if draft phase has moved beyond banning
+        if view.draft.phase != DraftPhase.SERVANT_BAN:
+            await interaction.response.send_message(
+                "밴 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
         # Check if it's the current captain's turn
         if view.draft.current_banning_captain != self.captain_id:
             await interaction.response.send_message(
                 "지금은 네 차례가 아니야. 순서를 기다려줘.", ephemeral=True
+            )
+            return
+        
+        # CRITICAL: Additional check - if captain already completed their ban AND it's no longer their turn
+        if (view.draft.captain_ban_progress.get(self.captain_id, False) and 
+            view.draft.current_banning_captain != self.captain_id):
+            current_bans = view.draft.captain_bans.get(self.captain_id, [])
+            ban_text = current_bans[0] if current_bans else "없음"
+            await interaction.response.send_message(
+                f"이미 밴을 완료했어: **{ban_text}**\n"
+                "완료된 밴은 더 이상 변경할 수 없어.", ephemeral=True
             )
             return
         
@@ -3345,6 +3451,24 @@ class PrivateCaptainBanCategoryButton(discord.ui.Button):
         """Handle category button click"""
         view: PrivateCaptainBanView = self.view
         
+        # CRITICAL: Check if draft phase has moved beyond banning
+        if view.draft.phase != DraftPhase.SERVANT_BAN:
+            await interaction.response.send_message(
+                "밴 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
+        # CRITICAL: Additional check - if captain already completed their ban AND it's no longer their turn
+        if (view.draft.captain_ban_progress.get(view.captain_id, False) and 
+            view.draft.current_banning_captain != view.captain_id):
+            current_bans = view.draft.captain_bans.get(view.captain_id, [])
+            ban_text = current_bans[0] if current_bans else "없음"
+            await interaction.response.send_message(
+                f"이미 밴을 완료했어: **{ban_text}**\n"
+                "완료된 밴은 더 이상 변경할 수 없어.", ephemeral=True
+            )
+            return
+        
         # Validate user is the captain (with test mode support)
         if view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id:
             # In test mode, allow the real user to access any captain's interface
@@ -3393,6 +3517,24 @@ class PrivateCaptainBanCharacterDropdown(discord.ui.Select):
         """Handle character ban selection"""
         view: PrivateCaptainBanView = self.view
         
+        # CRITICAL: Check if draft phase has moved beyond banning
+        if view.draft.phase != DraftPhase.SERVANT_BAN:
+            await interaction.response.send_message(
+                "밴 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
+        # CRITICAL: Additional check - if captain already completed their ban AND it's no longer their turn
+        if (view.draft.captain_ban_progress.get(self.captain_id, False) and 
+            view.draft.current_banning_captain != self.captain_id):
+            current_bans = view.draft.captain_bans.get(self.captain_id, [])
+            ban_text = current_bans[0] if current_bans else "없음"
+            await interaction.response.send_message(
+                f"이미 밴을 완료했어: **{ban_text}**\n"
+                "완료된 밴은 더 이상 변경할 수 없어.", ephemeral=True
+            )
+            return
+        
         # Validate user is the captain (with test mode support)
         if view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id:
             # In test mode, allow the real user to access any captain's interface
@@ -3429,6 +3571,24 @@ class ConfirmCaptainBanButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         """Confirm captain ban selection"""
         view: PrivateCaptainBanView = self.view
+        
+        # CRITICAL: Check if draft phase has moved beyond banning
+        if view.draft.phase != DraftPhase.SERVANT_BAN:
+            await interaction.response.send_message(
+                "밴 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
+        # CRITICAL: Additional check - if captain already completed their ban AND it's no longer their turn
+        if (view.draft.captain_ban_progress.get(self.captain_id, False) and 
+            view.draft.current_banning_captain != self.captain_id):
+            current_bans = view.draft.captain_bans.get(self.captain_id, [])
+            ban_text = current_bans[0] if current_bans else "없음"
+            await interaction.response.send_message(
+                f"이미 밴을 완료했어: **{ban_text}**\n"
+                "완료된 밴은 더 이상 변경할 수 없어.", ephemeral=True
+            )
+            return
         
         # Validate user is the captain (with test mode support)
         if view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id:
@@ -3509,6 +3669,16 @@ class ConfirmTeamSelectionButton(discord.ui.Button):
             )
             return
         
+        # CRITICAL: Check if captain already completed their selections for this round
+        current_round = view.draft.team_selection_round
+        if (self.captain_id in view.draft.team_selection_progress and 
+            current_round in view.draft.team_selection_progress[self.captain_id] and
+            view.draft.team_selection_progress[self.captain_id][current_round]):
+            await interaction.response.send_message(
+                "이번 라운드 선택을 이미 완료했어. 더 이상 변경할 수 없어.", ephemeral=True
+            )
+            return
+        
         # Get pending selections
         pending_selections = view.draft.pending_team_selections.get(self.captain_id, [])
         if not pending_selections:
@@ -3539,6 +3709,11 @@ class ConfirmTeamSelectionButton(discord.ui.Button):
         
         # Update pick count
         view.draft.picks_this_round[self.captain_id] += len(pending_selections)
+        
+        # Mark round as completed for this captain
+        if self.captain_id not in view.draft.team_selection_progress:
+            view.draft.team_selection_progress[self.captain_id] = {}
+        view.draft.team_selection_progress[self.captain_id][current_round] = True
         
         # Clear pending selections
         view.draft.pending_team_selections[self.captain_id] = []
