@@ -1714,7 +1714,7 @@ class PrivateBanCharacterDropdown(discord.ui.Select):
             options=options,
             min_values=0,
             max_values=min(2, len(options)),
-            row=4
+            row=3
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -2422,7 +2422,7 @@ class EmptySelectionDropdown(discord.ui.Select):
             min_values=0,
             max_values=0,
             disabled=True,
-            row=4
+            row=3
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -2458,7 +2458,7 @@ class PrivateSelectionCharacterDropdown(discord.ui.Select):
             options=options,
             min_values=1,
             max_values=1,
-            row=4
+            row=3
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
