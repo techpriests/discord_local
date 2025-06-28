@@ -45,9 +45,12 @@ class DraftSession:
     """Represents an active draft session"""
     channel_id: int
     guild_id: int
-    team_size: int = 6  # Number of players per team (3 for 3v3, 6 for 6v6)
+    team_size: int = 6  # Number of players per team (2 for 2v2, 3 for 3v3, 5 for 5v5, 6 for 6v6)
     phase: DraftPhase = DraftPhase.WAITING
     players: Dict[int, Player] = field(default_factory=dict)
+    
+    # Thread support for clean draft environment
+    thread_id: Optional[int] = None  # Thread where draft takes place
     
     # Test mode tracking
     is_test_mode: bool = False
@@ -89,11 +92,12 @@ class DraftSession:
     conflicted_servants: Dict[str, List[int]] = field(default_factory=dict)
     confirmed_servants: Dict[int, str] = field(default_factory=dict)
     
-    # Team selection
+    # Team selection with confirmation support
     first_pick_captain: Optional[int] = None
     team_selection_round: int = 1
     current_picking_captain: Optional[int] = None
     picks_this_round: Dict[int, int] = field(default_factory=dict)  # captain_id -> picks_made
+    pending_team_selections: Dict[int, List[int]] = field(default_factory=dict)  # captain_id -> [pending_player_ids]
     
     # Servant ban phase - enhanced for new system
     banned_servants: Set[str] = field(default_factory=set)
@@ -107,14 +111,14 @@ class DraftSession:
     selection_progress: Dict[int, bool] = field(default_factory=dict)  # player_id -> completed
     reselection_round: int = 0  # Track reselection rounds to prevent infinite loops
     
-    # Interface session management (replacement system)
-    ban_interface_sessions: Dict[int, str] = field(default_factory=dict)  # captain_id -> session_id
-    selection_interface_sessions: Dict[int, str] = field(default_factory=dict)  # player_id -> session_id
+    # Note: Session management removed - now using simple Discord ephemeral + user ID validation
     
     # Messages for state tracking
     status_message_id: Optional[int] = None
     ban_progress_message_id: Optional[int] = None
     selection_progress_message_id: Optional[int] = None
+    selection_buttons_message_id: Optional[int] = None  # Separate message for buttons
+    last_progress_update_hash: Optional[str] = field(default=None)  # Prevent unnecessary view recreation
 
 
 class TeamDraftCommands(BaseCommands):
@@ -141,15 +145,23 @@ class TeamDraftCommands(BaseCommands):
         
         # Selection patterns for team picking
         self.team_selection_patterns = {
-            6: [  # 6v6 pattern (original)
+            2: [  # 2v2 pattern
+                {"first_pick": 1, "second_pick": 1},  # Round 1: Each captain picks 1
+            ],
+            3: [  # 3v3 pattern
+                {"first_pick": 1, "second_pick": 2},  # Round 1: First picks 1, Second picks 2
+                {"first_pick": 1, "second_pick": 0},  # Round 2: First picks 1, Second picks 0
+            ],
+            5: [  # 5v5 pattern
+                {"first_pick": 1, "second_pick": 2},  # Round 1: First picks 1, Second picks 2
+                {"first_pick": 2, "second_pick": 2},  # Round 2: Each picks 2
+                {"first_pick": 1, "second_pick": 0},  # Round 3: First picks 1, Second picks 0
+            ],
+            6: [  # 6v6 pattern
                 {"first_pick": 1, "second_pick": 2},  # Round 1
                 {"first_pick": 2, "second_pick": 2},  # Round 2
                 {"first_pick": 1, "second_pick": 1},  # Round 3
                 {"first_pick": 1, "second_pick": 0},  # Round 4
-            ],
-            3: [  # 3v3 pattern (corrected)
-                {"first_pick": 1, "second_pick": 2},  # Round 1: First picks 1, Second picks 2
-                {"first_pick": 1, "second_pick": 0},  # Round 2: First picks 1, Second picks 0
             ]
         }
 
@@ -211,11 +223,134 @@ class TeamDraftCommands(BaseCommands):
         # All retries exhausted
         raise Exception(f"Failed to make API call after {max_retries} attempts")
 
-    def _generate_session_id(self) -> str:
-        """Generate a unique session ID for interface tracking"""
-        return str(uuid.uuid4())[:8]  # Short UUID for easier debugging
+    def _get_draft_channel(self, draft: DraftSession):
+        """Get the channel where draft messages should be sent (thread if exists, otherwise main channel)"""
+        if draft.thread_id and self.bot:
+            # Try to get the thread first
+            try:
+                thread = self.bot.get_channel(draft.thread_id)
+                if thread:
+                    return thread
+            except Exception as e:
+                logger.warning(f"Could not get thread {draft.thread_id}: {e}")
+        
+        # Fallback to main channel
+        if self.bot:
+            return self.bot.get_channel(draft.channel_id)
+        return None
 
+    async def _create_draft_thread(self, draft: DraftSession) -> Optional[discord.Thread]:
+        """Create a thread for the draft"""
+        try:
+            main_channel = self.bot.get_channel(draft.channel_id)
+            if not main_channel or not hasattr(main_channel, 'create_thread'):
+                logger.warning(f"Cannot create thread in channel {draft.channel_id}")
+                return None
+            
+            team_format = f"{draft.team_size}v{draft.team_size}"
+            thread_name = f"🏆 팀 드래프트 ({team_format})"
+            
+            # Create the thread
+            thread = await main_channel.create_thread(
+                name=thread_name,
+                type=discord.ChannelType.public_thread,
+                reason="Team draft session"
+            )
+            
+            draft.thread_id = thread.id
+            logger.info(f"Created draft thread {thread.id} in channel {draft.channel_id}")
+            
+            # Send welcome message to thread
+            welcome_embed = discord.Embed(
+                title=f"🏆 팀 드래프트 시작! ({team_format})",
+                description="이 스레드에서 드래프트가 진행될거야.\n"
+                           "참가자들은 여기서 드래프트 인터페이스를 사용해줘.",
+                color=INFO_COLOR
+            )
+            
+            player_list = "\n".join([f"• {player.username}" 
+                                   for player in draft.players.values()])
+            welcome_embed.add_field(name="참가자", value=player_list, inline=False)
+            
+            await self._safe_api_call(
+                lambda: thread.send(embed=welcome_embed),
+                bucket=f"thread_welcome_{thread.id}"
+            )
+            
+            return thread
+            
+        except Exception as e:
+            logger.error(f"Failed to create draft thread: {e}")
+            return None
 
+    async def _send_to_both_channels(self, draft: DraftSession, embed: discord.Embed = None, content: str = None, view: discord.ui.View = None) -> None:
+        """Send message to both thread and main channel"""
+        try:
+            # Send to thread first
+            thread = self._get_draft_channel(draft) if draft.thread_id else None
+            main_channel = self.bot.get_channel(draft.channel_id) if self.bot else None
+            
+            if thread and draft.thread_id:
+                try:
+                    await self._safe_api_call(
+                        lambda: thread.send(embed=embed, content=content, view=view),
+                        bucket=f"thread_message_{draft.thread_id}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send to thread: {e}")
+            
+            # Send to main channel (without view to avoid duplicate interactions)
+            if main_channel and thread:  # Only send to main if thread exists (hybrid mode)
+                try:
+                    await self._safe_api_call(
+                        lambda: main_channel.send(embed=embed, content=content),
+                        bucket=f"main_channel_message_{draft.channel_id}"
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to send to main channel: {e}")
+                    
+        except Exception as e:
+            logger.error(f"Error in _send_to_both_channels: {e}")
+
+    async def _announce_team_selection_hybrid_mode(self, draft: DraftSession) -> None:
+        """Announce that non-captains can leave thread during team selection"""
+        try:
+            # Get captain names
+            captain_names = [draft.players[cap_id].username for cap_id in draft.captains]
+            
+            # Send announcement to thread
+            thread = self._get_draft_channel(draft) if draft.thread_id else None
+            if thread:
+                thread_embed = discord.Embed(
+                    title="📢 팀 선택 단계 시작",
+                    description=f"이제 **{' vs '.join(captain_names)}** 팀장들이 팀원을 선택할 차례야.\n\n"
+                               f"**📤 팀장이 아닌 플레이어들은 이제 스레드를 나가서 메인 채널에서 자유롭게 채팅해도 돼!**\n"
+                               f"팀 선택 과정과 결과는 메인 채널에도 업데이트될거야.",
+                    color=INFO_COLOR
+                )
+                await self._safe_api_call(
+                    lambda: thread.send(embed=thread_embed),
+                    bucket=f"team_selection_announce_{draft.thread_id}"
+                )
+            
+            # Send announcement to main channel
+            main_channel = self.bot.get_channel(draft.channel_id) if self.bot else None
+            if main_channel:
+                main_embed = discord.Embed(
+                    title="⚡ 팀 선택 단계 진입",
+                    description=f"드래프트가 팀 선택 단계로 진입했어!\n\n"
+                               f"🎯 **팀장**: {' vs '.join(captain_names)}\n"
+                               f"📍 **진행 위치**: 드래프트 스레드\n"
+                               f"📊 **업데이트**: 이 채널에서도 진행 상황을 볼 수 있어",
+                    color=SUCCESS_COLOR
+                )
+                await self._safe_api_call(
+                    lambda: main_channel.send(embed=main_embed),
+                    bucket=f"team_selection_main_announce_{draft.channel_id}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Error announcing team selection hybrid mode: {e}")
 
     # _add_reopen_ban_interface_button removed - old ban system no longer used
     # The new sequential captain ban system uses _add_reopen_captain_ban_interface_button instead
@@ -250,13 +385,16 @@ class TeamDraftCommands(BaseCommands):
 
     @commands.command(
         name="페어",
-        help="팀 드래프트를 시작해 (기본: 6v6, 옵션: 3v3)",
+        help="팀 드래프트를 시작해 (기본: 6v6, 지원: 2v2/3v3/5v5/6v6)",
         brief="팀 드래프트 시작",
         aliases=["draft", "팀드래프트"],
         description="팀 드래프트 시스템을 시작해.\n"
-                   "사용법: 뮤 페어 [team_size:3]\n"
+                   "사용법: 뮤 페어 [team_size:숫자] [captains:@유저1 @유저2]\n"
+                   "예시: 뮤 페어 team_size:2 (2v2 드래프트)\n"
                    "예시: 뮤 페어 team_size:3 (3v3 드래프트)\n"
-                   "예시: 뮤 페어 (6v6 드래프트)"
+                   "예시: 뮤 페어 team_size:5 (5v5 드래프트)\n"
+                   "예시: 뮤 페어 (6v6 드래프트)\n"
+                   "예시: 뮤 페어 captains:@홍길동 @김철수 (팀장 지정)"
     )
     async def draft_start_chat(self, ctx: commands.Context, *, args: str = "") -> None:
         """Start team draft via chat command"""
@@ -265,33 +403,45 @@ class TeamDraftCommands(BaseCommands):
         
         # Parse team_size (default 6 for 6v6)
         team_size = 6  # default
-        if "team_size:3" in args.lower() or "team_size=3" in args.lower():
+        if "team_size:2" in args.lower() or "team_size=2" in args.lower():
+            team_size = 2
+        elif "team_size:3" in args.lower() or "team_size=3" in args.lower():
             team_size = 3
+        elif "team_size:5" in args.lower() or "team_size=5" in args.lower():
+            team_size = 5
         elif "team_size:6" in args.lower() or "team_size=6" in args.lower():
             team_size = 6
+        
+        # Parse captains from args (look for captains: keyword)
+        captains_str = ""
+        import re
+        captains_match = re.search(r'captains:([^a-zA-Z]*(?:<@!?\d+>[^a-zA-Z]*){2})', args)
+        if captains_match:
+            captains_str = captains_match.group(1)
             
         # Pass the args to handle player mentions
-        await self._handle_draft_start(ctx, args, test_mode, team_size)
+        await self._handle_draft_start(ctx, args, test_mode, team_size, captains_str)
 
-    @app_commands.command(name="페어", description="팀 드래프트를 시작해 (기본: 6v6)")
+    @app_commands.command(name="페어", description="팀 드래프트를 시작해 (지원: 2v2/3v3/5v5/6v6)")
     async def draft_start_slash(
         self,
         interaction: discord.Interaction,
         players: str = "",
         test_mode: bool = False,
-        team_size: int = 6
+        team_size: int = 6,
+        captains: str = ""
     ) -> None:
         """Start a new draft session"""
         # Validate team_size
-        if team_size not in [3, 6]:
+        if team_size not in [2, 3, 5, 6]:
             await interaction.response.send_message(
-                "팀 크기는 3 (3v3) 또는 6 (6v6)만 가능해.", ephemeral=True
+                "팀 크기는 2 (2v2), 3 (3v3), 5 (5v5), 또는 6 (6v6)만 가능해.", ephemeral=True
             )
             return
             
-        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode}, team_size={team_size} (v4)")
+        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode}, team_size={team_size} (v5)")
         try:
-            await self._handle_draft_start(interaction, players, test_mode, team_size)
+            await self._handle_draft_start(interaction, players, test_mode, team_size, captains)
         except Exception as e:
             logger.error(f"Error in draft_start_slash: {e}", exc_info=True)
             if not interaction.response.is_done():
@@ -311,7 +461,8 @@ class TeamDraftCommands(BaseCommands):
         ctx_or_interaction: CommandContext,
         players_str: str = "",
         test_mode: bool = False,
-        team_size: int = 6
+        team_size: int = 6,
+        captains_str: str = ""
     ) -> None:
         """Handle draft start command"""
         try:
@@ -329,7 +480,7 @@ class TeamDraftCommands(BaseCommands):
             # Handle test mode or real players
             if test_mode:
                 players = await self._generate_test_players(ctx_or_interaction, team_size)
-                team_format = "3v3" if team_size == 3 else "6v6"
+                team_format = f"{team_size}v{team_size}"
                 await self.send_success(
                     ctx_or_interaction, 
                     #f"🧪 **테스트 모드 ({team_format})**로 드래프트를 시작해!\n"
@@ -348,6 +499,37 @@ class TeamDraftCommands(BaseCommands):
                     )
                     return
             
+            # Parse pre-assigned captains if provided
+            pre_assigned_captains = []
+            if captains_str.strip() and not test_mode:  # Don't use pre-assigned captains in test mode
+                try:
+                    captain_mentions = await self._parse_captains(ctx_or_interaction, captains_str)
+                    if len(captain_mentions) != 2:
+                        await self.send_error(
+                            ctx_or_interaction, 
+                            f"정확히 2명의 팀장을 지정해야 해. (현재: {len(captain_mentions)}명)"
+                        )
+                        return
+                    
+                    # Validate that all captains are in the player list
+                    player_ids = {user_id for user_id, _ in players}
+                    for captain_id, captain_name in captain_mentions:
+                        if captain_id not in player_ids:
+                            await self.send_error(
+                                ctx_or_interaction, 
+                                f"팀장 {captain_name}은(는) 참가자 목록에 없어. 먼저 참가자로 추가해줘."
+                            )
+                            return
+                    
+                    pre_assigned_captains = [captain_id for captain_id, _ in captain_mentions]
+                    
+                except Exception as e:
+                    await self.send_error(
+                        ctx_or_interaction, 
+                        f"팀장 지정 처리 중 오류가 발생했어: {str(e)}"
+                    )
+                    return
+            
             # Create draft session
             draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
             
@@ -358,13 +540,62 @@ class TeamDraftCommands(BaseCommands):
             
             for user_id, username in players:
                 sanitized_username = self._sanitize_username(username)
-                draft.players[user_id] = Player(user_id=user_id, username=sanitized_username)
+                is_captain = user_id in pre_assigned_captains
+                draft.players[user_id] = Player(user_id=user_id, username=sanitized_username, is_captain=is_captain)
+            
+            # Set captains if pre-assigned
+            if pre_assigned_captains:
+                draft.captains = pre_assigned_captains
+                # Initialize captain ban progress tracking
+                for captain_id in draft.captains:
+                    draft.captain_ban_progress[captain_id] = False
             
             self.active_drafts[channel_id] = draft
             self.draft_start_times[channel_id] = time.time()  # Record start time
             
-            # Start captain voting
-            await self._start_captain_voting(ctx_or_interaction, draft)
+            # Create draft thread for clean environment
+            thread = await self._create_draft_thread(draft)
+            
+            # Send summary message to main channel with thread link
+            team_format = f"{team_size}v{team_size}"
+            main_channel = self.bot.get_channel(channel_id) if self.bot else None
+            
+            if thread and main_channel:
+                summary_embed = discord.Embed(
+                    title=f"🏆 팀 드래프트 시작됨! ({team_format})",
+                    description=f"드래프트는 {thread.mention}에서 진행돼.\n"
+                               f"참가자들은 스레드로 이동해서 드래프트에 참여해줘!",
+                    color=SUCCESS_COLOR
+                )
+                
+                if test_mode:
+                    summary_embed.add_field(
+                        name="🧪 테스트 모드", 
+                        value="가상 플레이어들과 함께 테스트 중이야.", 
+                        inline=False
+                    )
+                
+                if pre_assigned_captains:
+                    captain_names = [draft.players[cap_id].username for cap_id in pre_assigned_captains]
+                    summary_embed.add_field(
+                        name="👑 지정된 팀장", 
+                        value=f"{' vs '.join(captain_names)} (투표 생략)", 
+                        inline=False
+                    )
+                
+                await self._safe_api_call(
+                    lambda: main_channel.send(embed=summary_embed),
+                    bucket=f"draft_summary_{channel_id}"
+                )
+            
+            # Start captain voting or skip if captains are pre-assigned
+            if pre_assigned_captains:
+                # Skip voting and go directly to servant ban phase
+                draft.phase = DraftPhase.SERVANT_BAN
+                await self._start_servant_ban_phase(draft)
+            else:
+                # Start captain voting (now in thread)
+                await self._start_captain_voting(ctx_or_interaction, draft)
             
         except Exception as e:
             logger.error(f"Error starting draft: {e}")
@@ -427,6 +658,35 @@ class TeamDraftCommands(BaseCommands):
         
         return players
 
+    async def _parse_captains(
+        self,
+        ctx_or_interaction: CommandContext,
+        captains_str: str
+    ) -> List[Tuple[int, str]]:
+        """Parse captain mentions from string"""
+        captains = []
+        
+        # Extract user mentions from string
+        import re
+        mention_pattern = r'<@!?(\d+)>'
+        mentions = re.findall(mention_pattern, captains_str)
+        
+        if isinstance(ctx_or_interaction, discord.Interaction):
+            guild = ctx_or_interaction.guild
+        else:
+            guild = ctx_or_interaction.guild
+            
+        if not guild:
+            raise ValueError("Guild not found")
+        
+        for user_id_str in mentions:
+            user_id = int(user_id_str)
+            member = guild.get_member(user_id)
+            if member:
+                captains.append((user_id, member.display_name))
+        
+        return captains
+
     async def _start_captain_voting(
         self,
         ctx_or_interaction: CommandContext,
@@ -450,23 +710,34 @@ class TeamDraftCommands(BaseCommands):
         # Create voting view
         view = CaptainVotingView(draft, self)
         
-        if isinstance(ctx_or_interaction, discord.Interaction):
-            if ctx_or_interaction.response.is_done():
-                message = await self._safe_api_call(
-                    lambda: ctx_or_interaction.followup.send(embed=embed, view=view),
-                    bucket=f"captain_voting_{draft.channel_id}"
-                )
-            else:
-                await self._safe_api_call(
-                    lambda: ctx_or_interaction.response.send_message(embed=embed, view=view),
-                    bucket=f"captain_voting_{draft.channel_id}"
-                )
-                message = await ctx_or_interaction.original_response()
-        else:
+        # Send to draft thread if available, otherwise use the original interaction context
+        draft_channel = self._get_draft_channel(draft)
+        
+        if draft_channel and draft.thread_id:
+            # Send to thread
             message = await self._safe_api_call(
-                lambda: ctx_or_interaction.send(embed=embed, view=view),
+                lambda: draft_channel.send(embed=embed, view=view),
                 bucket=f"captain_voting_{draft.channel_id}"
             )
+        else:
+            # Fallback to original interaction context
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                if ctx_or_interaction.response.is_done():
+                    message = await self._safe_api_call(
+                        lambda: ctx_or_interaction.followup.send(embed=embed, view=view),
+                        bucket=f"captain_voting_{draft.channel_id}"
+                    )
+                else:
+                    await self._safe_api_call(
+                        lambda: ctx_or_interaction.response.send_message(embed=embed, view=view),
+                        bucket=f"captain_voting_{draft.channel_id}"
+                    )
+                    message = await ctx_or_interaction.original_response()
+            else:
+                message = await self._safe_api_call(
+                    lambda: ctx_or_interaction.send(embed=embed, view=view),
+                    bucket=f"captain_voting_{draft.channel_id}"
+                )
         
         draft.captain_vote_message_id = message.id
 
@@ -500,7 +771,7 @@ class TeamDraftCommands(BaseCommands):
 
     async def _create_status_embed(self, draft: DraftSession) -> discord.Embed:
         """Create status embed for current draft state"""
-        team_format = "3v3" if draft.team_size == 3 else "6v6"
+        team_format = f"{draft.team_size}v{draft.team_size}"
         embed = discord.Embed(title=f"🏆 드래프트 현황 ({team_format})", color=INFO_COLOR)
         
         phase_names = {
@@ -554,11 +825,18 @@ class TeamDraftCommands(BaseCommands):
         """Test if team draft system is working"""
         logger.info(f"페어테스트 command called by {interaction.user.name}")
         await interaction.response.send_message(
-            "✅ **팀 드래프트 시스템이 작동해!** (v4.0)\n\n"
-            "사용법:\n"
-            "• `/페어 team_size:3` - 3v3 드래프트 시작 (6명 필요)\n"
-            "• `/페어` - 6v6 드래프트 시작 (12명 필요)\n"
-            "• `/페어상태` - 현재 드래프트 상태 확인\n\n",
+            "✅ **팀 드래프트 시스템이 작동해!** (v5.0)\n\n"
+            "지원하는 형식:\n"
+            "• `/페어 team_size:2` - 2v2 드래프트 (4명 필요)\n"
+            "• `/페어 team_size:3` - 3v3 드래프트 (6명 필요)\n"
+            "• `/페어 team_size:5` - 5v5 드래프트 (10명 필요)\n"
+            "• `/페어` - 6v6 드래프트 (12명 필요, 기본값)\n\n"
+            "새 기능:\n"
+            "• `captains:@유저1 @유저2` - 팀장 수동 지정 (투표 건너뛰기)\n"
+            "• 예시: `/페어 captains:@홍길동 @김철수`\n\n"
+            "기타 명령어:\n"
+            "• `/페어상태` - 현재 드래프트 상태 확인\n"
+            "• `/페어취소` - 진행 중인 드래프트 취소\n\n",
             ephemeral=True
         )
 
@@ -582,8 +860,14 @@ class TeamDraftCommands(BaseCommands):
                         logger.error(f"Error getting channel {channel_id}: {e}")
                         continue
         
-        if not channel or not current_draft:
-            logger.warning(f"Could not find channel or draft. channel: {channel}, current_draft: {current_draft}")
+        if not current_draft:
+            logger.warning(f"Could not find current draft")
+            return
+        
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(current_draft)
+        if not channel:
+            logger.warning(f"Could not get draft channel for draft in {current_draft.channel_id}")
             return
         
         # Remove banned servants from available list
@@ -593,42 +877,51 @@ class TeamDraftCommands(BaseCommands):
         for player_id in current_draft.players.keys():
             current_draft.selection_progress[player_id] = False
         
-        # Send public progress embed
-        embed = discord.Embed(
-            title="⚔️ 서번트 선택 단계",
-            description="모든 플레이어가 개별적으로 서번트를 선택 중이야.\n"
-                       "**👇 자신의 닉네임 버튼을 눌러서 서번트를 선택해!**\n"
+        # Send static button message (never recreated)
+        button_embed = discord.Embed(
+            title="⚔️ 서번트 선택 - 플레이어 버튼",
+            description="**👇 자신의 닉네임 버튼을 눌러서 서번트를 선택해!**\n"
                        "선택 내용은 모든 플레이어가 완료된 후에 공개될거야.",
             color=INFO_COLOR
         )
         
-        # Show banned servants summary
+        # Show banned servants summary in button message
         if current_draft.banned_servants:
             banned_list = ", ".join(sorted(current_draft.banned_servants))
-            embed.add_field(name="🚫 밴된 서번트", value=banned_list, inline=False)
+            button_embed.add_field(name="🚫 밴된 서번트", value=banned_list, inline=False)
         
-        # Add progress status
-        await self._update_selection_progress_embed(current_draft, embed)
-        
-        # Send public message and create ephemeral selection buttons
+        # Create static button view (this will never be recreated)
         view = EphemeralSelectionView(current_draft, self)
         try:
-            message = await self._safe_api_call(
-                lambda: channel.send(embed=embed, view=view), 
-                bucket=f"selection_{current_draft.channel_id}"
+            button_message = await self._safe_api_call(
+                lambda: channel.send(embed=button_embed, view=view), 
+                bucket=f"selection_buttons_{current_draft.channel_id}"
             )
-            current_draft.selection_progress_message_id = message.id
+            current_draft.selection_buttons_message_id = button_message.id
+            logger.info(f"Created static button message {button_message.id}")
         except Exception as e:
-            logger.error(f"Failed to send servant selection message: {e}")
-            # Try to send a simplified message without view
-            try:
-                await self._safe_api_call(
-                    lambda: channel.send(embed=embed),
-                    bucket=f"selection_fallback_{current_draft.channel_id}"
-                )
-            except Exception as fallback_error:
-                logger.error(f"Failed to send fallback selection message: {fallback_error}")
-                raise
+            logger.error(f"Failed to send selection button message: {e}")
+            raise
+        
+        # Send separate progress message (this will be updated)
+        progress_embed = discord.Embed(
+            title="📊 선택 진행 상황",
+            description="각 플레이어의 선택 진행 상황을 실시간으로 표시해.",
+            color=INFO_COLOR
+        )
+        
+        await self._update_selection_progress_embed(current_draft, progress_embed)
+        
+        try:
+            progress_message = await self._safe_api_call(
+                lambda: channel.send(embed=progress_embed), 
+                bucket=f"selection_progress_{current_draft.channel_id}"
+            )
+            current_draft.selection_progress_message_id = progress_message.id
+            logger.info(f"Created progress message {progress_message.id}")
+        except Exception as e:
+            logger.error(f"Failed to send selection progress message: {e}")
+            raise
         
         # Auto-complete fake players' selections immediately in test mode
         if current_draft.is_test_mode:
@@ -654,37 +947,42 @@ class TeamDraftCommands(BaseCommands):
         )
 
     async def _update_selection_progress_message(self, draft: DraftSession) -> None:
-        """Update the public selection progress message"""
+        """Update the separate progress message (no view recreation)"""
         if not draft.selection_progress_message_id:
             return
             
-        channel = self.bot.get_channel(draft.channel_id)
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(draft)
         if not channel:
             return
             
         try:
+            # Create hash of current progress to detect changes
+            progress_hash = hash(frozenset(draft.selection_progress.items()))
+            
+            # Skip update if progress hasn't changed
+            if draft.last_progress_update_hash == str(progress_hash):
+                logger.debug("Progress unchanged, skipping message update")
+                return
+                
+            draft.last_progress_update_hash = str(progress_hash)
+            logger.info(f"Updating progress message {draft.selection_progress_message_id}, hash: {progress_hash}")
+            
             message = await channel.fetch_message(draft.selection_progress_message_id)
+            
+            # Create progress-only embed
             embed = discord.Embed(
-                title="⚔️ 서번트 선택 단계",
-                description="모든 플레이어가 개별적으로 서번트를 선택 중이야.\n"
-                           "**👇 자신의 닉네임 버튼을 눌러서 서번트를 선택해!**\n"
-                           "선택 내용은 모든 플레이어가 완료된 후에 공개될거야.",
+                title="📊 선택 진행 상황",
+                description="각 플레이어의 선택 진행 상황을 실시간으로 표시해.",
                 color=INFO_COLOR
             )
             
-            # Show banned servants summary
-            if draft.banned_servants:
-                banned_list = ", ".join(sorted(draft.banned_servants))
-                embed.add_field(name="🚫 밴된 서번트", value=banned_list, inline=False)
-            
             await self._update_selection_progress_embed(draft, embed)
             
-            # Keep the same view if not all players are done
-            if not all(draft.selection_progress.values()):
-                view = EphemeralSelectionView(draft, self)
-                await message.edit(embed=embed, view=view)
-            else:
-                await message.edit(embed=embed, view=None)
+            # Only update the embed, never touch the view (no view for progress message)
+            await message.edit(embed=embed)
+            logger.debug(f"Successfully updated progress message")
+            
         except discord.NotFound:
             logger.warning("Selection progress message not found")
 
@@ -704,8 +1002,7 @@ class TeamDraftCommands(BaseCommands):
                     player.selected_servant = servant
                     draft.selection_progress[player_id] = True
                     
-                    # Invalidate session to prevent interface reopening after auto-completion
-                    draft.selection_interface_sessions[player_id] = self._generate_session_id()
+                    # Note: Fake players can't reopen interfaces anyway (only real user can in test mode)
                     
                     available_servants.remove(servant)
                     logger.info(f"Auto-selected {servant} for fake player {player.username}")
@@ -913,8 +1210,7 @@ class TeamDraftCommands(BaseCommands):
             inline=False
         )
         
-        # Create ephemeral selection interface for reselection
-        # Only show buttons for users who need to reselect
+        # During reselection, create new button interface for conflicted players only
         view = EphemeralSelectionView(draft, self)
         await self._safe_api_call(
             lambda: channel.send(embed=embed, view=view),
@@ -1002,8 +1298,10 @@ class TeamDraftCommands(BaseCommands):
         draft.players[captain1].team = 1
         draft.players[captain2].team = 2
         
-        channel = self.bot.get_channel(channel_id)
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(draft)
         if not channel:
+            logger.warning(f"Could not get draft channel for team selection start")
             return
         
         embed = discord.Embed(
@@ -1026,6 +1324,10 @@ class TeamDraftCommands(BaseCommands):
             lambda: channel.send(embed=embed),
             bucket=f"team_selection_start_{channel_id}"
         )
+        
+        # Announce hybrid mode - non-captains can leave thread
+        await self._announce_team_selection_hybrid_mode(draft)
+        
         await self._continue_team_selection_for_draft(draft)
 
     async def _continue_team_selection_for_draft(self, draft: DraftSession) -> None:
@@ -1034,7 +1336,8 @@ class TeamDraftCommands(BaseCommands):
         total_players = draft.team_size * 2
         assigned_players = sum(1 for p in draft.players.values() if p.team is not None)
         if assigned_players == total_players:
-            await self._start_final_swap_phase_for_draft(draft)
+            # Skip final swap phase and proceed directly to completion
+            await self._complete_draft(draft)
             return
         
         # Get current round pattern
@@ -1066,14 +1369,10 @@ class TeamDraftCommands(BaseCommands):
 
     async def _show_team_selection_status_for_draft(self, draft: DraftSession) -> None:
         """Show current team selection status for a specific draft"""
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(draft)
         if not channel:
+            logger.warning(f"Could not get draft channel for team selection status")
             return
         
         current_captain = draft.current_picking_captain
@@ -1085,10 +1384,14 @@ class TeamDraftCommands(BaseCommands):
             color=INFO_COLOR
         )
         
-        # Show available players
+        # Show available players (exclude those already assigned or in pending selections)
+        all_pending_selections = set()
+        for pending_list in draft.pending_team_selections.values():
+            all_pending_selections.update(pending_list)
+        
         available_players = [
             p for p in draft.players.values() 
-            if p.team is None and not p.is_captain
+            if p.team is None and not p.is_captain and p.user_id not in all_pending_selections
         ]
         
         if available_players:
@@ -1108,12 +1411,69 @@ class TeamDraftCommands(BaseCommands):
         embed.add_field(name="팀 1", value=team1_text or "없음", inline=True)
         embed.add_field(name="팀 2", value=team2_text or "없음", inline=True)
         
-        # Create selection view
+        # Show pending selections if any
+        pending_selections = draft.pending_team_selections.get(current_captain, [])
+        if pending_selections:
+            pending_names = [draft.players[pid].username for pid in pending_selections]
+            captain_team = draft.players[current_captain].team
+            embed.add_field(
+                name=f"팀 {captain_team} 선택 대기 중",
+                value="\n".join([f"• {name}" for name in pending_names]),
+                inline=False
+            )
+        
+        # Create selection view with confirmation button
         view = TeamSelectionView(draft, self, available_players)
+        
+        # Send to thread with interactive view
         await self._safe_api_call(
             lambda: channel.send(embed=embed, view=view),
             bucket=f"team_selection_status_{draft.channel_id}"
         )
+        
+        # Also send status update to main channel (without view)
+        main_channel = self.bot.get_channel(draft.channel_id) if self.bot else None
+        if main_channel and draft.thread_id:  # Only if in hybrid mode
+            try:
+                main_embed = discord.Embed(
+                    title=f"📊 팀 선택 진행 상황 - 라운드 {draft.team_selection_round}",
+                    description=f"현재 **{draft.players[current_captain].username}**의 차례",
+                    color=INFO_COLOR
+                )
+                
+                # Show current teams more concisely for main channel
+                team1_players = [p for p in draft.players.values() if p.team == 1]
+                team2_players = [p for p in draft.players.values() if p.team == 2]
+                
+                team1_text = "\n".join([f"• {draft.confirmed_servants[p.user_id]} ({p.username})" for p in team1_players])
+                team2_text = "\n".join([f"• {draft.confirmed_servants[p.user_id]} ({p.username})" for p in team2_players])
+                
+                main_embed.add_field(name="팀 1", value=team1_text or "없음", inline=True)
+                main_embed.add_field(name="팀 2", value=team2_text or "없음", inline=True)
+                
+                # Show pending selections if any
+                pending_selections = draft.pending_team_selections.get(current_captain, [])
+                if pending_selections:
+                    pending_names = [draft.players[pid].username for pid in pending_selections]
+                    captain_team = draft.players[current_captain].team
+                    main_embed.add_field(
+                        name=f"팀 {captain_team} 선택 대기 중",
+                        value="\n".join([f"• {name}" for name in pending_names]),
+                        inline=False
+                    )
+                
+                await self._safe_api_call(
+                    lambda: main_channel.send(embed=main_embed),
+                    bucket=f"team_selection_main_status_{draft.channel_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send team selection status to main channel: {e}")
+
+    async def _refresh_team_selection_interface(self, draft: DraftSession) -> None:
+        """Refresh the team selection interface to show pending selections"""
+        # For now, just show an updated status - in a full implementation you might want to 
+        # edit the existing message instead of sending a new one
+        await self._show_team_selection_status_for_draft(draft)
 
     @command_handler()
     async def _handle_draft_cancel(self, ctx_or_interaction: CommandContext) -> None:
@@ -1124,10 +1484,10 @@ class TeamDraftCommands(BaseCommands):
             await self.send_error(ctx_or_interaction, "진행 중인 드래프트가 없어.")
             return
         
-        # Clean up session dictionaries to prevent memory leaks
+        # Clean up message IDs to prevent memory leaks
         draft = self.active_drafts[channel_id]
-        draft.ban_interface_sessions.clear()
-        draft.selection_interface_sessions.clear()
+        draft.selection_buttons_message_id = None
+        draft.selection_progress_message_id = None
         
         del self.active_drafts[channel_id]
         if channel_id in self.draft_start_times:
@@ -1182,9 +1542,9 @@ class TeamDraftCommands(BaseCommands):
                     # Clean up draft state
                     if channel_id in self.active_drafts:
                         draft = self.active_drafts[channel_id]
-                        # Clean up session dictionaries to prevent memory leaks
-                        draft.ban_interface_sessions.clear()
-                        draft.selection_interface_sessions.clear()
+                        # Clean up message IDs to prevent memory leaks
+                        draft.selection_buttons_message_id = None
+                        draft.selection_progress_message_id = None
                         del self.active_drafts[channel_id]
                     if channel_id in self.draft_start_times:
                         del self.draft_start_times[channel_id]
@@ -1211,17 +1571,10 @@ class TeamDraftCommands(BaseCommands):
 
     async def _start_servant_ban_phase(self, draft: DraftSession) -> None:
         """Start servant ban phase with automated system bans followed by captain bans"""
-        # Find the channel for this draft
-        channel = None
-        if self.bot:
-            # Try to get channel via bot first
-            for channel_id, d in self.active_drafts.items():
-                if d == draft:
-                    channel = self.bot.get_channel(channel_id)
-                    break
-        
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(draft)
         if not channel:
-            logger.warning("Could not find channel for servant ban phase - bot may not be properly initialized")
+            logger.warning("Could not get draft channel for servant ban phase")
             return
         
         # Step 1: Perform automated system bans
@@ -1454,9 +1807,7 @@ class TeamDraftCommands(BaseCommands):
         if not draft.captain_ban_progress.get(current_captain, False):
             return  # Current captain hasn't finished yet
         
-        # Invalidate the completed captain's interface session to prevent further edits
-        if current_captain in draft.ban_interface_sessions:
-            del draft.ban_interface_sessions[current_captain]
+        # Note: With new simple ID verification, no session invalidation needed
         
         # Find next captain in order
         current_index = draft.captain_ban_order.index(current_captain)
@@ -1473,7 +1824,8 @@ class TeamDraftCommands(BaseCommands):
         if not draft.ban_progress_message_id:
             return
             
-        channel = self.bot.get_channel(draft.channel_id)
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(draft)
         if not channel:
             return
             
@@ -1522,23 +1874,33 @@ class TeamDraftCommands(BaseCommands):
         except discord.NotFound:
             logger.warning("Captain ban progress message not found")
 
-    async def _complete_draft(self) -> None:
+    async def _complete_draft(self, target_draft: DraftSession = None) -> None:
         """Complete the draft"""
         # Find current draft
-        current_draft = None
+        current_draft = target_draft
         current_channel_id = None
-        for channel_id, draft in self.active_drafts.items():
-            if draft.phase == DraftPhase.FINAL_SWAP:
-                current_draft = draft
-                current_channel_id = channel_id
-                break
         
         if not current_draft:
+            # Fallback: search for any draft that needs completion
+            for channel_id, draft in self.active_drafts.items():
+                if draft.phase in [DraftPhase.FINAL_SWAP, DraftPhase.TEAM_SELECTION]:
+                    current_draft = draft
+                    current_channel_id = channel_id
+                    break
+        else:
+            # Find channel for provided draft
+            for channel_id, draft in self.active_drafts.items():
+                if draft == current_draft:
+                    current_channel_id = channel_id
+                    break
+        
+        if not current_draft or not current_channel_id:
             return
             
         current_draft.phase = DraftPhase.COMPLETED
         
-        channel = self.bot.get_channel(current_channel_id)
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(current_draft)
         if not channel:
             return
         
@@ -1561,17 +1923,51 @@ class TeamDraftCommands(BaseCommands):
         embed.add_field(name="팀 1", value=format_final_team(team1_players), inline=True)
         embed.add_field(name="팀 2", value=format_final_team(team2_players), inline=True)
         
+        # Send to thread
         await self._safe_api_call(
             lambda: channel.send(embed=embed),
             bucket=f"draft_complete_{current_channel_id}"
         )
         
+        # Send final roster to main channel as well for maximum visibility
+        main_channel = self.bot.get_channel(current_draft.channel_id) if self.bot else None
+        if main_channel and current_draft.thread_id:  # Only if in hybrid mode
+            try:
+                team_format = f"{current_draft.team_size}v{current_draft.team_size}"
+                main_embed = discord.Embed(
+                    title=f"🏆 {team_format} 드래프트 완료!",
+                    description="**최종 로스터가 확정됐어!**\n"
+                               "모든 플레이어들 수고했어! 🎉",
+                    color=SUCCESS_COLOR
+                )
+                
+                main_embed.add_field(name="팀 1 최종 로스터", value=format_final_team(team1_players), inline=True)
+                main_embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
+                
+                # Add draft summary
+                total_time = time.time() - self.draft_start_times.get(current_draft.channel_id, time.time())
+                minutes = int(total_time // 60)
+                main_embed.add_field(
+                    name="드래프트 정보",
+                    value=f"⏱️ 소요 시간: 약 {minutes}분\n"
+                          f"👥 참가자: {len(current_draft.players)}명\n"
+                          f"🎯 형식: {team_format}",
+                    inline=False
+                )
+                
+                await self._safe_api_call(
+                    lambda: main_channel.send(embed=main_embed),
+                    bucket=f"draft_complete_main_{current_draft.channel_id}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send final roster to main channel: {e}")
+        
         # Clean up
         if current_channel_id in self.active_drafts:
             draft = self.active_drafts[current_channel_id]
-            # Clean up session dictionaries to prevent memory leaks
-            draft.ban_interface_sessions.clear()
-            draft.selection_interface_sessions.clear()
+            # Clean up message IDs to prevent memory leaks
+            draft.selection_buttons_message_id = None
+            draft.selection_progress_message_id = None
             del self.active_drafts[current_channel_id]
         if current_channel_id in self.draft_start_times:
             del self.draft_start_times[current_channel_id]
@@ -1594,13 +1990,8 @@ class TeamDraftCommands(BaseCommands):
         """Start final swap phase for specific draft"""
         draft.phase = DraftPhase.FINAL_SWAP
         
-        # Find the channel
-        channel = None
-        for channel_id, d in self.active_drafts.items():
-            if d == draft:
-                channel = self.bot.get_channel(channel_id)
-                break
-        
+        # Use thread if available, otherwise main channel
+        channel = self._get_draft_channel(draft)
         if not channel:
             return
         
@@ -1632,15 +2023,20 @@ class TeamDraftCommands(BaseCommands):
 
 
 class TeamSelectionView(discord.ui.View):
-    """View for team selection"""
+    """View for team selection with confirmation"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', available_players: List[Player]):
-        super().__init__(timeout=300.0)
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         
         if available_players:
             self.add_item(PlayerDropdown(available_players, draft, bot_commands))
+        
+        # Add confirmation button if there are pending selections for current captain
+        current_captain = draft.current_picking_captain
+        if current_captain and draft.pending_team_selections.get(current_captain):
+            self.add_item(ConfirmTeamSelectionButton(current_captain))
 
 
 class PlayerDropdown(discord.ui.Select):
@@ -1667,7 +2063,7 @@ class PlayerDropdown(discord.ui.Select):
         )
 
     async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle player selection"""
+        """Handle player selection - add to pending selections instead of immediately assigning"""
         user_id = interaction.user.id
         
         # Validate current phase - reject if not in team selection phase
@@ -1689,25 +2085,46 @@ class PlayerDropdown(discord.ui.Select):
         
         selected_player_id = int(self.values[0])
         target_player = self.draft.players[selected_player_id]
-        
-        # Assign player to team
         current_captain = self.draft.current_picking_captain
-        captain_team = self.draft.players[current_captain].team
-        target_player.team = captain_team
         
-        # Update pick count
-        self.draft.picks_this_round[current_captain] += 1
+        # Add to pending selections instead of immediately assigning
+        if current_captain not in self.draft.pending_team_selections:
+            self.draft.pending_team_selections[current_captain] = []
+        
+        # Check if player is already in pending selections
+        if selected_player_id in self.draft.pending_team_selections[current_captain]:
+            await interaction.response.send_message(
+                f"**{target_player.username}**은(는) 이미 선택했어.", ephemeral=True
+            )
+            return
+        
+        # Check pick limit for this round
+        round_info = self.bot_commands.team_selection_patterns[self.draft.team_size][self.draft.team_selection_round - 1]
+        is_first_pick = current_captain == self.draft.first_pick_captain
+        max_picks = round_info["first_pick"] if is_first_pick else round_info["second_pick"]
+        current_pending = len(self.draft.pending_team_selections[current_captain])
+        
+        if current_pending >= max_picks:
+            await interaction.response.send_message(
+                f"이번 라운드에서는 최대 {max_picks}명까지만 선택할 수 있어.", ephemeral=True
+            )
+            return
+        
+        # Add to pending selections
+        self.draft.pending_team_selections[current_captain].append(selected_player_id)
+        
+        captain_team = self.draft.players[current_captain].team
+        pending_count = len(self.draft.pending_team_selections[current_captain])
         
         await interaction.response.send_message(
-            f"**{target_player.username}**을(를) 팀 {captain_team}에 추가했어!", ephemeral=False
+            f"**{target_player.username}**을(를) 팀 {captain_team} 후보로 선택했어! "
+            f"({pending_count}/{max_picks})\n"
+            f"확정하려면 '선택 확정' 버튼을 눌러줘.", 
+            ephemeral=True
         )
         
-        # Auto-complete remaining picks in test mode
-        if self.draft.is_test_mode:
-            await self._auto_complete_team_selection()
-        
-        # Continue team selection
-        await self.bot_commands._continue_team_selection_for_draft(self.draft)
+        # Update the team selection interface to show pending selections and confirmation button
+        await self.bot_commands._refresh_team_selection_interface(self.draft)
     
     async def _auto_complete_team_selection(self) -> None:
         """Auto-complete team selection in test mode"""
@@ -1745,7 +2162,7 @@ class FinalSwapView(discord.ui.View):
     """View for final swapping phase"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
-        super().__init__(timeout=600.0)
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.team_ready = {1: False, 2: False}
@@ -1807,7 +2224,7 @@ class CompleteButton(discord.ui.Button):
         
         # Check if both teams are ready
         if all(view.team_ready.values()):
-            await view.bot_commands._complete_draft()
+            await view.bot_commands._complete_draft(view.draft)
 
 
 # OLD BAN SYSTEM CLASSES REMOVED
@@ -1829,7 +2246,7 @@ class EphemeralSelectionView(discord.ui.View):
     """View with buttons for players to open their private selection interface"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
-        super().__init__(timeout=900.0)  # Longer timeout for selection
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         
@@ -1887,10 +2304,7 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                     )
                     return
             
-            # Generate new session ID and invalidate any existing sessions
-            session_id = view.bot_commands._generate_session_id()
-            view.draft.selection_interface_sessions[self.player_id] = session_id
-            logger.info(f"Generated session ID {session_id} for player {self.player_id}")
+            # No session management needed - Discord ephemeral + user ID validation provides security
             
             # Check if already completed
             player_name = view.draft.players[self.player_id].username
@@ -1923,7 +2337,7 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
             
             # Open private selection interface
             logger.info(f"Opening new selection interface for player {self.player_id}")
-            private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
+            private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id)
             logger.info(f"Created PrivateSelectionView with {len(private_view.children)} UI elements")
             
             await interaction.response.send_message(
@@ -1953,13 +2367,12 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
 class PrivateSelectionView(discord.ui.View):
     """Private selection interface for individual players"""
     
-    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', player_id: int, session_id: str):
-        logger.info(f"Initializing PrivateSelectionView for player {player_id}, session {session_id}")
-        super().__init__(timeout=600.0)
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', player_id: int):
+        logger.info(f"Initializing PrivateSelectionView for player {player_id}")
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.player_id = player_id
-        self.session_id = session_id
         self.current_category = "세이버"
         self.selected_servant = draft.players[player_id].selected_servant  # Allow editing
         
@@ -1986,9 +2399,8 @@ class PrivateSelectionView(discord.ui.View):
     async def on_timeout(self) -> None:
         """Handle interface timeout - add reopen button to public message"""
         try:
-            # Only add reopen functionality if this session is still active
-            current_session = self.draft.selection_interface_sessions.get(self.player_id)
-            if current_session == self.session_id and not self.draft.selection_progress.get(self.player_id, False):
+            # Add reopen functionality if player hasn't completed selection yet
+            if not self.draft.selection_progress.get(self.player_id, False):
                 await self.bot_commands._add_reopen_selection_interface_button(self.draft, self.player_id)
         except Exception as e:
             logger.error(f"Error handling selection interface timeout: {e}")
@@ -2089,6 +2501,8 @@ class PrivateSelectionCategoryButton(discord.ui.Button):
         view: PrivateSelectionView = self.view
         user_id = interaction.user.id
         
+        logger.info(f"Category '{self.category}' clicked by user {user_id} for player {view.player_id}")
+        
         # In test mode, allow the real user to interact with any player's interface
         if view.draft.is_test_mode and user_id == view.draft.real_user_id:
             pass
@@ -2098,13 +2512,44 @@ class PrivateSelectionCategoryButton(discord.ui.Button):
             )
             return
         
-        # Validate session
-        current_session = view.draft.selection_interface_sessions.get(view.player_id)
-        if current_session != view.session_id:
+        # SIMPLIFIED SECURITY MODEL: State validation without complex session management
+        # 
+        # Security is provided by 3 simple layers:
+        # 1. Discord's ephemeral messages (only recipient can see/interact)
+        # 2. User ID validation (checked above) 
+        # 3. State validation (below) - prevents wrong phase/completed interactions
+        #
+        # This eliminates race conditions while maintaining all necessary security
+        
+        # 1. Phase validation - prevent interaction if wrong phase
+        if view.draft.phase not in [DraftPhase.SERVANT_SELECTION, DraftPhase.SERVANT_RESELECTION]:
             await interaction.response.send_message(
-                "이 인터페이스가 만료되었어. 새 인터페이스를 열어줘.", ephemeral=True
+                "이 선택 단계는 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", 
+                ephemeral=True
             )
             return
+        
+        # 2. Completion validation - prevent changes after confirmation
+        if view.draft.selection_progress.get(view.player_id, False):
+            await interaction.response.send_message(
+                "이미 선택을 완료했어. 더 이상 변경할 수 없어.", 
+                ephemeral=True
+            )
+            return
+        
+        # 3. Reselection validation - during reselection, only allow conflicted players
+        if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
+            conflicted_players = set()
+            for user_ids in view.draft.conflicted_servants.values():
+                conflicted_players.update(user_ids)
+            
+            if view.player_id not in conflicted_players and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
+                player_name = view.draft.players[view.player_id].username
+                await interaction.response.send_message(
+                    f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
+                    "중복으로 인해 재선택이 필요한 플레이어만 변경할 수 있어.", ephemeral=True
+                )
+                return
         
         await view.update_category(self.category, interaction)
 
@@ -2154,11 +2599,11 @@ class ConfirmSelectionButton(discord.ui.Button):
                 )
                 return
         
-        # Validate session
-        current_session = view.draft.selection_interface_sessions.get(self.player_id)
-        if current_session != view.session_id:
+        # Simple state validation
+        # 1. Completion validation - prevent double confirmation
+        if view.draft.selection_progress.get(self.player_id, False):
             await interaction.response.send_message(
-                "이 인터페이스가 만료되었어. 새 인터페이스를 열어줘.", ephemeral=True
+                "이미 선택을 완료했어.", ephemeral=True
             )
             return
         
@@ -2173,10 +2618,8 @@ class ConfirmSelectionButton(discord.ui.Button):
         view.draft.players[self.player_id].selected_servant = view.selected_servant
         view.draft.selection_progress[self.player_id] = True
         
-        # Invalidate session to prevent further changes after confirmation
-        view.draft.selection_interface_sessions[self.player_id] = view.bot_commands._generate_session_id()
-        
         player_name = view.draft.players[self.player_id].username
+        logger.info(f"Player {self.player_id} completed selection: {view.selected_servant}")
         
         await interaction.response.send_message(
             f"✅ **선택 완료!**\n"
@@ -2248,9 +2691,7 @@ class ReopenBanInterfaceButton(discord.ui.Button):
             )
             return
         
-        # Generate new session ID and create fresh interface
-        session_id = view.bot_commands._generate_session_id()
-        view.draft.ban_interface_sessions[self.captain_id] = session_id
+        # Note: This is deprecated legacy ban interface code
         
         # This old interface has been removed - redirect to error message
         await interaction.response.send_message(
@@ -2321,14 +2762,10 @@ class ReopenSelectionInterfaceButton(discord.ui.Button):
                 )
                 return
         
-        # Generate new session ID and create fresh interface
-        session_id = view.bot_commands._generate_session_id()
-        view.draft.selection_interface_sessions[self.player_id] = session_id
-        
         player_name = view.draft.players[self.player_id].username
         
         # Create private selection interface
-        private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id, session_id)
+        private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id)
         
         await interaction.response.send_message(
             f"**{player_name}의 개인 서번트 선택 (재시도)**\n"
@@ -2403,12 +2840,8 @@ class ReopenCaptainBanInterfaceButton(discord.ui.Button):
                 )
             return
         
-        # Generate new session ID and create fresh interface
-        session_id = view.bot_commands._generate_session_id()
-        view.draft.ban_interface_sessions[self.captain_id] = session_id
-        
         # Create private captain ban interface
-        private_view = PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id, session_id)
+        private_view = PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id)
         
         await interaction.response.send_message(
             "🚫 **개인 밴 인터페이스 (재시도)**\n"
@@ -2423,7 +2856,7 @@ class CaptainVotingView(discord.ui.View):
     """View for captain voting with buttons"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
-        super().__init__(timeout=300.0)
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.user_votes: Dict[int, Set[int]] = {}  # user_id -> set of voted player_ids
@@ -2634,11 +3067,21 @@ class PrivateSelectionCharacterDropdown(discord.ui.Select):
             )
             return
         
-        # Validate session
-        current_session = view.draft.selection_interface_sessions.get(self.player_id)
-        if current_session != view.session_id:
+        # Simple state validation - no complex session management needed
+        
+        # 1. Phase validation - prevent interaction if wrong phase
+        if view.draft.phase not in [DraftPhase.SERVANT_SELECTION, DraftPhase.SERVANT_RESELECTION]:
             await interaction.response.send_message(
-                "이 인터페이스가 만료되었어. 새 인터페이스를 열어줘.", ephemeral=True
+                "이 선택 단계는 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", 
+                ephemeral=True
+            )
+            return
+        
+        # 2. Completion validation - prevent changes after confirmation
+        if view.draft.selection_progress.get(self.player_id, False):
+            await interaction.response.send_message(
+                "이미 선택을 완료했어. 더 이상 변경할 수 없어.", 
+                ephemeral=True
             )
             return
         
@@ -2656,7 +3099,7 @@ class EphemeralCaptainBanView(discord.ui.View):
     """View with button for current captain to open their private ban interface"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
-        super().__init__(timeout=600.0)
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         
@@ -2700,9 +3143,7 @@ class OpenCaptainBanInterfaceButton(discord.ui.Button):
             )
             return
         
-        # Generate new session ID and invalidate any existing sessions
-        session_id = view.bot_commands._generate_session_id()
-        view.draft.ban_interface_sessions[self.captain_id] = session_id
+
         
         # Check if already completed
         if view.draft.captain_ban_progress.get(self.captain_id, False):
@@ -2722,14 +3163,14 @@ class OpenCaptainBanInterfaceButton(discord.ui.Button):
                         f"이미 밴을 완료했어: **{ban_text}**\n"
                         "변경하려면 다시 선택하고 확정해줘.", 
                         ephemeral=True, 
-                        view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id, session_id)
+                        view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id)
                     )
             else:
                 # No bans recorded but marked complete - allow them to select
                 await interaction.response.send_message(
                     "밴을 완료했지만 선택이 없어. 다시 선택해줘.", 
                     ephemeral=True,
-                    view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id, session_id)
+                    view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id)
                 )
             return
         
@@ -2739,19 +3180,18 @@ class OpenCaptainBanInterfaceButton(discord.ui.Button):
             "밴하고 싶은 서번트를 **1명** 선택해줘.\n"
             "상대방은 네 선택을 볼 수 없어.",
             ephemeral=True,
-            view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id, session_id)
+            view=PrivateCaptainBanView(view.draft, view.bot_commands, self.captain_id)
         )
 
 
 class PrivateCaptainBanView(discord.ui.View):
     """Private ban interface for individual captains in sequential system"""
     
-    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', captain_id: int, session_id: str):
-        super().__init__(timeout=300.0)
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', captain_id: int):
+        super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.captain_id = captain_id
-        self.session_id = session_id
         self.current_category = "세이버"
         self.selected_ban = None
         
@@ -2767,9 +3207,8 @@ class PrivateCaptainBanView(discord.ui.View):
     async def on_timeout(self) -> None:
         """Handle interface timeout - add reopen button to public message"""
         try:
-            # Only add reopen functionality if this session is still active
-            current_session = self.draft.ban_interface_sessions.get(self.captain_id)
-            if current_session == self.session_id and not self.draft.captain_ban_progress.get(self.captain_id, False):
+            # Only add reopen functionality if captain hasn't completed their ban yet
+            if not self.draft.captain_ban_progress.get(self.captain_id, False):
                 await self.bot_commands._add_reopen_captain_ban_interface_button(self.draft, self.captain_id)
         except Exception as e:
             logger.error(f"Error handling captain ban interface timeout: {e}")
@@ -2852,11 +3291,10 @@ class PrivateCaptainBanCategoryButton(discord.ui.Button):
         """Handle category button click"""
         view: PrivateCaptainBanView = self.view
         
-        # Validate session
-        current_session = view.draft.ban_interface_sessions.get(view.captain_id)
-        if current_session != view.session_id:
+        # Validate user is the captain
+        if interaction.user.id != view.captain_id:
             await interaction.response.send_message(
-                "이 인터페이스가 만료되었어. 새 인터페이스를 열어줘.", ephemeral=True
+                "이 인터페이스는 네가 사용할 수 없어.", ephemeral=True
             )
             return
         
@@ -2898,11 +3336,10 @@ class PrivateCaptainBanCharacterDropdown(discord.ui.Select):
         """Handle character ban selection"""
         view: PrivateCaptainBanView = self.view
         
-        # Validate session
-        current_session = view.draft.ban_interface_sessions.get(self.captain_id)
-        if current_session != view.session_id:
+        # Validate user is the captain
+        if interaction.user.id != self.captain_id:
             await interaction.response.send_message(
-                "이 인터페이스가 만료되었어. 새 인터페이스를 열어줘.", ephemeral=True
+                "이 인터페이스는 네가 사용할 수 없어.", ephemeral=True
             )
             return
         
@@ -2933,11 +3370,10 @@ class ConfirmCaptainBanButton(discord.ui.Button):
         """Confirm captain ban selection"""
         view: PrivateCaptainBanView = self.view
         
-        # Validate session
-        current_session = view.draft.ban_interface_sessions.get(self.captain_id)
-        if current_session != view.session_id:
+        # Validate user is the captain
+        if interaction.user.id != self.captain_id:
             await interaction.response.send_message(
-                "이 인터페이스가 만료되었어. 새 인터페이스를 열어줘.", ephemeral=True
+                "이 인터페이스는 네가 사용할 수 없어.", ephemeral=True
             )
             return
         
@@ -2955,8 +3391,7 @@ class ConfirmCaptainBanButton(discord.ui.Button):
         # Immediately add the ban to banned_servants to prevent other captains from selecting it
         view.draft.banned_servants.add(view.selected_ban)
         
-        # Invalidate session to prevent further changes after confirmation
-        view.draft.ban_interface_sessions[self.captain_id] = view.bot_commands._generate_session_id()
+        # Note: With new simple ID verification, no session invalidation needed
         
         captain_name = view.draft.players[self.captain_id].username
         
@@ -2968,5 +3403,141 @@ class ConfirmCaptainBanButton(discord.ui.Button):
         
         # Advance to next captain's turn or complete bans
         await view.bot_commands._advance_captain_ban_turn(view.draft)
+
+
+class ConfirmTeamSelectionButton(discord.ui.Button):
+    """Button to confirm team selection choices"""
+    
+    def __init__(self, captain_id: int):
+        super().__init__(
+            label="선택 확정",
+            style=discord.ButtonStyle.success,
+            custom_id=f"confirm_team_selection_{captain_id}",
+            emoji="✅"
+        )
+        self.captain_id = captain_id
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Confirm team selection and assign players to teams"""
+        view: TeamSelectionView = self.view
+        user_id = interaction.user.id
+        
+        # Validate current phase
+        if view.draft.phase != DraftPhase.TEAM_SELECTION:
+            await interaction.response.send_message(
+                "팀 선택 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
+            )
+            return
+        
+        # Validate captain permission
+        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
+            # In test mode, real user can confirm for any captain
+            pass
+        elif user_id != self.captain_id:
+            await interaction.response.send_message(
+                "자신의 선택만 확정할 수 있어.", ephemeral=True
+            )
+            return
+        
+        # Validate it's the captain's turn
+        if view.draft.current_picking_captain != self.captain_id:
+            await interaction.response.send_message(
+                "지금은 네 차례가 아니야.", ephemeral=True
+            )
+            return
+        
+        # Get pending selections
+        pending_selections = view.draft.pending_team_selections.get(self.captain_id, [])
+        if not pending_selections:
+            await interaction.response.send_message(
+                "선택할 플레이어를 먼저 골라줘.", ephemeral=True
+            )
+            return
+        
+        # Validate pick count for this round
+        round_info = view.bot_commands.team_selection_patterns[view.draft.team_size][view.draft.team_selection_round - 1]
+        is_first_pick = self.captain_id == view.draft.first_pick_captain
+        max_picks = round_info["first_pick"] if is_first_pick else round_info["second_pick"]
+        
+        if len(pending_selections) != max_picks:
+            await interaction.response.send_message(
+                f"이번 라운드에서는 정확히 {max_picks}명을 선택해야 해. (현재: {len(pending_selections)}명)", 
+                ephemeral=True
+            )
+            return
+        
+        # Confirm the selections - assign players to teams
+        captain_team = view.draft.players[self.captain_id].team
+        confirmed_names = []
+        
+        for player_id in pending_selections:
+            view.draft.players[player_id].team = captain_team
+            confirmed_names.append(view.draft.players[player_id].username)
+        
+        # Update pick count
+        view.draft.picks_this_round[self.captain_id] += len(pending_selections)
+        
+        # Clear pending selections
+        view.draft.pending_team_selections[self.captain_id] = []
+        
+        await interaction.response.send_message(
+            f"✅ **팀 선택 확정!**\n"
+            f"팀 {captain_team}에 추가: {', '.join(confirmed_names)}", 
+            ephemeral=False
+        )
+        
+        # Send confirmation update to main channel as well
+        try:
+            main_channel = view.bot_commands.bot.get_channel(view.draft.channel_id) if view.bot_commands.bot else None
+            if main_channel and view.draft.thread_id:  # Only if in hybrid mode
+                captain_name = view.draft.players[self.captain_id].username
+                main_embed = discord.Embed(
+                    title="✅ 팀 선택 확정",
+                    description=f"**{captain_name}** (팀 {captain_team})이(가) 선택을 확정했어!",
+                    color=SUCCESS_COLOR
+                )
+                main_embed.add_field(
+                    name="추가된 플레이어",
+                    value="\n".join([f"• {name}" for name in confirmed_names]),
+                    inline=False
+                )
+                
+                await view.bot_commands._safe_api_call(
+                    lambda: main_channel.send(embed=main_embed),
+                    bucket=f"team_confirm_main_{view.draft.channel_id}"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to send team confirmation to main channel: {e}")
+        
+        # Auto-complete remaining picks in test mode
+        if view.draft.is_test_mode:
+            await self._auto_complete_test_team_selection(view.draft, view.bot_commands)
+        
+        # Continue team selection
+        await view.bot_commands._continue_team_selection_for_draft(view.draft)
+    
+    async def _auto_complete_test_team_selection(self, draft: DraftSession, bot_commands: 'TeamDraftCommands') -> None:
+        """Auto-complete team selection in test mode"""
+        import random
+        
+        # Get all unassigned players (excluding captains)
+        unassigned_players = [
+            player for player in draft.players.values()
+            if player.team is None and not player.is_captain
+        ]
+        
+        # Assign remaining players randomly to teams while respecting team size limits
+        team1_count = sum(1 for p in draft.players.values() if p.team == 1)
+        team2_count = sum(1 for p in draft.players.values() if p.team == 2)
+        target_team_size = draft.team_size
+        
+        for player in unassigned_players:
+            # Assign to team with fewer members, or randomly if equal
+            if team1_count < target_team_size and (team2_count >= target_team_size or random.choice([True, False])):
+                player.team = 1
+                team1_count += 1
+            elif team2_count < target_team_size:
+                player.team = 2
+                team2_count += 1
 
 
