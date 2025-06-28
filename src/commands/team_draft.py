@@ -2031,6 +2031,16 @@ class PrivateSelectionCategoryButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         """Handle category button click"""
         view: PrivateSelectionView = self.view
+        user_id = interaction.user.id
+        
+        # In test mode, allow the real user to interact with any player's interface
+        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
+            pass
+        elif user_id != view.player_id:
+            await interaction.response.send_message(
+                "자신의 선택 인터페이스만 사용할 수 있어.", ephemeral=True
+            )
+            return
         
         # Validate session
         current_session = view.draft.selection_interface_sessions.get(view.player_id)
@@ -2062,6 +2072,16 @@ class ConfirmSelectionButton(discord.ui.Button):
     async def callback(self, interaction: discord.Interaction) -> None:
         """Confirm servant selection"""
         view: PrivateSelectionView = self.view
+        user_id = interaction.user.id
+        
+        # In test mode, allow the real user to interact with any player's interface
+        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
+            pass
+        elif user_id != self.player_id:
+            await interaction.response.send_message(
+                "자신의 선택 인터페이스만 사용할 수 있어.", ephemeral=True
+            )
+            return
         
         # Validate session
         current_session = view.draft.selection_interface_sessions.get(self.player_id)
@@ -2444,6 +2464,16 @@ class PrivateSelectionCharacterDropdown(discord.ui.Select):
     async def callback(self, interaction: discord.Interaction) -> None:
         """Handle character selection"""
         view: PrivateSelectionView = self.view
+        user_id = interaction.user.id
+        
+        # In test mode, allow the real user to interact with any player's interface
+        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
+            pass
+        elif user_id != self.player_id:
+            await interaction.response.send_message(
+                "자신의 선택 인터페이스만 사용할 수 있어.", ephemeral=True
+            )
+            return
         
         # Validate session
         current_session = view.draft.selection_interface_sessions.get(self.player_id)
