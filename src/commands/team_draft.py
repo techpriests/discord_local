@@ -1685,23 +1685,31 @@ class TeamDraftCommands(BaseCommands):
 
     async def _start_servant_ban_phase(self, draft: DraftSession) -> None:
         """Start servant ban phase with automated system bans followed by captain bans"""
+        logger.info("Starting servant ban phase")
+        
         # Use thread if available, otherwise main channel
         channel = self._get_draft_channel(draft)
         if not channel:
             logger.warning("Could not get draft channel for servant ban phase")
             return
         
+        logger.info("Got draft channel, proceeding with system bans")
+        
         # Step 1: Perform automated system bans
         await self._perform_system_bans(draft, channel)
+        logger.info("Completed system bans")
         
         # Step 2: Determine captain ban order with dice roll
         await self._determine_captain_ban_order(draft, channel)
+        logger.info("Completed captain ban order determination")
         
         # Step 3: Start captain ban phase
         await self._start_captain_bans(draft, channel)
+        logger.info("Completed starting captain bans")
 
     async def _perform_system_bans(self, draft: DraftSession, channel) -> None:
         """Perform automated system bans before captain bans"""
+        logger.info("Starting system bans")
         import random
         
         system_bans = []
@@ -1710,6 +1718,8 @@ class TeamDraftCommands(BaseCommands):
         available_s_tier = [s for s in draft.servant_tiers["S"] if s in draft.available_servants]
         available_a_tier = [s for s in draft.servant_tiers["A"] if s in draft.available_servants]
         available_b_tier = [s for s in draft.servant_tiers["B"] if s in draft.available_servants]
+        
+        logger.info(f"Available tiers - S: {len(available_s_tier)}, A: {len(available_a_tier)}, B: {len(available_b_tier)}")
         
         # 2 random from S tier (if possible)
         s_bans = []
@@ -1739,6 +1749,8 @@ class TeamDraftCommands(BaseCommands):
         draft.system_bans = system_bans
         draft.banned_servants.update(system_bans)
         
+        logger.info(f"Selected system bans: {system_bans}")
+        
         # Announce system bans
         embed = discord.Embed(
             title="문 셀 오토마톤",
@@ -1762,10 +1774,12 @@ class TeamDraftCommands(BaseCommands):
             embed.add_field(name="추방된 서번트", value="\n".join(ban_details), inline=False)
             embed.add_field(name="문 셀 밴", value=f"{len(system_bans)}개", inline=True)
         
+        logger.info("Sending system ban announcement")
         await self._safe_api_call(
             lambda: channel.send(embed=embed),
             bucket=f"system_bans_{draft.channel_id}"
         )
+        logger.info("System bans completed successfully")
 
     async def _determine_captain_ban_order(self, draft: DraftSession, channel) -> None:
         """Determine captain ban order using dice roll"""
@@ -2096,30 +2110,16 @@ class TeamDraftCommands(BaseCommands):
 
     async def _check_voting_completion(self, view: 'CaptainVotingView') -> bool:
         """Check if voting should be completed"""
-        logger.info(f"Checking voting completion - Total players: {len(view.draft.players)}, Users who voted: {len(view.user_votes)}")
-        logger.info(f"Vote details: {view.user_votes}")
-        
         # Check if all players have voted (normal case)
         if len(view.user_votes) == len(view.draft.players):
-            logger.info("All players have voted - completing voting")
             return True
         
         # For test mode: check if the real user has voted for 2 people
         if view.draft.is_test_mode and view.draft.real_user_id:
             real_user_votes = view.user_votes.get(view.draft.real_user_id)
-            logger.info(f"Test mode - Real user votes: {real_user_votes}")
             if real_user_votes and len(real_user_votes) == 2:
-                logger.info("Real user has voted for 2 people - completing voting")
                 return True
         
-        # Additional test mode condition: if any user has voted for 2 people, consider it complete
-        # This handles cases where the real user might not be voting for themselves
-        for user_id, user_votes in view.user_votes.items():
-            if len(user_votes) == 2:
-                logger.info(f"User {user_id} has voted for 2 people - completing voting")
-                return True
-        
-        logger.info("Voting not yet complete")
         return False
 
     async def _start_final_swap_phase_for_draft(self, draft: DraftSession) -> None:
@@ -3139,8 +3139,6 @@ class CaptainVotingView(discord.ui.View):
         self.draft = draft
         self.bot_commands = bot_commands
         self.user_votes: Dict[int, Set[int]] = {}  # user_id -> set of voted player_ids
-        self._vote_lock = asyncio.Lock()  # Add lock for atomic vote operations
-        self._finalization_started = False  # Prevent multiple finalization calls
         
         # Create buttons for each player
         players = list(draft.players.values())
@@ -3150,20 +3148,10 @@ class CaptainVotingView(discord.ui.View):
 
     async def on_timeout(self) -> None:
         """Handle timeout - finalize voting"""
-        logger.info("Captain voting view timed out - forcing finalization")
         await self._finalize_voting()
 
     async def _finalize_voting(self) -> None:
         """Finalize captain voting and proceed to next phase"""
-        logger.info("Starting voting finalization")
-        
-        # Prevent multiple finalization calls with atomic check
-        async with self._vote_lock:
-            if self._finalization_started:
-                logger.info("Finalization already started, skipping")
-                return
-            self._finalization_started = True
-        
         # Prevent timeout triggers from interfering with later phases
         if self.draft.phase != DraftPhase.CAPTAIN_VOTING:
             logger.warning(f"Captain voting timeout triggered during wrong phase: {self.draft.phase}")
@@ -3178,15 +3166,11 @@ class CaptainVotingView(discord.ui.View):
             for voted_player_id in votes:
                 vote_counts[voted_player_id] += 1
         
-        logger.info(f"Vote counts: {vote_counts}")
-        
         # Select top 2 vote getters as captains
         sorted_players = sorted(vote_counts.items(), key=lambda x: x[1], reverse=True)
-        logger.info(f"Sorted players by votes: {sorted_players}")
         
         # For test mode: if there are ties or insufficient votes, randomly select from tied players
         if len(self.user_votes) <= 1:  # Test mode or very few votes
-            logger.info("Test mode detected - using random selection for captains")
             # Get all players with the highest vote count
             max_votes = sorted_players[0][1] if sorted_players else 0
             top_players = [player_id for player_id, votes in sorted_players if votes == max_votes]
@@ -3211,15 +3195,6 @@ class CaptainVotingView(discord.ui.View):
             # Normal mode: select top 2 vote getters
             self.draft.captains = [sorted_players[0][0], sorted_players[1][0]]
         
-        # Fallback: if no votes were cast at all, randomly select 2 captains
-        if not self.draft.captains or len(self.draft.captains) < 2:
-            logger.warning("No valid captains selected from votes - using random selection")
-            import random
-            all_player_ids = list(self.draft.players.keys())
-            self.draft.captains = random.sample(all_player_ids, min(2, len(all_player_ids)))
-        
-        logger.info(f"Selected captains: {self.draft.captains}")
-        
         # Mark them as captains and initialize progress tracking
         for captain_id in self.draft.captains:
             self.draft.players[captain_id].is_captain = True
@@ -3227,7 +3202,6 @@ class CaptainVotingView(discord.ui.View):
         
         # Start servant ban phase
         self.draft.phase = DraftPhase.SERVANT_BAN
-        logger.info("Moving to servant ban phase")
         
         if self.draft.is_test_mode:
             logger.info("Detected test mode - using new automated ban system")
@@ -3255,8 +3229,6 @@ class CaptainVoteButton(discord.ui.Button):
         user_id = interaction.user.id
         view: CaptainVotingView = self.view
         
-        logger.info(f"Vote button clicked by user {user_id} for player {self.player_id}")
-        
         # Validate current phase - reject if not in captain voting phase
         if view.draft.phase != DraftPhase.CAPTAIN_VOTING:
             await interaction.response.send_message(
@@ -3271,48 +3243,35 @@ class CaptainVoteButton(discord.ui.Button):
             )
             return
         
-        # Use atomic lock to prevent race conditions in vote manipulation
-        async with view._vote_lock:
-            # Check if finalization already started
-            if view._finalization_started:
+        # Initialize user votes if needed
+        if user_id not in view.user_votes:
+            view.user_votes[user_id] = set()
+        
+        # Toggle vote
+        if self.player_id in view.user_votes[user_id]:
+            view.user_votes[user_id].remove(self.player_id)
+            await interaction.response.send_message(
+                f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했어.", 
+                ephemeral=True
+            )
+        else:
+            # Check vote limit (max 2 votes)
+            if len(view.user_votes[user_id]) >= 2:
                 await interaction.response.send_message(
-                    "투표가 이미 마감되었어.", ephemeral=True
+                    "최대 2명까지만 투표할 수 있어.", ephemeral=True
                 )
                 return
             
-            # Initialize user votes if needed
-            if user_id not in view.user_votes:
-                view.user_votes[user_id] = set()
-            
-            # Atomic toggle vote operation
-            if self.player_id in view.user_votes[user_id]:
-                view.user_votes[user_id].remove(self.player_id)
-                logger.info(f"User {user_id} removed vote for player {self.player_id}")
-                await interaction.response.send_message(
-                    f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했어.", 
-                    ephemeral=True
-                )
-            else:
-                # Atomic check for vote limit (max 2 votes)
-                if len(view.user_votes[user_id]) >= 2:
-                    await interaction.response.send_message(
-                        "최대 2명까지만 투표할 수 있어.", ephemeral=True
-                    )
-                    return
-                
-                view.user_votes[user_id].add(self.player_id)
-                logger.info(f"User {user_id} added vote for player {self.player_id}. Total votes: {view.user_votes[user_id]}")
-                await interaction.response.send_message(
-                    f"{view.draft.players[self.player_id].username}에게 투표했어.", 
-                    ephemeral=True
-                )
-            
-            # Atomic check if voting should be completed
-            should_complete = await view.bot_commands._check_voting_completion(view)
-            logger.info(f"Should complete voting: {should_complete}")
-            if should_complete and not view._finalization_started:
-                logger.info("Triggering voting finalization")
-                await view._finalize_voting()
+            view.user_votes[user_id].add(self.player_id)
+            await interaction.response.send_message(
+                f"{view.draft.players[self.player_id].username}에게 투표했어.", 
+                ephemeral=True
+            )
+        
+        # Check if voting should be completed
+        should_complete = await view.bot_commands._check_voting_completion(view)
+        if should_complete:
+            await view._finalize_voting()
 
 
 class EmptySelectionDropdown(discord.ui.Select):
