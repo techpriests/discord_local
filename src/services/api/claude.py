@@ -56,7 +56,7 @@ class ClaudeAPI(BaseAPI[str]):
     # Web search token optimization settings
     WEB_SEARCH_RESULT_RETENTION_TURNS = 1  # Keep web search results for only 1 turn (current + previous)
     WEB_SEARCH_AGGRESSIVE_CLEANUP = True  # Enable aggressive cleanup of web search results
-    WEB_SEARCH_CACHE_AGGRESSIVE = True  # Apply cache control more aggressively to web search results
+    WEB_SEARCH_CACHE_AGGRESSIVE = False  # Disable web search caching
     
     # Prompt caching settings
     PROMPT_CACHING_ENABLED = True  # Enable prompt caching for cost optimization
@@ -202,7 +202,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
         # Initialize web search optimization settings with defaults
         self.WEB_SEARCH_RESULT_RETENTION_TURNS = getattr(self, 'WEB_SEARCH_RESULT_RETENTION_TURNS', 1)
         self.WEB_SEARCH_AGGRESSIVE_CLEANUP = getattr(self, 'WEB_SEARCH_AGGRESSIVE_CLEANUP', True)
-        self.WEB_SEARCH_CACHE_AGGRESSIVE = getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True)
+        self.WEB_SEARCH_CACHE_AGGRESSIVE = getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', False)
 
     def _load_usage_data(self) -> None:
         """Load saved usage data from file"""
@@ -315,13 +315,13 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
     def configure_web_search_optimization(self, 
                                         retention_turns: int = 1, 
                                         aggressive_cleanup: bool = True,
-                                        aggressive_caching: bool = True) -> None:
+                                        aggressive_caching: bool = False) -> None:
         """Configure web search token optimization settings
         
         Args:
             retention_turns: Number of conversation turns to keep web search results (1-3, default 1)
             aggressive_cleanup: Whether to aggressively remove old web search results
-            aggressive_caching: Whether to apply cache control more aggressively to web search results
+            aggressive_caching: Whether to apply cache control more aggressively to web search results (disabled by default)
         """
         self.WEB_SEARCH_RESULT_RETENTION_TURNS = max(1, min(3, retention_turns))
         self.WEB_SEARCH_AGGRESSIVE_CLEANUP = aggressive_cleanup
@@ -343,7 +343,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             "optimization": {
                 "retention_turns": getattr(self, 'WEB_SEARCH_RESULT_RETENTION_TURNS', 1),
                 "aggressive_cleanup": getattr(self, 'WEB_SEARCH_AGGRESSIVE_CLEANUP', True),
-                "aggressive_caching": getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True)
+                "aggressive_caching": getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', False)
             }
         }
     
@@ -2080,31 +2080,21 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
                 
                 # 📚 COOKBOOK: Cache Breakpoint 4 - Web Search Results (Optimized Strategy)
                 # Apply strategic cache control for maximum token efficiency
-                if self.PROMPT_CACHING_ENABLED and search_used:
-                    aggressive_caching = getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True)
+                if self.PROMPT_CACHING_ENABLED and search_used and self.WEB_SEARCH_CACHE_AGGRESSIVE:
+                    # Apply cache control to ALL web search tool results for maximum efficiency
+                    cache_applied_count = 0
+                    for content_block in response.content:
+                        if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
+                            # Apply cache control to all search results for better token efficiency
+                            if not hasattr(content_block, 'cache_control'):
+                                content_block.cache_control = {"type": "ephemeral"}
+                                cache_applied_count += 1
                     
-                    if aggressive_caching:
-                        # Apply cache control to ALL web search tool results for maximum efficiency
-                        cache_applied_count = 0
-                        for content_block in response.content:
-                            if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
-                                # Apply cache control to all search results for better token efficiency
-                                if not hasattr(content_block, 'cache_control'):
-                                    content_block.cache_control = {"type": "ephemeral"}
-                                    cache_applied_count += 1
-                        
-                        if cache_applied_count > 0:
-                            logger.info(f"📚 Applied aggressive cache control to {cache_applied_count} web search results "
-                                       f"for maximum token efficiency")
-                    else:
-                        # Conservative approach: cache only the last web search result
-                        for i in range(len(response.content) - 1, -1, -1):
-                            content_block = response.content[i]
-                            if hasattr(content_block, 'type') and content_block.type == "web_search_tool_result":
-                                if not hasattr(content_block, 'cache_control'):
-                                    content_block.cache_control = {"type": "ephemeral"}
-                                    logger.info("📚 Applied cache control to last web search result")
-                                break
+                    if cache_applied_count > 0:
+                        logger.info(f"📚 Applied aggressive cache control to {cache_applied_count} web search results "
+                                   f"for maximum token efficiency")
+                elif self.PROMPT_CACHING_ENABLED and search_used:
+                    logger.info("Web search caching is disabled - skipping cache control for web search results")
                 
             else:
                 # Text-only response - store as simple string for efficiency
@@ -2441,7 +2431,7 @@ Please maintain your core personality: cheerful, curious, scientifically inquisi
             "web_search_optimization": {
                 "retention_turns": getattr(self, 'WEB_SEARCH_RESULT_RETENTION_TURNS', 1),
                 "aggressive_cleanup": getattr(self, 'WEB_SEARCH_AGGRESSIVE_CLEANUP', True),
-                "aggressive_caching": getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', True),
+                "aggressive_caching": getattr(self, 'WEB_SEARCH_CACHE_AGGRESSIVE', False),
                 "max_uses_optimized": self.WEB_SEARCH_MAX_USES == 1
             }
         }

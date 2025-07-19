@@ -302,6 +302,11 @@ class InformationCommands(BaseCommands):
         if game.get("image_url"):
             embed.set_thumbnail(url=game["image_url"])
 
+        # Add Steam store link if app_id is available
+        if game.get("app_id"):
+            store_url = f"https://store.steampowered.com/app/{game['app_id']}"
+            embed.add_field(name="🛒 스팀 스토어", value=f"[게임 페이지 보러가기]({store_url})", inline=False)
+
         return embed
 
     async def _send_steam_error_embed(self, ctx_or_interaction, user_name: str):
@@ -614,22 +619,25 @@ class InformationCommands(BaseCommands):
             ephemeral=True
         )
 
-    @commands.hybrid_command(
+    @commands.command(
         name="던파",
         aliases=["dnf", "df"],
-        description="던전앤파이터 캐릭터의 정보를 검색합니다"
-    )
-    @app_commands.describe(
-        character_name="검색할 캐릭터 이름",
-        server_name="서버 이름 (예: 카인, 디레지에 등)"
+        help="던전앤파이터 캐릭터 검색 (현재 비활성화)",
+        brief="던파 캐릭터 검색",
+        description="던전앤파이터 캐릭터의 정보를 검색합니다 (현재 비활성화)"
     )
     async def search_dnf(
         self,
         ctx: commands.Context,
-        character_name: str,
+        character_name: str = None,
         server_name: str = "all"
     ) -> None:
         """던전앤파이터 캐릭터의 정보를 검색합니다"""
+        
+        # Check if character name is provided
+        if not character_name:
+            await ctx.send("캐릭터 이름을 입력해주세요. 예: `뮤 던파 캐릭터이름`")
+            return
         
         # Send disabled message
         disabled_embed = discord.Embed(

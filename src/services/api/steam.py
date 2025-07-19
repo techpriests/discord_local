@@ -166,7 +166,8 @@ class SteamAPI(BaseAPI[GameInfo]):
                     game_info = GameInfo(
                         name=search_item["name"],
                         player_count=current_players,
-                        image_url=item.get("tiny_image") or item.get("large_capsule_image")
+                        image_url=item.get("tiny_image") or item.get("large_capsule_image"),
+                        app_id=app_id
                     )
                     logger.debug(f"Created game info: {game_info}")
                     games.append(game_info)
