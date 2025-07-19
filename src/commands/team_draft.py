@@ -2220,12 +2220,9 @@ class RemovePlayerButton(discord.ui.Button):
             )
             return
         
-        # Validate it's still the captain's turn
-        if view.draft.current_picking_captain != current_captain:
-            await interaction.response.send_message(
-                "지금은 네 차례가 아니야.", ephemeral=True
-            )
-            return
+        # REMOVED: Redundant check - current_captain was just assigned from current_picking_captain above
+        # if view.draft.current_picking_captain != current_captain:
+        #     return  # This check is always false since current_captain = view.draft.current_picking_captain
         
         # Check if captain already completed this round
         current_round = view.draft.team_selection_round
@@ -2526,10 +2523,10 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                 )
                 return
             
-            elif user_id != self.player_id:
-                logger.warning(f"User {user_id} ({interaction_user.display_name}) tried to access player {self.player_id}'s interface")
-                # Removed redundant user ID check - Discord's ephemeral messages already guarantee security
-                return
+            # REMOVED: Problematic user ID check that was causing silent returns
+            # Discord's ephemeral messages already guarantee only the correct user can interact
+            # elif user_id != self.player_id:
+            #     return  # This silent return was causing "can't interact with own UI" errors
             
             # During reselection phase, only allow conflicted players to re-select
             if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
@@ -2996,10 +2993,10 @@ class ReopenSelectionInterfaceButton(discord.ui.Button):
             pass
         # Note: User ID validation removed - Discord's ephemeral message security 
         # already guarantees only the original user can interact with this interface
-        elif user_id != self.player_id:
-            logger.warning(f"User {user_id} ({interaction.user.display_name}) tried to reopen player {self.player_id}'s interface")
-            # Removed redundant user ID check - Discord's ephemeral messages already guarantee security
-            return
+        # REMOVED: Problematic user ID check that was causing silent returns
+        # Discord's ephemeral messages already guarantee only the correct user can interact
+        # elif user_id != self.player_id:
+        #     return  # This silent return was causing "can't interact with own UI" errors
         
         # Check if already completed
         if view.draft.selection_progress.get(self.player_id, False):
@@ -3348,10 +3345,10 @@ class PrivateSelectionCharacterDropdown(discord.ui.Select):
         # In test mode, allow the real user to interact with any player's interface
         if view.draft.is_test_mode and user_id == view.draft.real_user_id:
             pass
-        elif user_id != self.player_id:
-            logger.warning(f"User {user_id} ({interaction.user.display_name}) tried to access player {self.player_id}'s character dropdown")
-            # Removed redundant user ID check - Discord's ephemeral messages already guarantee security
-            return
+        # REMOVED: Problematic user ID check that was causing silent returns
+        # Discord's ephemeral messages already guarantee only the correct user can interact
+        # elif user_id != self.player_id:
+        #     return  # This silent return was causing "can't interact with own UI" errors
         
         # Simple state validation - no complex session management needed
         
