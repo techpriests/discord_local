@@ -143,6 +143,10 @@ class TeamDraftCommands(BaseCommands):
         # View tracking for memory management
         self.active_views: Dict[int, List[discord.ui.View]] = {}  # channel_id -> views
         
+        # Audit logging
+        self.audit_logs: List[Dict] = []  # Simple in-memory audit log
+        self.max_audit_logs = 1000  # Keep last 1000 events
+        
         # Start cleanup task
         if bot:
             bot.loop.create_task(self._cleanup_task())
@@ -168,10 +172,41 @@ class TeamDraftCommands(BaseCommands):
             6: [  # 6v6 pattern
                 {"first_pick": 1, "second_pick": 2},  # Round 1
                 {"first_pick": 2, "second_pick": 2},  # Round 2
-                {"first_pick": 1, "second_pick": 1},  # Round 3
-                {"first_pick": 1, "second_pick": 0},  # Round 4
+                {"first_pick": 2, "second_pick": 1},  # Round 3
             ]
         }
+
+    def _audit_log(self, action: str, user_id: int, data: Dict = None) -> None:
+        """Simple audit logging"""
+        log_entry = {
+            "timestamp": time.time(),
+            "action": action,
+            "user_id": user_id,
+            "data": data or {}
+        }
+        
+        self.audit_logs.append(log_entry)
+        
+        # Keep only recent logs to prevent memory growth
+        if len(self.audit_logs) > self.max_audit_logs:
+            self.audit_logs = self.audit_logs[-self.max_audit_logs:]
+        
+        # Also log to standard logger for persistent storage
+        logger.info(f"AUDIT: {action} by {user_id} - {data}")
+
+    def _has_admin_permission(self, ctx_or_interaction: CommandContext) -> bool:
+        """Check if user has admin permissions for hidden commands"""
+        user_id = self.get_user_id(ctx_or_interaction)
+        
+        # Get member object
+        if hasattr(ctx_or_interaction, 'user'):  # Interaction
+            member = ctx_or_interaction.user
+            if hasattr(ctx_or_interaction, 'guild') and ctx_or_interaction.guild:
+                member = ctx_or_interaction.guild.get_member(user_id)
+        else:  # Context
+            member = ctx_or_interaction.author
+        
+        return member and member.guild_permissions.manage_messages
 
     async def _safe_api_call(self, call_func, bucket: str = "default", max_retries: int = 3):
         """Safely make Discord API calls with rate limiting and retry logic"""
@@ -465,7 +500,7 @@ class TeamDraftCommands(BaseCommands):
             logger.error(f"Error adding reopen captain ban interface button: {e}")
 
     async def _add_reopen_selection_interface_button(self, draft: DraftSession, player_id: int) -> None:
-        """Add reopen interface button to selection progress message"""
+        """Add generic reopen interface button to selection progress message"""
         try:
             if draft.selection_progress_message_id:
                 # Use thread if available, otherwise main channel
@@ -473,8 +508,8 @@ class TeamDraftCommands(BaseCommands):
                 if channel:
                     message = await channel.fetch_message(draft.selection_progress_message_id)
                     if message:
-                        # Create a view with just the reopen button for this player
-                        view = ReopenSelectionInterfaceView(draft, self, player_id)
+                        # Create a view with generic reopen button (single button for all users)
+                        view = GenericReopenSelectionView(draft, self)
                         self._register_view(draft.channel_id, view)
                         await message.edit(view=view)
         except Exception as e:
@@ -486,12 +521,12 @@ class TeamDraftCommands(BaseCommands):
         brief="팀 드래프트 시작",
         aliases=["draft", "팀드래프트"],
         description="팀 드래프트 시스템을 시작해.\n"
-                   "사용법: 뮤 페어 [team_size:숫자] [captains:@유저1 @유저2]\n"
-                   "예시: 뮤 페어 team_size:2 (2v2 드래프트)\n"
+                   "사용법: 뮤 페어 @모든참가자들 [team_size:숫자] [captains:@팀장1 @팀장2]\n"
+                   "⚠️ 중요: 팀장도 참가자 목록에 포함되어야 해!\n"
+                   "예시: 뮤 페어 @user1 @user2 @user3 @user4 (2v2 드래프트)\n"
+                   "예시: 뮤 페어 @user1 @user2 @user3 @user4 captains:@user1 @user3 (팀장 지정)\n"
                    "예시: 뮤 페어 team_size:3 (3v3 드래프트)\n"
-                   "예시: 뮤 페어 team_size:5 (5v5 드래프트)\n"
-                   "예시: 뮤 페어 (6v6 드래프트)\n"
-                   "예시: 뮤 페어 captains:@홍길동 @김철수 (팀장 지정)"
+                   "예시: 뮤 페어 team_size:5 (5v5 드래프트)"
     )
     async def draft_start_chat(self, ctx: commands.Context, *, args: str = "") -> None:
         """Start team draft via chat command"""
@@ -511,13 +546,18 @@ class TeamDraftCommands(BaseCommands):
         
         # Parse captains from args (look for captains: keyword)
         captains_str = ""
+        players_str = args  # Start with full args
         import re
-        captains_match = re.search(r'captains:([^a-zA-Z]*(?:<@!?\d+>[^a-zA-Z]*){2})', args)
+        # More robust regex that handles various spacing and formatting
+        captains_match = re.search(r'captains:\s*(<@!?\d+>\s*<@!?\d+>)', args, re.IGNORECASE)
         if captains_match:
             captains_str = captains_match.group(1)
+            # Remove the entire captains portion from players_str to avoid double-counting
+            players_str = re.sub(r'captains:\s*<@!?\d+>\s*<@!?\d+>', '', args, flags=re.IGNORECASE).strip()
+            logger.info(f"Parsed captains: '{captains_str}', remaining players: '{players_str}'")
             
-        # Pass the args to handle player mentions
-        await self._handle_draft_start(ctx, args, test_mode, team_size, captains_str)
+        # Pass the cleaned players_str to avoid counting captains twice
+        await self._handle_draft_start(ctx, players_str, test_mode, team_size, captains_str)
 
     @app_commands.command(name="페어", description="팀 드래프트를 시작해 (지원: 2v2/3v3/5v5/6v6)")
     async def draft_start_slash(
@@ -589,10 +629,14 @@ class TeamDraftCommands(BaseCommands):
                 
                 total_players_needed = team_size * 2  # Total players for both teams
                 if len(players) != total_players_needed:
+                    # Check if the user might have double-counted captains
+                    captain_note = ""
+                    if captains_str and len(players) == total_players_needed + 2:
+                        captain_note = "\n💡 **팁**: 팀장은 참가자 목록에 이미 포함되어야 해. 팀장을 별도로 추가하지 말고 기존 참가자 중에서 지정해줘."
+                    
                     await self.send_error(
                         ctx_or_interaction, 
-                        f"정확히 {total_players_needed}명의 플레이어가 필요해. (현재: {len(players)}명)\n"
-                        #"💡 **팁**: 테스트 모드를 사용해볼래?"
+                        f"정확히 {total_players_needed}명의 플레이어가 필요해. (현재: {len(players)}명){captain_note}"
                     )
                     return
             
@@ -649,6 +693,14 @@ class TeamDraftCommands(BaseCommands):
             
             self.active_drafts[channel_id] = draft
             self.draft_start_times[channel_id] = time.time()  # Record start time
+            
+            # Audit log
+            self._audit_log("draft_start", self.get_user_id(ctx_or_interaction), {
+                "channel_id": channel_id,
+                "team_size": team_size,
+                "test_mode": test_mode,
+                "players_count": len(players)
+            })
             
             # Create draft thread for clean environment
             thread = await self._create_draft_thread(draft)
@@ -929,14 +981,158 @@ class TeamDraftCommands(BaseCommands):
             "• `/페어 team_size:3` - 3v3 드래프트 (6명 필요)\n"
             "• `/페어 team_size:5` - 5v5 드래프트 (10명 필요)\n"
             "• `/페어` - 6v6 드래프트 (12명 필요, 기본값)\n\n"
-            "새 기능:\n"
-            "• `captains:@유저1 @유저2` - 팀장 수동 지정 (투표 건너뛰기)\n"
-            "• 예시: `/페어 captains:@홍길동 @김철수`\n\n"
+            "팀장 지정 기능:\n"
+            "• `captains:@팀장1 @팀장2` - 팀장 수동 지정 (투표 건너뛰기)\n"
+            "• ⚠️ 팀장도 참가자 목록에 포함되어야 해!\n"
+            "• 예시: `뮤 페어 @user1 @user2 @user3 @user4 captains:@user1 @user3`\n\n"
             "기타 명령어:\n"
             "• `/페어상태` - 현재 드래프트 상태 확인\n"
             "• `/페어취소` - 진행 중인 드래프트 취소\n\n",
             ephemeral=True
         )
+
+    # Hidden admin commands - not visible to regular users
+    @app_commands.command(name="페어정리", description="진행 중인 드래프트를 강제로 정리해 (관리자용)")
+    @app_commands.default_permissions(manage_messages=True)
+    async def draft_force_cleanup_slash(self, interaction: discord.Interaction, channel_id: str = None) -> None:
+        """Force cleanup a draft (admin only)"""
+        await self._handle_force_cleanup(interaction, channel_id)
+
+    @commands.command(name="페어정리", help="진행 중인 드래프트를 강제로 정리해 (관리자용)", aliases=["draft_cleanup"], hidden=True)
+    @commands.has_permissions(manage_messages=True)
+    async def draft_force_cleanup_chat(self, ctx: commands.Context, channel_id: str = None) -> None:
+        """Force cleanup a draft (admin only)"""
+        await self._handle_force_cleanup(ctx, channel_id)
+
+    @app_commands.command(name="페어감사", description="드래프트 감사 로그 확인 (관리자용)")
+    @app_commands.default_permissions(manage_messages=True)
+    async def draft_audit_slash(self, interaction: discord.Interaction, limit: int = 10) -> None:
+        """View audit logs (admin only)"""
+        await self._handle_audit_query(interaction, limit)
+
+    @commands.command(name="페어감사", help="드래프트 감사 로그 확인 (관리자용)", aliases=["draft_audit"], hidden=True)
+    @commands.has_permissions(manage_messages=True)
+    async def draft_audit_chat(self, ctx: commands.Context, limit: int = 10) -> None:
+        """View audit logs (admin only)"""
+        await self._handle_audit_query(ctx, limit)
+
+    @command_handler()
+    async def _handle_force_cleanup(self, ctx_or_interaction: CommandContext, channel_id_str: str = None) -> None:
+        """Handle forced cleanup with permission check"""
+        if not self._has_admin_permission(ctx_or_interaction):
+            await self.send_error(ctx_or_interaction, "이 명령어는 메시지 관리 권한이 있는 사용자만 사용할 수 있어.")
+            return
+        
+        user_id = self.get_user_id(ctx_or_interaction)
+        
+        # Determine target channel
+        if channel_id_str:
+            try:
+                target_channel_id = int(channel_id_str)
+            except ValueError:
+                await self.send_error(ctx_or_interaction, "올바른 채널 ID를 입력해줘.")
+                return
+        else:
+            target_channel_id = self.get_channel_id(ctx_or_interaction)
+        
+        # Check if draft exists
+        if target_channel_id not in self.active_drafts:
+            await self.send_error(ctx_or_interaction, f"채널 {target_channel_id}에 진행 중인 드래프트가 없어.")
+            return
+        
+        # Get draft info for audit logging
+        draft = self.active_drafts[target_channel_id]
+        self._audit_log("force_cleanup", user_id, {
+            "channel_id": target_channel_id,
+            "draft_phase": draft.phase.value,
+            "players_count": len(draft.players),
+            "team_size": draft.team_size
+        })
+        
+        # Reuse existing cleanup logic
+        await self._cleanup_views(target_channel_id)
+        await self._cleanup_all_message_ids(draft)
+        
+        # Remove from tracking
+        del self.active_drafts[target_channel_id]
+        if target_channel_id in self.draft_start_times:
+            del self.draft_start_times[target_channel_id]
+        
+        # Send notification to both channels
+        try:
+            if self.bot:
+                # Notify thread if exists
+                if draft.thread_id:
+                    thread = self.bot.get_channel(draft.thread_id)
+                    if thread:
+                        await thread.send(embed=discord.Embed(
+                            title="🧹 드래프트 강제 정리됨",
+                            description=f"관리자에 의해 드래프트가 정리되었어.",
+                            color=INFO_COLOR
+                        ))
+                
+                # Notify main channel
+                main_channel = self.bot.get_channel(target_channel_id)
+                if main_channel:
+                    await main_channel.send(embed=discord.Embed(
+                        title="🧹 드래프트 강제 정리됨", 
+                        description=f"관리자에 의해 드래프트가 정리되었어.",
+                        color=INFO_COLOR
+                    ))
+        except Exception as e:
+            logger.warning(f"Failed to send cleanup notification: {e}")
+        
+        await self.send_success(ctx_or_interaction, f"채널 {target_channel_id}의 드래프트를 정리했어.")
+        logger.info(f"Force cleanup completed for channel {target_channel_id} by user {user_id}")
+
+    @command_handler()
+    async def _handle_audit_query(self, ctx_or_interaction: CommandContext, limit: int = 10) -> None:
+        """Handle audit log query"""
+        if not self._has_admin_permission(ctx_or_interaction):
+            await self.send_error(ctx_or_interaction, "이 명령어는 메시지 관리 권한이 있는 사용자만 사용할 수 있어.")
+            return
+        
+        # Validate limit
+        if limit < 1 or limit > 50:
+            await self.send_error(ctx_or_interaction, "조회 개수는 1-50 사이여야 해.")
+            return
+        
+        # Get recent logs
+        recent_logs = self.audit_logs[-limit:] if self.audit_logs else []
+        
+        if not recent_logs:
+            await self.send_error(ctx_or_interaction, "감사 로그가 없어.")
+            return
+        
+        # Format logs
+        embed = discord.Embed(
+            title="🔍 드래프트 감사 로그",
+            description=f"최근 {len(recent_logs)}개 항목",
+            color=INFO_COLOR
+        )
+        
+        for log in reversed(recent_logs):  # Most recent first
+            timestamp = int(log["timestamp"])
+            action = log["action"]
+            user_id = log["user_id"]
+            data = log["data"]
+            
+            user_mention = f"<@{user_id}>" if user_id else "시스템"
+            data_items = []
+            for k, v in data.items():
+                if k == "channel_id":
+                    data_items.append(f"채널:<#{v}>")
+                else:
+                    data_items.append(f"{k}:{v}")
+            data_str = ", ".join(data_items) if data_items else "없음"
+            
+            embed.add_field(
+                name=f"{action} - <t:{timestamp}:R>",
+                value=f"사용자: {user_mention}\n데이터: {data_str}",
+                inline=False
+            )
+        
+        await self.send_response(ctx_or_interaction, embed=embed, ephemeral=True)
 
     async def _start_servant_selection(self, draft: DraftSession = None) -> None:
         """Start servant selection phase using ephemeral interfaces"""
@@ -970,9 +1166,10 @@ class TeamDraftCommands(BaseCommands):
         
         # Send static button message (never recreated)
         button_embed = discord.Embed(
-            title="⚔️ 서번트 선택 - 플레이어 버튼",
-            description="**👇 자신의 닉네임 버튼을 눌러서 서번트를 선택해!**\n"
-                       "선택 내용은 모든 플레이어가 완료된 후에 공개될거야.",
+            title="⚔️ 서번트 선택",
+            description="**👇 아래 버튼을 눌러서 자신의 서번트를 선택해!**\n"
+                       "• 개인 선택창이 열려 (나만 볼 수 있음)\n"
+                       "• 선택 내용은 모든 플레이어가 완료된 후에 공개될거야",
             color=INFO_COLOR
         )
         
@@ -1590,6 +1787,12 @@ class TeamDraftCommands(BaseCommands):
         # Get draft for cleanup
         draft = self.active_drafts[channel_id]
         
+        # Audit log
+        self._audit_log("draft_cancel", self.get_user_id(ctx_or_interaction), {
+            "channel_id": channel_id,
+            "draft_phase": draft.phase.value
+        })
+        
         # Stop all active views to prevent memory leaks
         await self._cleanup_views(channel_id)
         
@@ -2096,6 +2299,13 @@ class TeamDraftCommands(BaseCommands):
         if current_channel_id in self.active_drafts:
             draft = self.active_drafts[current_channel_id]
             
+            # Audit log
+            self._audit_log("draft_complete", None, {
+                "channel_id": current_channel_id,
+                "team_size": current_draft.team_size,
+                "players_count": len(current_draft.players)
+            })
+            
             # Stop all active views to prevent memory leaks
             await self._cleanup_views(current_channel_id)
             
@@ -2464,32 +2674,29 @@ class CompleteButton(discord.ui.Button):
 
 
 class EphemeralSelectionView(discord.ui.View):
-    """View with buttons for players to open their private selection interface"""
+    """View with single button for all players to open their private selection interface"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
         super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         
-        # Add selection button for each player (up to 20 buttons max)
-        for i, (player_id, player) in enumerate(draft.players.items()):
-            if i >= 20:  # Discord button limit
-                break
-            button = OpenSelectionInterfaceButton(player_id, player.username, i)
-            self.add_item(button)
+        # Add single generic button that all players can use
+        button = GenericSelectionInterfaceButton()
+        self.add_item(button)
 
 
-class OpenSelectionInterfaceButton(discord.ui.Button):
-    """Button for players to open their private selection interface"""
+class GenericSelectionInterfaceButton(discord.ui.Button):
+    """Single button for all players to open their private selection interface"""
     
-    def __init__(self, player_id: int, player_name: str, index: int):
+    def __init__(self):
         super().__init__(
-            label=f"{player_name}",
+            label="🎯 내 서번트 선택하기",
             style=discord.ButtonStyle.primary,
-            custom_id=f"open_selection_{player_id}",
-            row=index // 5  # 5 buttons per row
+            custom_id="open_my_selection",
+            emoji="⚔️",
+            row=0
         )
-        self.player_id = player_id
 
     async def callback(self, interaction: discord.Interaction) -> None:
         """Open private selection interface for the player"""
@@ -2497,36 +2704,23 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
             user_id = interaction.user.id
             view: EphemeralSelectionView = self.view
             
-            logger.info(f"Selection interface button clicked by user {user_id} for player {self.player_id}")
+            logger.info(f"Generic selection button clicked by user {user_id}")
             
-            # Enhanced validation with additional Discord API checks to prevent race conditions
-            # Get user from interaction to double-check identity
-            interaction_user = interaction.user
-            if not interaction_user:
-                logger.warning(f"No user found in interaction for button {self.player_id}")
+            # Validate user exists
+            if not interaction.user:
+                logger.warning(f"No user found in interaction")
                 await interaction.response.send_message(
                     "인터페이스 인증에 실패했어. 다시 시도해줘.", ephemeral=True
                 )
                 return
             
-            # In test mode, allow the real user to select for anyone
-            if view.draft.is_test_mode and user_id == view.draft.real_user_id:
-                logger.info(f"Test mode: allowing real user {user_id} to select for player {self.player_id}")
-                pass
-            # Note: User ID validation removed - Discord's ephemeral message security 
-            # already guarantees only the original user can interact with this interface
-            # Additional check: verify the user is actually in the draft
-            elif user_id not in view.draft.players:
+            # Validate user is in draft
+            if user_id not in view.draft.players:
                 logger.warning(f"User {user_id} not in draft but tried to access interface")
                 await interaction.response.send_message(
                     "드래프트 참가자만 선택 인터페이스를 사용할 수 있어.", ephemeral=True
                 )
                 return
-            
-            # REMOVED: Problematic user ID check that was causing silent returns
-            # Discord's ephemeral messages already guarantee only the correct user can interact
-            # elif user_id != self.player_id:
-            #     return  # This silent return was causing "can't interact with own UI" errors
             
             # During reselection phase, only allow conflicted players to re-select
             if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
@@ -2534,33 +2728,22 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                 for user_ids in view.draft.conflicted_servants.values():
                     conflicted_players.update(user_ids)
                 
-                # In test mode, allow real user to access any player's interface for testing
-                if self.player_id not in conflicted_players and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
-                    player_name = view.draft.players[self.player_id].username
+                # In test mode, allow real user to access any player's interface
+                if user_id not in conflicted_players and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
+                    player_name = view.draft.players[user_id].username
                     await interaction.response.send_message(
                         f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
                         "중복으로 인해 재선택이 필요한 플레이어만 변경할 수 있어.", ephemeral=True
                     )
                     return
             
-            # No session management needed - Discord ephemeral + user ID validation provides security
-            
             # Check if already completed
-            player_name = view.draft.players[self.player_id].username
-            current_selection = view.draft.players[self.player_id].selected_servant
+            player_name = view.draft.players[user_id].username
+            current_selection = view.draft.players[user_id].selected_servant
             
-            if view.draft.selection_progress.get(self.player_id, False):
-                logger.info(f"Player {self.player_id} already completed selection: {current_selection}")
+            if view.draft.selection_progress.get(user_id, False):
+                logger.info(f"Player {user_id} ({player_name}) already completed selection: {current_selection}")
                 
-                # Security: Never reveal servant choice to other players, even in edge cases
-                if user_id != self.player_id and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
-                    await interaction.response.send_message(
-                        "이미 선택을 완료했어.", 
-                        ephemeral=True
-                    )
-                    return
-                
-                # Safe to show detailed info only to the actual player (or test mode real user)
                 if current_selection:
                     await interaction.response.send_message(
                         f"이미 선택을 완료했어: **{current_selection}**\n"
@@ -2575,9 +2758,8 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                 return
             
             # Open private selection interface
-            logger.info(f"Opening new selection interface for player {self.player_id}")
-            private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id)
-            logger.info(f"Created PrivateSelectionView with {len(private_view.children)} UI elements")
+            logger.info(f"Opening selection interface for player {user_id} ({player_name})")
+            private_view = PrivateSelectionView(view.draft, view.bot_commands, user_id)
             
             await interaction.response.send_message(
                 f"**{player_name}의 개인 서번트 선택**\n"
@@ -2586,7 +2768,7 @@ class OpenSelectionInterfaceButton(discord.ui.Button):
                 ephemeral=True,
                 view=private_view
             )
-            logger.info(f"Successfully sent ephemeral selection interface to player {self.player_id}")
+            logger.info(f"Successfully sent ephemeral selection interface to player {user_id} ({player_name})")
             
         except Exception as e:
             logger.error(f"Error in selection interface button callback: {e}", exc_info=True)
@@ -2607,13 +2789,21 @@ class PrivateSelectionView(discord.ui.View):
     """Private selection interface for individual players"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', player_id: int):
-        logger.info(f"Initializing PrivateSelectionView for player {player_id}")
+        player_name = draft.players[player_id].username if player_id in draft.players else "Unknown"
+        logger.info(f"Initializing PrivateSelectionView for player {player_id} ({player_name})")
         super().__init__(timeout=1800.0)  # 30 minutes
         self.draft = draft
         self.bot_commands = bot_commands
         self.player_id = player_id
         self.current_category = "세이버"
-        self.selected_servant = draft.players[player_id].selected_servant  # Allow editing
+        
+        # Initialize with None to prevent stale data issues - force fresh selection
+        # This prevents character mismatch bugs when multiple UI instances exist
+        self.selected_servant = None
+        
+        # Log current draft state for debugging
+        current_selection = draft.players[player_id].selected_servant if player_id in draft.players else None
+        logger.info(f"Player {player_id} ({player_name}) - Current draft selection: {current_selection}, UI initialized with: {self.selected_servant}")
         
         try:
             # Add category buttons
@@ -2818,6 +3008,9 @@ class ConfirmSelectionButton(discord.ui.Button):
         view: PrivateSelectionView = self.view
         user_id = interaction.user.id
         
+        player_name = view.draft.players[self.player_id].username if self.player_id in view.draft.players else "Unknown"
+        logger.info(f"Confirmation attempt by user {user_id} for player {self.player_id} ({player_name}) - selected: {view.selected_servant}")
+        
         # Enhanced validation to prevent race condition issues
         if not interaction.user:
             logger.warning(f"No user found in confirmation interaction for player {self.player_id}")
@@ -2826,11 +3019,20 @@ class ConfirmSelectionButton(discord.ui.Button):
             )
             return
         
-        # In test mode, allow the real user to interact with any player's interface
-        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
-            pass
-        # Note: User ID validation removed - Discord's ephemeral message security 
-        # already guarantees only the original user can interact with this interface
+        # Validate user is in draft
+        if user_id not in view.draft.players:
+            await interaction.response.send_message(
+                "드래프트 참가자만 선택 인터페이스를 사용할 수 있어.", ephemeral=True
+            )
+            return
+        
+        # Validate user is confirming their own selection (should always match with single button approach)
+        if user_id != self.player_id and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
+            logger.warning(f"User ID mismatch in confirmation - this should not happen with single button: user_id={user_id}, player_id={self.player_id}")
+            await interaction.response.send_message(
+                "자신의 선택만 확정할 수 있어.", ephemeral=True
+            )
+            return
         
         # During reselection phase, only allow conflicted players to confirm
         if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
@@ -2840,7 +3042,6 @@ class ConfirmSelectionButton(discord.ui.Button):
             
             # In test mode, allow real user to confirm for any player for testing
             if self.player_id not in conflicted_players and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
-                player_name = view.draft.players[self.player_id].username
                 await interaction.response.send_message(
                     f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
                     "중복으로 인해 재선택이 필요한 플레이어만 변경할 수 있어.", ephemeral=True
@@ -2850,8 +3051,10 @@ class ConfirmSelectionButton(discord.ui.Button):
         # Simple state validation
         # 1. Completion validation - prevent double confirmation
         if view.draft.selection_progress.get(self.player_id, False):
+            current_selection = view.draft.players[self.player_id].selected_servant
+            logger.info(f"Player {self.player_id} ({player_name}) already completed, current selection: {current_selection}")
             await interaction.response.send_message(
-                "이미 선택을 완료했어.", ephemeral=True
+                f"이미 선택을 완료했어: **{current_selection}**", ephemeral=True
             )
             return
         
@@ -2866,8 +3069,7 @@ class ConfirmSelectionButton(discord.ui.Button):
         view.draft.players[self.player_id].selected_servant = view.selected_servant
         view.draft.selection_progress[self.player_id] = True
         
-        player_name = view.draft.players[self.player_id].username
-        logger.info(f"Player {self.player_id} completed selection: {view.selected_servant}")
+        logger.info(f"Player {self.player_id} ({player_name}) confirmed selection: {view.selected_servant}")
         
         await interaction.response.send_message(
             f"✅ **선택 완료!**\n"
@@ -2949,8 +3151,104 @@ class ReopenBanInterfaceButton(discord.ui.Button):
         )
 
 
+class GenericReopenSelectionView(discord.ui.View):
+    """View with single reopen button for all players"""
+    
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=1800.0)  # 30 minutes
+        self.draft = draft
+        self.bot_commands = bot_commands
+        
+        # Single generic reopen button for all players
+        button = GenericReopenSelectionButton()
+        self.add_item(button)
+
+
+class GenericReopenSelectionButton(discord.ui.Button):
+    """Single reopen button for all players"""
+    
+    def __init__(self):
+        super().__init__(
+            label="🔄 내 서번트 선택 다시 열기",
+            style=discord.ButtonStyle.secondary,
+            custom_id="reopen_my_selection",
+            emoji="⚔️"
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Reopen selection interface for the user"""
+        try:
+            user_id = interaction.user.id
+            view: GenericReopenSelectionView = self.view
+            
+            # Validate user exists
+            if not interaction.user:
+                logger.warning(f"No user found in generic reopen interaction")
+                await interaction.response.send_message(
+                    "인터페이스 인증에 실패했어. 다시 시도해줘.", ephemeral=True
+                )
+                return
+            
+            # Validate user is in draft
+            if user_id not in view.draft.players:
+                await interaction.response.send_message(
+                    "드래프트 참가자만 선택 인터페이스를 사용할 수 있어.", ephemeral=True
+                )
+                return
+            
+            # Check if already completed
+            if view.draft.selection_progress.get(user_id, False):
+                current_selection = view.draft.players[user_id].selected_servant
+                await interaction.response.send_message(
+                    f"이미 선택을 완료했어: **{current_selection}**", ephemeral=True
+                )
+                return
+            
+            # During reselection phase, only allow conflicted players to reopen interface
+            if view.draft.phase == DraftPhase.SERVANT_RESELECTION:
+                conflicted_players = set()
+                for user_ids in view.draft.conflicted_servants.values():
+                    conflicted_players.update(user_ids)
+                
+                if user_id not in conflicted_players and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
+                    player_name = view.draft.players[user_id].username
+                    await interaction.response.send_message(
+                        f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
+                        "중복으로 인해 재선택이 필요한 플레이어만 인터페이스를 다시 열 수 있어.", ephemeral=True
+                    )
+                    return
+            
+            player_name = view.draft.players[user_id].username
+            
+            # Create private selection interface
+            private_view = PrivateSelectionView(view.draft, view.bot_commands, user_id)
+            
+            await interaction.response.send_message(
+                f"**{player_name}의 개인 서번트 선택 (재시도)**\n"
+                "원하는 서번트를 한 명 선택해줘.\n"
+                "다른 플레이어는 네 선택을 볼 수 없어.",
+                ephemeral=True,
+                view=private_view
+            )
+            logger.info(f"Successfully reopened selection interface for player {user_id} ({player_name})")
+            
+        except Exception as e:
+            logger.error(f"Error in generic reopen selection button callback: {e}", exc_info=True)
+            try:
+                if not interaction.response.is_done():
+                    await interaction.response.send_message(
+                        "선택 인터페이스 열기에 실패했어. 다시 시도해줘.", ephemeral=True
+                    )
+                else:
+                    await interaction.followup.send(
+                        "선택 인터페이스 열기에 실패했어. 다시 시도해줘.", ephemeral=True
+                    )
+            except Exception as followup_error:
+                logger.error(f"Failed to send error message: {followup_error}", exc_info=True)
+
+
 class ReopenSelectionInterfaceView(discord.ui.View):
-    """View with reopen button for expired selection interfaces"""
+    """View with reopen button for expired selection interfaces (LEGACY - kept for compatibility)"""
     
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands', player_id: int):
         super().__init__(timeout=1800.0)  # 30 minutes
@@ -2980,26 +3278,41 @@ class ReopenSelectionInterfaceButton(discord.ui.Button):
         view: ReopenSelectionInterfaceView = self.view
         user_id = interaction.user.id
         
-        # Enhanced validation to prevent race condition issues
+        # Validate user exists
         if not interaction.user:
-            logger.warning(f"No user found in reopen interaction for player {self.player_id}")
+            logger.warning(f"No user found in reopen interaction")
             await interaction.response.send_message(
                 "인터페이스 인증에 실패했어. 다시 시도해줘.", ephemeral=True
             )
             return
         
-        # In test mode, allow the real user to select for anyone
-        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
-            pass
-        # Note: User ID validation removed - Discord's ephemeral message security 
-        # already guarantees only the original user can interact with this interface
-        # REMOVED: Problematic user ID check that was causing silent returns
-        # Discord's ephemeral messages already guarantee only the correct user can interact
-        # elif user_id != self.player_id:
-        #     return  # This silent return was causing "can't interact with own UI" errors
+        # Validate user is in draft
+        if user_id not in view.draft.players:
+            await interaction.response.send_message(
+                "드래프트 참가자만 선택 인터페이스를 사용할 수 있어.", ephemeral=True
+            )
+            return
         
-        # Check if already completed
-        if view.draft.selection_progress.get(self.player_id, False):
+        # FIXED: Validate user is clicking their own reopen button
+        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
+            # In test mode, allow real user to reopen any interface
+            actual_player_id = self.player_id
+        elif user_id == self.player_id:
+            # Normal case: user clicking their own reopen button
+            actual_player_id = user_id
+        else:
+            # User clicked someone else's reopen button
+            button_player_name = view.draft.players[self.player_id].username
+            actual_user_name = view.draft.players[user_id].username
+            await interaction.response.send_message(
+                f"이 버튼은 **{button_player_name}**용이야!\n"
+                f"**{actual_user_name}**의 인터페이스 다시 열기 버튼을 찾아서 눌러줘.", 
+                ephemeral=True
+            )
+            return
+        
+        # Check if already completed (using correct player ID)
+        if view.draft.selection_progress.get(actual_player_id, False):
             await interaction.response.send_message(
                 "이미 선택을 완료했어.", ephemeral=True
             )
@@ -3012,18 +3325,18 @@ class ReopenSelectionInterfaceButton(discord.ui.Button):
                 conflicted_players.update(user_ids)
             
             # In test mode, allow real user to access any player's interface for testing
-            if self.player_id not in conflicted_players and not (view.draft.is_test_mode and interaction.user.id == view.draft.real_user_id):
-                player_name = view.draft.players[self.player_id].username
+            if actual_player_id not in conflicted_players and not (view.draft.is_test_mode and user_id == view.draft.real_user_id):
+                player_name = view.draft.players[actual_player_id].username
                 await interaction.response.send_message(
                     f"**{player_name}**은(는) 재선택 대상이 아니야.\n"
                     "중복으로 인해 재선택이 필요한 플레이어만 인터페이스를 다시 열 수 있어.", ephemeral=True
                 )
                 return
         
-        player_name = view.draft.players[self.player_id].username
+        player_name = view.draft.players[actual_player_id].username
         
-        # Create private selection interface
-        private_view = PrivateSelectionView(view.draft, view.bot_commands, self.player_id)
+        # Create private selection interface (using correct player ID)
+        private_view = PrivateSelectionView(view.draft, view.bot_commands, actual_player_id)
         
         await interaction.response.send_message(
             f"**{player_name}의 개인 서번트 선택 (재시도)**\n"
