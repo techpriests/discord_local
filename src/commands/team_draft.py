@@ -62,6 +62,12 @@ class DraftSession:
     captain_vote_message_id: Optional[int] = None
     captains: List[int] = field(default_factory=list)  # user_ids
     
+    # Captain voting progress tracking (similar to servant selection)
+    captain_voting_progress: Dict[int, int] = field(default_factory=dict)  # user_id -> number of votes cast
+    captain_voting_progress_message_id: Optional[int] = None
+    captain_voting_start_time: Optional[float] = None  # timestamp when voting started
+    captain_voting_time_limit: int = 180  # 3 minutes in seconds
+    
     # Servant tier definitions for ban system
     servant_tiers: Dict[str, List[str]] = field(default_factory=lambda: {
         "S": ["헤클", "길가", "란슬", "가재"],  # '란슬' moved to S, '네로' moved to A
@@ -122,7 +128,7 @@ class DraftSession:
     selection_progress_message_id: Optional[int] = None
     selection_buttons_message_id: Optional[int] = None  # Separate message for buttons
     last_progress_update_hash: Optional[str] = field(default=None)  # Prevent unnecessary view recreation
-    
+    last_voting_progress_hash: Optional[str] = field(default=None)  # Prevent unnecessary captain voting updates
 
 
 
@@ -323,11 +329,13 @@ class TeamDraftCommands(BaseCommands):
     async def _cleanup_all_message_ids(self, draft: DraftSession) -> None:
         """Clean up all message IDs to prevent memory leaks"""
         draft.captain_vote_message_id = None
+        draft.captain_voting_progress_message_id = None
         draft.status_message_id = None
         draft.ban_progress_message_id = None
         draft.selection_progress_message_id = None
         draft.selection_buttons_message_id = None
         draft.last_progress_update_hash = None
+        draft.last_voting_progress_hash = None
         logger.debug(f"Cleaned up all message IDs for channel {draft.channel_id}")
 
     async def _create_draft_thread(self, draft: DraftSession) -> Optional[discord.Thread]:
@@ -842,12 +850,22 @@ class TeamDraftCommands(BaseCommands):
         draft: DraftSession
     ) -> None:
         """Start the captain voting phase"""
+        import time
+        
         draft.phase = DraftPhase.CAPTAIN_VOTING
+        
+        # Initialize voting progress tracking
+        for user_id in draft.players.keys():
+            draft.captain_voting_progress[user_id] = 0  # Number of votes cast
+        
+        # Start the timer
+        draft.captain_voting_start_time = time.time()
         
         embed = discord.Embed(
             title="🎖️ 팀장 선출 투표",
             description="모든 플레이어는 팀장으로 추천하고 싶은 2명에게 투표해.\n"
-                       "가장 많은 표를 받은 2명이 팀장이 돼.",
+                       "가장 많은 표를 받은 2명이 팀장이 돼.\n"
+                       f"⏰ 제한 시간: {draft.captain_voting_time_limit // 60}분",
             color=INFO_COLOR
         )
         
@@ -890,6 +908,114 @@ class TeamDraftCommands(BaseCommands):
                 )
         
         draft.captain_vote_message_id = message.id
+        
+        # Send separate progress message (similar to servant selection)
+        progress_embed = discord.Embed(
+            title="📊 투표 진행 상황",
+            description="각 플레이어의 투표 진행 상황을 실시간으로 표시해.",
+            color=INFO_COLOR
+        )
+        
+        await self._update_captain_voting_progress_embed(draft, progress_embed)
+        
+        if draft_channel:
+            try:
+                progress_message = await self._safe_api_call(
+                    lambda: draft_channel.send(embed=progress_embed), 
+                    bucket=f"captain_voting_progress_{draft.channel_id}"
+                )
+                draft.captain_voting_progress_message_id = progress_message.id
+                logger.info(f"Created captain voting progress message {progress_message.id}")
+            except Exception as e:
+                logger.error(f"Failed to send captain voting progress message: {e}")
+        
+        # Start background timer task
+        asyncio.create_task(self._captain_voting_timer(draft))
+
+    async def _update_captain_voting_progress_embed(self, draft: DraftSession, embed: discord.Embed) -> None:
+        """Update captain voting progress in the embed"""
+        import time
+        
+        progress_text = ""
+        completed_count = 0
+        
+        for user_id, player in draft.players.items():
+            votes_cast = draft.captain_voting_progress.get(user_id, 0)
+            status = f"✅ 완료 ({votes_cast}/2)" if votes_cast >= 2 else f"⏳ 진행 중 ({votes_cast}/2)"
+            progress_text += f"{player.username}: {status}\n"
+            if votes_cast >= 2:
+                completed_count += 1
+        
+        total_players = len(draft.players)
+        embed.add_field(
+            name=f"진행 상황 ({completed_count}/{total_players})",
+            value=progress_text.strip(),
+            inline=False
+        )
+        
+
+
+    async def _update_captain_voting_progress_message(self, draft: DraftSession) -> None:
+        """Update the captain voting progress message"""
+        if not draft.captain_voting_progress_message_id:
+            return
+            
+        channel = self._get_draft_channel(draft)
+        if not channel:
+            return
+            
+        try:
+            # Create hash of current progress to detect changes
+            progress_hash = hash(frozenset(draft.captain_voting_progress.items()))
+            
+            # Skip update if progress hasn't changed
+            if hasattr(draft, 'last_voting_progress_hash') and draft.last_voting_progress_hash == str(progress_hash):
+                return
+                
+            draft.last_voting_progress_hash = str(progress_hash)
+            
+            message = await channel.fetch_message(draft.captain_voting_progress_message_id)
+            
+            # Create progress-only embed
+            embed = discord.Embed(
+                title="📊 투표 진행 상황",
+                description="각 플레이어의 투표 진행 상황을 실시간으로 표시해.",
+                color=INFO_COLOR
+            )
+            
+            await self._update_captain_voting_progress_embed(draft, embed)
+            
+            await message.edit(embed=embed)
+            
+        except discord.NotFound:
+            logger.warning("Captain voting progress message not found")
+        except Exception as e:
+            logger.error(f"Failed to update captain voting progress message: {e}")
+
+    async def _captain_voting_timer(self, draft: DraftSession) -> None:
+        """Background task to handle captain voting timeout"""
+        import time
+        
+        while draft.phase == DraftPhase.CAPTAIN_VOTING:
+            if not draft.captain_voting_start_time:
+                break
+                
+            elapsed = time.time() - draft.captain_voting_start_time
+            remaining = draft.captain_voting_time_limit - elapsed
+            
+            if remaining <= 0:
+                # Time's up - find the voting view and finalize
+                if draft.channel_id in self.active_views:
+                    for view in self.active_views[draft.channel_id]:
+                        if isinstance(view, CaptainVotingView):
+                            await view._finalize_voting()
+                            break
+                break
+                
+            # Update progress every 10 seconds
+            await asyncio.sleep(10)
+            if draft.phase == DraftPhase.CAPTAIN_VOTING:
+                await self._update_captain_voting_progress_message(draft)
 
     @app_commands.command(name="페어상태", description="현재 드래프트 상태를 확인해")
     async def draft_status_slash(self, interaction: discord.Interaction) -> None:
@@ -1222,18 +1348,39 @@ class TeamDraftCommands(BaseCommands):
         progress_text = ""
         completed_count = 0
         
-        for user_id, player in draft.players.items():
-            status = "✅ 완료" if draft.selection_progress.get(user_id, False) else "⏳ 진행 중"
-            progress_text += f"{player.username}: {status}\n"
-            if draft.selection_progress.get(user_id, False):
-                completed_count += 1
-        
-        total_players = len(draft.players)
-        embed.add_field(
-            name=f"진행 상황 ({completed_count}/{total_players})",
-            value=progress_text.strip(),
-            inline=False
-        )
+        if draft.phase == DraftPhase.SERVANT_RESELECTION:
+            # During reselection, only show progress for players who need to reselect
+            reselect_users = set()
+            for servant, user_ids in draft.conflicted_servants.items():
+                reselect_users.update(user_ids)
+            
+            for user_id in reselect_users:
+                player = draft.players[user_id]
+                status = "✅ 완료" if draft.selection_progress.get(user_id, False) else "⏳ 진행 중"
+                progress_text += f"{player.username}: {status}\n"
+                if draft.selection_progress.get(user_id, False):
+                    completed_count += 1
+            
+            total_players = len(reselect_users)
+            embed.add_field(
+                name=f"재선택 진행 상황 ({completed_count}/{total_players})",
+                value=progress_text.strip(),
+                inline=False
+            )
+        else:
+            # Regular servant selection - show all players
+            for user_id, player in draft.players.items():
+                status = "✅ 완료" if draft.selection_progress.get(user_id, False) else "⏳ 진행 중"
+                progress_text += f"{player.username}: {status}\n"
+                if draft.selection_progress.get(user_id, False):
+                    completed_count += 1
+            
+            total_players = len(draft.players)
+            embed.add_field(
+                name=f"진행 상황 ({completed_count}/{total_players})",
+                value=progress_text.strip(),
+                inline=False
+            )
 
     async def _update_selection_progress_message(self, draft: DraftSession) -> None:
         """Update the separate progress message (no view recreation)"""
@@ -1513,9 +1660,29 @@ class TeamDraftCommands(BaseCommands):
             bucket=f"reselection_{channel_id}"
         )
         
+        # Send separate progress message for reselection (similar to servant selection)
+        progress_embed = discord.Embed(
+            title="📊 재선택 진행 상황",
+            description="재선택 대상 플레이어들의 진행 상황을 실시간으로 표시해.",
+            color=INFO_COLOR
+        )
+        
+        await self._update_selection_progress_embed(draft, progress_embed)
+        
+        try:
+            progress_message = await self._safe_api_call(
+                lambda: channel.send(embed=progress_embed), 
+                bucket=f"reselection_progress_{channel_id}"
+            )
+            draft.selection_progress_message_id = progress_message.id  # Reuse same field
+            logger.info(f"Created reselection progress message {progress_message.id}")
+        except Exception as e:
+            logger.error(f"Failed to send reselection progress message: {e}")
+        
         # Auto-complete reselection for fake players in test mode
         if draft.is_test_mode:
             await self._auto_complete_reselection(draft)
+            await self._update_selection_progress_message(draft)
 
     async def _auto_complete_reselection(self, draft: DraftSession) -> None:
         """Auto-complete servant reselection for fake players in test mode"""
@@ -2278,12 +2445,9 @@ class TeamDraftCommands(BaseCommands):
                 main_embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
                 
                 # Add draft summary
-                total_time = time.time() - self.draft_start_times.get(current_draft.channel_id, time.time())
-                minutes = int(total_time // 60)
                 main_embed.add_field(
                     name="드래프트 정보",
-                    value=f"⏱️ 소요 시간: 약 {minutes}분\n"
-                          f"👥 참가자: {len(current_draft.players)}명\n"
+                    value=f"👥 참가자: {len(current_draft.players)}명\n"
                           f"🎯 형식: {team_format}",
                     inline=False
                 )
@@ -3598,6 +3762,8 @@ class CaptainVoteButton(discord.ui.Button):
         # Toggle vote
         if self.player_id in view.user_votes[user_id]:
             view.user_votes[user_id].remove(self.player_id)
+            # Update progress tracking
+            view.draft.captain_voting_progress[user_id] = len(view.user_votes[user_id])
             await interaction.response.send_message(
                 f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했어.", 
                 ephemeral=True
@@ -3611,10 +3777,15 @@ class CaptainVoteButton(discord.ui.Button):
                 return
             
             view.user_votes[user_id].add(self.player_id)
+            # Update progress tracking
+            view.draft.captain_voting_progress[user_id] = len(view.user_votes[user_id])
             await interaction.response.send_message(
                 f"{view.draft.players[self.player_id].username}에게 투표했어.", 
                 ephemeral=True
             )
+        
+        # Update progress message
+        await view.bot_commands._update_captain_voting_progress_message(view.draft)
         
         # Check if voting should be completed
         should_complete = await view.bot_commands._check_voting_completion(view)
