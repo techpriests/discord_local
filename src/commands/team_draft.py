@@ -66,7 +66,7 @@ class DraftSession:
     captain_voting_progress: Dict[int, int] = field(default_factory=dict)  # user_id -> number of votes cast
     captain_voting_progress_message_id: Optional[int] = None
     captain_voting_start_time: Optional[float] = None  # timestamp when voting started
-    captain_voting_time_limit: int = 180  # 3 minutes in seconds
+    captain_voting_time_limit: int = 120  # 2 minutes in seconds
     
     # Servant tier definitions for ban system
     servant_tiers: Dict[str, List[str]] = field(default_factory=lambda: {
@@ -119,6 +119,15 @@ class DraftSession:
     # Servant selection progress tracking
     selection_progress: Dict[int, bool] = field(default_factory=dict)  # user_id -> completed
     reselection_round: int = 0  # Track reselection rounds to prevent infinite loops
+    
+    # Servant selection time limits
+    selection_start_time: Optional[float] = None  # timestamp when selection started
+    selection_time_limit: int = 90  # 1 minute 30 seconds
+    reselection_start_time: Optional[float] = None  # timestamp when reselection started
+    reselection_time_limit: int = 90  # 1 minute 30 seconds
+    
+    # Task tracking for proper cleanup
+    running_tasks: Set = field(default_factory=set)  # Track background tasks
     
 
     
@@ -327,7 +336,14 @@ class TeamDraftCommands(BaseCommands):
             logger.info(f"Completed view cleanup for channel {channel_id}")
 
     async def _cleanup_all_message_ids(self, draft: DraftSession) -> None:
-        """Clean up all message IDs to prevent memory leaks"""
+        """Clean up all message IDs and cancel running tasks to prevent memory leaks"""
+        # Cancel all running background tasks
+        for task in draft.running_tasks:
+            if not task.done():
+                task.cancel()
+        draft.running_tasks.clear()
+        
+        # Clean up message IDs
         draft.captain_vote_message_id = None
         draft.captain_voting_progress_message_id = None
         draft.status_message_id = None
@@ -336,7 +352,7 @@ class TeamDraftCommands(BaseCommands):
         draft.selection_buttons_message_id = None
         draft.last_progress_update_hash = None
         draft.last_voting_progress_hash = None
-        logger.debug(f"Cleaned up all message IDs for channel {draft.channel_id}")
+        logger.debug(f"Cleaned up all message IDs and cancelled tasks for channel {draft.channel_id}")
 
     async def _create_draft_thread(self, draft: DraftSession) -> Optional[discord.Thread]:
         """Create a thread for the draft"""
@@ -383,7 +399,6 @@ class TeamDraftCommands(BaseCommands):
             except Exception as e:
                 logger.warning(f"Could not check existing threads for numbering: {e}")
                 # Fallback to timestamp-based naming if thread enumeration fails
-                import time
                 timestamp = int(time.time()) % 10000  # Last 4 digits of timestamp
                 thread_name = f"🏆 {base_name} #{timestamp}"
             
@@ -778,7 +793,6 @@ class TeamDraftCommands(BaseCommands):
         players.append((real_user_id, real_username))
         
         # Generate fake players with fake IDs
-        import random
         for i in range(total_players - 1):  # -1 because we already added the real user
             fake_id = random.randint(100000000000000000, 999999999999999999)  # 18-digit Discord-like ID
             fake_name = test_names[i] if i < len(test_names) else f"테스트플레이어{i+1}"
@@ -850,7 +864,6 @@ class TeamDraftCommands(BaseCommands):
         draft: DraftSession
     ) -> None:
         """Start the captain voting phase"""
-        import time
         
         draft.phase = DraftPhase.CAPTAIN_VOTING
         
@@ -859,13 +872,13 @@ class TeamDraftCommands(BaseCommands):
             draft.captain_voting_progress[user_id] = 0  # Number of votes cast
         
         # Start the timer
-        draft.captain_voting_start_time = time.time()
+        draft.captain_voting_start_time = time.monotonic()
         
         embed = discord.Embed(
             title="🎖️ 팀장 선출 투표",
             description="모든 플레이어는 팀장으로 추천하고 싶은 2명에게 투표해.\n"
                        "가장 많은 표를 받은 2명이 팀장이 돼.\n"
-                       f"⏰ 제한 시간: {draft.captain_voting_time_limit // 60}분",
+                       f"⏰ 제한 시간: {draft.captain_voting_time_limit // 60}분 {draft.captain_voting_time_limit % 60}초",
             color=INFO_COLOR
         )
         
@@ -930,11 +943,12 @@ class TeamDraftCommands(BaseCommands):
                 logger.error(f"Failed to send captain voting progress message: {e}")
         
         # Start background timer task
-        asyncio.create_task(self._captain_voting_timer(draft))
+        task = asyncio.create_task(self._captain_voting_timer(draft))
+        draft.running_tasks.add(task)
+        task.add_done_callback(draft.running_tasks.discard)
 
     async def _update_captain_voting_progress_embed(self, draft: DraftSession, embed: discord.Embed) -> None:
         """Update captain voting progress in the embed"""
-        import time
         
         progress_text = ""
         completed_count = 0
@@ -994,13 +1008,11 @@ class TeamDraftCommands(BaseCommands):
 
     async def _captain_voting_timer(self, draft: DraftSession) -> None:
         """Background task to handle captain voting timeout"""
-        import time
-        
         while draft.phase == DraftPhase.CAPTAIN_VOTING:
             if not draft.captain_voting_start_time:
                 break
                 
-            elapsed = time.time() - draft.captain_voting_start_time
+            elapsed = time.monotonic() - draft.captain_voting_start_time
             remaining = draft.captain_voting_time_limit - elapsed
             
             if remaining <= 0:
@@ -1016,6 +1028,112 @@ class TeamDraftCommands(BaseCommands):
             await asyncio.sleep(10)
             if draft.phase == DraftPhase.CAPTAIN_VOTING:
                 await self._update_captain_voting_progress_message(draft)
+
+    async def _servant_selection_timer(self, draft: DraftSession) -> None:
+        """Background task to handle servant selection timeout"""
+        while draft.phase == DraftPhase.SERVANT_SELECTION:
+            if not draft.selection_start_time:
+                break
+                
+            elapsed = time.monotonic() - draft.selection_start_time
+            remaining = draft.selection_time_limit - elapsed
+            
+            if remaining <= 0:
+                # Time's up - assign random servants to players who haven't selected
+                await self._handle_selection_timeout(draft)
+                break
+                
+            # Update progress every 10 seconds
+            await asyncio.sleep(10)
+            if draft.phase == DraftPhase.SERVANT_SELECTION:
+                await self._update_selection_progress_message(draft)
+
+    async def _servant_reselection_timer(self, draft: DraftSession) -> None:
+        """Background task to handle servant reselection timeout"""
+        while draft.phase == DraftPhase.SERVANT_RESELECTION:
+            if not draft.reselection_start_time:
+                break
+                
+            elapsed = time.monotonic() - draft.reselection_start_time
+            remaining = draft.reselection_time_limit - elapsed
+            
+            if remaining <= 0:
+                # Time's up - assign random servants to players who haven't reselected
+                await self._handle_reselection_timeout(draft)
+                break
+                
+            # Update progress every 10 seconds
+            await asyncio.sleep(10)
+            if draft.phase == DraftPhase.SERVANT_RESELECTION:
+                await self._update_selection_progress_message(draft)
+
+    async def _handle_selection_timeout(self, draft: DraftSession) -> None:
+        """Handle servant selection timeout by assigning random servants"""
+        
+        # Get players who haven't completed selection
+        incomplete_players = [
+            user_id for user_id, completed in draft.selection_progress.items()
+            if not completed
+        ]
+        
+        if not incomplete_players:
+            return  # All players completed
+        
+        # Get available servants (exclude banned and already selected)
+        taken_servants = {
+            player.selected_servant for player in draft.players.values() 
+            if player.selected_servant
+        }
+        available_servants = list(draft.available_servants - draft.banned_servants - taken_servants)
+        
+        # Assign random servants to incomplete players
+        for user_id in incomplete_players:
+            if available_servants:
+                random_servant = random.choice(available_servants)
+                draft.players[user_id].selected_servant = random_servant
+                draft.selection_progress[user_id] = True
+                available_servants.remove(random_servant)
+                logger.info(f"Auto-assigned {random_servant} to {draft.players[user_id].username} due to timeout")
+        
+        # Update progress and proceed to reveal
+        await self._update_selection_progress_message(draft)
+        await self._reveal_servant_selections(draft)
+
+    async def _handle_reselection_timeout(self, draft: DraftSession) -> None:
+        """Handle servant reselection timeout by assigning random servants"""
+        
+        # Get players who need to reselect but haven't completed
+        conflicted_players = set()
+        for user_ids in draft.conflicted_servants.values():
+            conflicted_players.update(user_ids)
+        
+        incomplete_players = [
+            user_id for user_id in conflicted_players
+            if not draft.players[user_id].selected_servant
+        ]
+        
+        if not incomplete_players:
+            return  # All players completed reselection
+        
+        # Get available servants (exclude confirmed, banned, and already selected)
+        confirmed_servants = set(draft.confirmed_servants.values())
+        taken_servants = {
+            player.selected_servant for player in draft.players.values() 
+            if player.selected_servant and player.selected_servant not in confirmed_servants
+        }
+        available_servants = list(draft.available_servants - confirmed_servants - draft.banned_servants - taken_servants)
+        
+        # Assign random servants to incomplete players
+        for user_id in incomplete_players:
+            if available_servants:
+                random_servant = random.choice(available_servants)
+                draft.players[user_id].selected_servant = random_servant
+                available_servants.remove(random_servant)
+                logger.info(f"Auto-assigned {random_servant} to {draft.players[user_id].username} due to reselection timeout")
+        
+        # Update progress and proceed to reveal
+        await self._update_selection_progress_message(draft)
+        await self._check_reselection_completion(draft)
 
     @app_commands.command(name="페어상태", description="현재 드래프트 상태를 확인해")
     async def draft_status_slash(self, interaction: discord.Interaction) -> None:
@@ -1295,7 +1413,8 @@ class TeamDraftCommands(BaseCommands):
             title="⚔️ 서번트 선택",
             description="**👇 아래 버튼을 눌러서 자신의 서번트를 선택해!**\n"
                        "• 개인 선택창이 열려 (나만 볼 수 있음)\n"
-                       "• 선택 내용은 모든 플레이어가 완료된 후에 공개될거야",
+                       "• 선택 내용은 모든 플레이어가 완료된 후에 공개될거야\n"
+                       f"⏰ **제한 시간: {current_draft.selection_time_limit // 60}분 {current_draft.selection_time_limit % 60}초**",
             color=INFO_COLOR
         )
         
@@ -1337,6 +1456,14 @@ class TeamDraftCommands(BaseCommands):
         except Exception as e:
             logger.error(f"Failed to send selection progress message: {e}")
             raise
+        
+        # Initialize servant selection timer
+        current_draft.selection_start_time = time.monotonic()
+        
+        # Start background timer task
+        task = asyncio.create_task(self._servant_selection_timer(current_draft))
+        current_draft.running_tasks.add(task)
+        task.add_done_callback(current_draft.running_tasks.discard)
         
         # Auto-complete fake players' selections immediately in test mode
         if current_draft.is_test_mode:
@@ -1424,7 +1551,6 @@ class TeamDraftCommands(BaseCommands):
 
     async def _auto_complete_test_selections(self, draft: DraftSession) -> None:
         """Auto-complete servant selections for test mode fake players"""
-        import random
         
         # Get available servants (exclude banned and already selected)
         taken_servants = {p.selected_servant for p in draft.players.values() if p.selected_servant}
@@ -1614,7 +1740,8 @@ class TeamDraftCommands(BaseCommands):
         embed = discord.Embed(
             title="⚔️ 서번트 선택 결과 - 중복이 있어",
             description="중복 선택된 서번트가 있네. 주사위로 결정하자.\n"
-                       "일부 서번트는 확정되었고, 중복된 플레이어들은 재선택해야 해.",
+                       "일부 서번트는 확정되었고, 중복된 플레이어들은 재선택해야 해.\n"
+                       f"⏰ **재선택 제한 시간: {draft.reselection_time_limit // 60}분 {draft.reselection_time_limit % 60}초**",
             color=INFO_COLOR
         )
         
@@ -1679,6 +1806,14 @@ class TeamDraftCommands(BaseCommands):
         except Exception as e:
             logger.error(f"Failed to send reselection progress message: {e}")
         
+        # Initialize servant reselection timer
+        draft.reselection_start_time = time.monotonic()
+        
+        # Start background timer task
+        task = asyncio.create_task(self._servant_reselection_timer(draft))
+        draft.running_tasks.add(task)
+        task.add_done_callback(draft.running_tasks.discard)
+        
         # Auto-complete reselection for fake players in test mode
         if draft.is_test_mode:
             await self._auto_complete_reselection(draft)
@@ -1686,7 +1821,6 @@ class TeamDraftCommands(BaseCommands):
 
     async def _auto_complete_reselection(self, draft: DraftSession) -> None:
         """Auto-complete servant reselection for fake players in test mode"""
-        import random
         
         # Get available servants (exclude confirmed and banned)
         confirmed_servants = set(draft.confirmed_servants.values())
@@ -2080,7 +2214,6 @@ class TeamDraftCommands(BaseCommands):
     async def _perform_system_bans(self, draft: DraftSession, channel) -> None:
         """Perform automated system bans before captain bans"""
         logger.info("Starting system bans")
-        import random
         
         system_bans = []
         
@@ -2153,7 +2286,6 @@ class TeamDraftCommands(BaseCommands):
 
     async def _determine_captain_ban_order(self, draft: DraftSession, channel) -> None:
         """Determine captain ban order using dice roll"""
-        import random
         
         captain1, captain2 = draft.captains
         roll1 = random.randint(1, 20)
@@ -2735,7 +2867,6 @@ class PlayerDropdown(discord.ui.Select):
     
     async def _auto_complete_team_selection(self) -> None:
         """Auto-complete team selection in test mode"""
-        import random
         
         # Get all unassigned players (excluding captains)
         unassigned_players = [
@@ -3691,7 +3822,6 @@ class CaptainVotingView(discord.ui.View):
             if len(top_players) < 2:
                 # Add remaining players for random selection
                 remaining_players = [player_id for player_id, _ in sorted_players if player_id not in top_players]
-                import random
                 needed = 2 - len(top_players)
                 if len(remaining_players) >= needed:
                     top_players.extend(random.sample(remaining_players, needed))
@@ -3699,8 +3829,7 @@ class CaptainVotingView(discord.ui.View):
                     top_players.extend(remaining_players)
             elif len(top_players) > 2:
                 # Too many ties, randomly select 2 from the tied players
-                import random
-                top_players = random.sample(top_players, 2)
+                        top_players = random.sample(top_players, 2)
             
             self.draft.captains = top_players[:2]
         else:
@@ -4420,7 +4549,6 @@ class ConfirmTeamSelectionButton(discord.ui.Button):
     
     async def _auto_complete_test_team_selection(self, draft: DraftSession, bot_commands: 'TeamDraftCommands') -> None:
         """Auto-complete team selection in test mode"""
-        import random
         
         # Get all unassigned players (excluding captains)
         unassigned_players = [
