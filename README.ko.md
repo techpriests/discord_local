@@ -138,11 +138,11 @@ docker-compose down
 - **메모리 시스템**: 길드 격리가 가능한 영구 저장소 (개발 중)
 - **속도 제한**: 내장된 API 속도 제한 및 요청 관리
 
-자세한 아키텍처 정보는 [CLAUDE.ko.md](CLAUDE.ko.md)를 참조하세요.
+자세한 아키텍처 정보는 [CLAUDE.ko.md](docs/CLAUDE.ko.md)를 참조하세요.
 
 ## 기여
 
-기여를 환영합니다! 자세한 내용은 [기여 가이드라인](CONTRIBUTING.ko.md)을 참조하세요.
+기여를 환영합니다! 자세한 내용은 [기여 가이드라인](docs/CONTRIBUTING.ko.md)을 참조하세요.
 
 1. 저장소를 포크하세요
 2. `develop`에서 기능 브랜치를 생성하세요
@@ -157,13 +157,13 @@ docker-compose down
 
 ## 보안
 
-보안 문제에 대해서는 [보안 정책](SECURITY.ko.md)을 검토하거나 유지관리자에게 직접 연락하세요.
+보안 문제에 대해서는 [보안 정책](docs/SECURITY.ko.md)을 검토하거나 유지관리자에게 직접 연락하세요.
 
 ## 문서
 
-- [아키텍처 개요](CLAUDE.ko.md)
-- [기여 가이드라인](CONTRIBUTING.ko.md)
-- [보안 정책](SECURITY.ko.md)
+- [아키텍처 개요](docs/CLAUDE.ko.md)
+- [기여 가이드라인](docs/CONTRIBUTING.ko.md)
+- [보안 정책](docs/SECURITY.ko.md)
 
 ---
 

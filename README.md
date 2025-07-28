@@ -138,11 +138,11 @@ docker-compose down
 - **Memory System**: Persistent storage with guild isolation (under development)
 - **Rate Limiting**: Built-in API rate limiting and request management
 
-For detailed architecture information, see [CLAUDE.md](CLAUDE.md).
+For detailed architecture information, see [CLAUDE.md](docs/CLAUDE.md).
 
 ## Contributing
 
-We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.md) for details.
+We welcome contributions! Please see our [Contributing Guidelines](docs/CONTRIBUTING.md) for details.
 
 1. Fork the repository
 2. Create a feature branch from `develop`
@@ -157,13 +157,13 @@ We welcome contributions! Please see our [Contributing Guidelines](CONTRIBUTING.
 
 ## Security
 
-For security concerns, please review our [Security Policy](SECURITY.md) or contact the maintainers directly.
+For security concerns, please review our [Security Policy](docs/SECURITY.md) or contact the maintainers directly.
 
 ## Documentation
 
-- [Architecture Overview](CLAUDE.md)
-- [Contributing Guidelines](CONTRIBUTING.md)
-- [Security Policy](SECURITY.md)
+- [Architecture Overview](docs/CLAUDE.md)
+- [Contributing Guidelines](docs/CONTRIBUTING.md)
+- [Security Policy](docs/SECURITY.md)
 
 ---
 

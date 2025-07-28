@@ -33,9 +33,9 @@ List commands to test:
 
 ### Documentation
 - [ ] I have updated the README.md if needed
-- [ ] I have updated CLAUDE.md for architectural changes
+- [ ] I have updated docs/CLAUDE.md for architectural changes
 - [ ] I have added/updated docstrings for new functions
-- [ ] I have updated the CHANGELOG.md
+- [ ] I have updated the docs/CHANGELOG.md
 
 ### Dependencies
 - [ ] I have added any new dependencies to pyproject.toml
