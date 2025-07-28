@@ -66,4 +66,6 @@ Our bot includes several security measures:
 
 ---
 
+**Note**: This documentation was written with AI (Claude Code) under human supervision.
+
 Thank you for helping to keep Mumu-discord secure! 
