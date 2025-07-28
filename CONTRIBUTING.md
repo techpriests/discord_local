@@ -191,4 +191,6 @@ Contributors will be:
 
 ---
 
+**Note**: This documentation was written with AI (Claude Code) under human supervision.
+
 Happy coding! 

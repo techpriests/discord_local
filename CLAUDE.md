@@ -24,7 +24,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture Overview
 
-This is a Discord bot built with discord.py that provides utility commands through both slash commands and prefix commands (using `!!`, `뮤`, or `pt` prefixes).
+This is a Discord bot built with discord.py that provides utility commands through both slash commands and prefix commands (using `뮤` prefix).
 
 ### Core Components
 
@@ -41,7 +41,7 @@ This is a Discord bot built with discord.py that provides utility commands throu
 
 **API Services** (in `src/services/api/`): All external API integrations follow a common pattern with base classes (`base.py`, `service.py`) and specific implementations (Claude, Steam, exchange rates, etc.). Rate limiting is handled in `rate_limit.py`.
 
-**Memory System**: `src/services/memory_db.py` provides persistent storage for user information using JSON file storage with per-guild isolation.
+**Memory System**: `src/services/memory_db.py` provides persistent storage for user information using JSON file storage with per-guild isolation. *(Currently under development)*
 
 **Message Handling**: `src/services/message_handler.py` processes both slash commands and prefix commands, routing them to appropriate handlers.
 
@@ -73,3 +73,7 @@ For local development, also add:
 GIT_COMMIT=$(git rev-parse --short HEAD)
 GIT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 ```
+
+---
+
+**Note**: This documentation was written with AI (Claude Code) under human supervision.

@@ -4,7 +4,9 @@
 [![Docker](https://img.shields.io/badge/docker-enabled-blue)](https://www.docker.com/)
 [![Poetry](https://img.shields.io/badge/dependency-poetry-blue)](https://python-poetry.org/)
 
-A powerful Discord bot providing utility commands, AI integration, and entertainment features through both slash commands and traditional prefix commands. Built with modern Python practices and designed for easy deployment and scaling.
+**Language**: [English](README.md) | [한국어](README.ko.md)
+
+A Discord bot providing utility commands, AI integration, and entertainment features through both slash commands and traditional prefix commands. Built with AI assistance under human supervision and designed for easy deployment and scaling.
 
 ## Features
 
@@ -18,12 +20,14 @@ A powerful Discord bot providing utility commands, AI integration, and entertain
 - **Gacha Games**: Arknights gacha simulation
 
 ### AI Integration
-- **Claude AI Chat**: Natural language conversations powered by Anthropic's Claude
-- **Smart Responses**: Context-aware AI assistance
+- **Claude AI Chat**: Natural language conversations powered by Anthropic's Claude(Supports web search tool)
 
 ### Team Management
 - **Draft System**: Advanced team drafting with progress tracking
 - **Guild Isolation**: Per-server data management and customization
+
+### Development Features
+- **Hot Reload**: Live module reloading without bot restart (supports: InformationCommands, EntertainmentCommands, SystemCommands, ArknightsCommands, AICommands, TeamDraftCommands)
 
 ## Quick Start
 
@@ -66,7 +70,7 @@ poetry run python -m src.bot
 | `/recall` | Retrieve information | `/recall meeting-today` |
 
 ### Prefix Commands
-All slash commands work with prefixes: `!!`, `뮤`, `pt`
+All slash commands work with prefixes: `뮤`
 ```
 !!exchange USD 100 EUR
 뮤 steam Cyberpunk 2077
@@ -128,12 +132,10 @@ docker-compose down
 
 ## Architecture
 
-Built with modern Python practices and designed for maintainability:
-
 - **Modular Design**: Commands organized into logical cogs
 - **API Abstraction**: Unified service layer for external APIs
 - **Error Handling**: Comprehensive error management with user-friendly responses
-- **Memory System**: Persistent storage with guild isolation
+- **Memory System**: Persistent storage with guild isolation (under development)
 - **Rate Limiting**: Built-in API rate limiting and request management
 
 For detailed architecture information, see [CLAUDE.md](CLAUDE.md).
@@ -160,10 +162,11 @@ For security concerns, please review our [Security Policy](SECURITY.md) or conta
 ## Documentation
 
 - [Architecture Overview](CLAUDE.md)
-- [API Documentation](docs/)
 - [Contributing Guidelines](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
 
 ---
+
+**Note**: This documentation was written with AI (Claude Code) under human supervision.
 
 Built with care using Python, Discord.py, and modern development practices.
