@@ -13,6 +13,7 @@ from .base_commands import BaseCommands
 from src.utils.types import CommandContext
 from src.utils.entertainment_types import Poll, PollOption
 from src.utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
+from src.services.gacha.general import GeneralGachaCalculator
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,7 @@ class EntertainmentCommands(BaseCommands):
         super().__init__()
         self.dice_pattern = re.compile(r"^(\d+)d(\d+)$")  # Pattern for "XdY"
         self.active_polls: Dict[int, Poll] = {}  # channel_id -> Poll
+        self.gacha_calculator = GeneralGachaCalculator()
 
     @commands.command(
         name="안녕",
@@ -542,3 +544,268 @@ class EntertainmentCommands(BaseCommands):
             result = f"🎲 주사위 ({dice_str}) 결과:\n" f"개별: {rolls_str}\n" f"총합: **{total}**"
 
         await self.send_response(ctx_or_interaction, result)
+
+    @commands.command(
+        name="가챠",
+        help="일반 가챠 확률 계산",
+        brief="가챠 확률 계산",
+        aliases=["gacha", "뽑기확률"],
+        description="일반 가챠 게임의 확률을 계산해주는 명령어야.\n"
+                   "사용법: 뮤 가챠 [확률%] [시도횟수]\n"
+                   "예시: 뮤 가챠 0.75 30\n"
+                   "     뮤 가챠 1.5 100"
+    )
+    async def gacha_probability(
+        self, 
+        ctx: commands.Context, 
+        rate: float, 
+        attempts: int
+    ) -> None:
+        """Calculate general gacha probabilities
+        
+        Args:
+            ctx: Command context
+            rate: Pull rate as percentage (e.g., 0.75 for 0.75%)
+            attempts: Number of pull attempts
+        """
+        try:
+            # Convert percentage to decimal
+            rate_decimal = rate / 100.0
+            
+            # Calculate probabilities
+            result = self.gacha_calculator.calculate_probability(rate_decimal, attempts)
+            
+            # Create embed
+            user_name = self.get_user_name(ctx)
+            embed = discord.Embed(
+                title="🎲 일반 가챠 확률 계산",
+                description=f"{user_name}의 {attempts}회 뽑기 결과야.",
+                color=INFO_COLOR
+            )
+
+            embed.add_field(
+                name="뽑기 정보",
+                value=f"개별 성공률: {result['rate_percent']:.3f}%\n"
+                      f"시도 횟수: {attempts:,}회",
+                inline=False
+            )
+
+            success_percent = result['success_probability'] * 100
+            failure_percent = result['failure_probability'] * 100
+            expected = result['expected_successes']
+
+            embed.add_field(
+                name="결과",
+                value=f"최소 1회 성공할 확률: **{success_percent:.2f}%**\n"
+                      f"모두 실패할 확률: {failure_percent:.2f}%\n"
+                      f"예상 성공 횟수: {expected:.2f}회",
+                inline=False
+            )
+
+            # Add tips for different probability ranges
+            if success_percent >= 95:
+                tip = "🟢 매우 높은 확률이야! 거의 확실해."
+            elif success_percent >= 80:
+                tip = "🟡 높은 확률이야. 기대해도 좋을 것 같아."
+            elif success_percent >= 50:
+                tip = "🟠 반반 정도야. 운이 필요해."
+            elif success_percent >= 20:
+                tip = "🔴 낮은 확률이야. 운에 맡겨야겠어."
+            else:
+                tip = "⚫ 매우 낮은 확률이야. 기적이 필요해."
+
+            embed.add_field(
+                name="💡 팁",
+                value=tip,
+                inline=False
+            )
+
+            await ctx.send(embed=embed)
+
+        except ValueError as e:
+            await self.send_error(
+                ctx,
+                str(e),
+                ephemeral=True
+            )
+        except Exception as e:
+            logger.error(f"Error in gacha command: {e}")
+            await self.send_error(
+                ctx,
+                "가챠 확률 계산 중 오류가 발생했어.",
+                ephemeral=True
+            )
+
+    @commands.command(
+        name="가챠다중",
+        help="다중 캐릭터 가챠 확률 계산",
+        brief="다중 가챠 확률",
+        aliases=["gacha_multi", "다중뽑기"],
+        description="여러 캐릭터를 동시에 노리는 가챠 확률을 계산해주는 명령어야.\n"
+                   "사용법: 뮤 가챠다중 [캐릭터1:확률1] [캐릭터2:확률2] [시도횟수]\n"
+                   "예시: 뮤 가챠다중 A:0.75 B:1.0 30\n"
+                   "     뮤 가챠다중 루시엘:0.5 미카엘:0.8 한세:1.2 100"
+    )
+    async def multi_gacha_probability(
+        self, 
+        ctx: commands.Context, 
+        *args
+    ) -> None:
+        """Calculate multi-character gacha probabilities
+        
+        Args:
+            ctx: Command context
+            *args: Variable arguments containing character:rate pairs and attempts
+        """
+        try:
+            if len(args) < 3:
+                await self.send_error(
+                    ctx,
+                    "사용법: 뮤 가챠다중 [캐릭터1:확률1] [캐릭터2:확률2] [시도횟수]\n"
+                    "예시: 뮤 가챠다중 A:0.75 B:1.0 30",
+                    ephemeral=True
+                )
+                return
+
+            # Parse attempts (last argument)
+            try:
+                attempts = int(args[-1])
+            except ValueError:
+                await self.send_error(
+                    ctx,
+                    "시도 횟수는 숫자여야 해.",
+                    ephemeral=True
+                )
+                return
+
+            # Parse character:rate pairs
+            characters = []
+            for arg in args[:-1]:  # All arguments except the last one (attempts)
+                if ':' not in arg:
+                    await self.send_error(
+                        ctx,
+                        f"잘못된 형식: {arg}\n"
+                        "올바른 형식: 캐릭터이름:확률",
+                        ephemeral=True
+                    )
+                    return
+                
+                try:
+                    name, rate_str = arg.split(':', 1)
+                    rate = float(rate_str) / 100.0  # Convert percentage to decimal
+                    characters.append((name, rate))
+                except ValueError:
+                    await self.send_error(
+                        ctx,
+                        f"확률 값이 잘못됨: {rate_str}\n"
+                        "확률은 숫자여야 해.",
+                        ephemeral=True
+                    )
+                    return
+
+            # Calculate probabilities
+            result = self.gacha_calculator.calculate_multi_character_probability(
+                characters, attempts
+            )
+            
+            # Create embed
+            user_name = self.get_user_name(ctx)
+            embed = discord.Embed(
+                title="🎲 다중 캐릭터 가챠 확률 계산",
+                description=f"{user_name}의 {attempts}회 뽑기 결과야.",
+                color=INFO_COLOR
+            )
+
+            # Character information
+            char_info = []
+            for char in result['characters']:
+                char_info.append(
+                    f"**{char['name']}**: {char['rate_percent']:.3f}% (개별 성공률: {char['probability']*100:.2f}%)"
+                )
+            
+            embed.add_field(
+                name="캐릭터 정보",
+                value="\n".join(char_info),
+                inline=False
+            )
+
+            # Scenarios
+            scenarios_text = []
+            total_scenarios = len(result['scenarios'])
+            
+            if len(characters) <= 3:
+                # Show all scenarios for 2-3 characters (4-8 scenarios)
+                for scenario_key, scenario in result['scenarios'].items():
+                    prob_percent = scenario['probability'] * 100
+                    scenarios_text.append(f"**{scenario['description']}**: {prob_percent:.2f}%")
+                
+                scenario_title = f"시나리오별 확률 (전체 {total_scenarios}개)"
+            else:
+                # Show top 10 scenarios for 4-5 characters to avoid overwhelming the display
+                count = 0
+                for scenario_key, scenario in result['scenarios'].items():
+                    if count < 10:
+                        prob_percent = scenario['probability'] * 100
+                        scenarios_text.append(f"**{scenario['description']}**: {prob_percent:.2f}%")
+                        count += 1
+                    else:
+                        break
+                
+                if total_scenarios > 10:
+                    remaining = total_scenarios - 10
+                    scenarios_text.append(f"*... 외 {remaining}개 시나리오 더 있음*")
+                
+                scenario_title = f"주요 시나리오 확률 (상위 10개, 전체 {total_scenarios}개)"
+
+            embed.add_field(
+                name=scenario_title,
+                value="\n".join(scenarios_text),
+                inline=False
+            )
+
+            # Add tip based on best scenario
+            # Find the all-success scenario
+            all_success_prob = 0.0
+            for scenario in result['scenarios'].values():
+                if len(scenario['characters']) == len(characters):
+                    all_success_prob = scenario['probability'] * 100
+                    break
+            
+            if len(characters) == 2:
+                if all_success_prob >= 80:
+                    tip = "🟢 두 캐릭터를 모두 얻을 확률이 높아!"
+                elif all_success_prob >= 50:
+                    tip = "🟡 둘 다 얻을 확률이 적당해."
+                elif all_success_prob >= 20:
+                    tip = "🟠 둘 다 얻기는 어려워 보여."
+                else:
+                    tip = "🔴 둘 다 얻기는 매우 어려워."
+            else:
+                if all_success_prob >= 50:
+                    tip = "🟢 모든 캐릭터를 얻을 확률이 괜찮아!"
+                elif all_success_prob >= 10:
+                    tip = "🟡 모든 캐릭터를 얻기는 어려워."
+                else:
+                    tip = "🔴 모든 캐릭터를 얻기는 매우 어려워."
+
+            embed.add_field(
+                name="💡 팁",
+                value=tip,
+                inline=False
+            )
+
+            await ctx.send(embed=embed)
+
+        except ValueError as e:
+            await self.send_error(
+                ctx,
+                str(e),
+                ephemeral=True
+            )
+        except Exception as e:
+            logger.error(f"Error in multi gacha command: {e}")
+            await self.send_error(
+                ctx,
+                "다중 가챠 확률 계산 중 오류가 발생했어.",
+                ephemeral=True
+            )
