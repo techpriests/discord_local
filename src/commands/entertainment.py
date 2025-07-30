@@ -545,29 +545,77 @@ class EntertainmentCommands(BaseCommands):
 
         await self.send_response(ctx_or_interaction, result)
 
-    @commands.command(
-        name="가챠",
-        help="일반 가챠 확률 계산",
-        brief="가챠 확률 계산",
-        aliases=["gacha", "뽑기확률"],
-        description="일반 가챠 게임의 확률을 계산해주는 명령어야.\n"
-                   "사용법: 뮤 가챠 [확률%] [시도횟수]\n"
-                   "예시: 뮤 가챠 0.75 30\n"
-                   "     뮤 가챠 1.5 100"
+    @app_commands.command(
+        name="gacha",
+        description="일반 가챠 확률 계산"
     )
-    async def gacha_probability(
-        self, 
-        ctx: commands.Context, 
-        rate: float, 
+    @app_commands.describe(
+        rate="확률 (퍼센트, 예: 0.75)",
+        attempts="시도 횟수"
+    )
+    async def gacha_slash(
+        self,
+        interaction: discord.Interaction,
+        rate: float,
         attempts: int
     ) -> None:
-        """Calculate general gacha probabilities
+        """Slash command for simple gacha probability calculation"""
+        await self._handle_gacha_calc(interaction, rate, attempts, None)
+
+    @app_commands.command(
+        name="gacha_resource",
+        description="자원 기반 가챠 확률 계산"
+    )
+    @app_commands.describe(
+        rate="확률 (퍼센트, 예: 0.75)",
+        resource_name="자원 이름 (예: 돌, 젬, 크리스탈)",
+        amount="보유 자원량",
+        cost="뽑기당 비용"
+    )
+    async def gacha_resource_slash(
+        self,
+        interaction: discord.Interaction,
+        rate: float,
+        resource_name: str,
+        amount: int,
+        cost: int
+    ) -> None:
+        """Slash command for resource-based gacha probability calculation"""
+        # Create resource info structure
+        if amount <= 0 or cost <= 0:
+            await interaction.response.send_message(
+                "❌ 자원량과 비용은 양수여야 해.",
+                ephemeral=True
+            )
+            return
         
-        Args:
-            ctx: Command context
-            rate: Pull rate as percentage (e.g., 0.75 for 0.75%)
-            attempts: Number of pull attempts
-        """
+        attempts = amount // cost
+        if attempts == 0:
+            await interaction.response.send_message(
+                f"❌ 자원이 부족해. {cost} 이상 필요하지만 {amount}만 있어.",
+                ephemeral=True
+            )
+            return
+        
+        remaining_resource = amount % cost
+        resource_info = {
+            'name': resource_name,
+            'total': amount,
+            'cost_per_pull': cost,
+            'attempts': attempts,
+            'remaining': remaining_resource
+        }
+        
+        await self._handle_gacha_calc(interaction, rate, attempts, resource_info)
+
+    async def _handle_gacha_calc(
+        self,
+        ctx_or_interaction: discord.Interaction | commands.Context,
+        rate: float,
+        attempts: int,
+        resource_info: dict = None
+    ) -> None:
+        """Unified handler for gacha calculations (both prefix and slash commands)"""
         try:
             # Convert percentage to decimal
             rate_decimal = rate / 100.0
@@ -576,13 +624,24 @@ class EntertainmentCommands(BaseCommands):
             result = self.gacha_calculator.calculate_probability(rate_decimal, attempts)
             
             # Create embed
-            user_name = self.get_user_name(ctx)
+            user_name = self.get_user_name(ctx_or_interaction)
             embed = discord.Embed(
                 title="🎲 일반 가챠 확률 계산",
                 description=f"{user_name}의 {attempts}회 뽑기 결과야.",
                 color=INFO_COLOR
             )
 
+            # Add resource information if using resource calculation
+            if resource_info:
+                embed.add_field(
+                    name="자원 정보",
+                    value=f"보유 {resource_info['name']}: {resource_info['total']:,}\n"
+                          f"뽑기당 비용: {resource_info['cost_per_pull']:,}\n"
+                          f"가능한 뽑기: {resource_info['attempts']:,}회\n"
+                          f"남는 {resource_info['name']}: {resource_info['remaining']:,}",
+                    inline=False
+                )
+            
             embed.add_field(
                 name="뽑기 정보",
                 value=f"개별 성공률: {result['rate_percent']:.3f}%\n"
@@ -609,10 +668,22 @@ class EntertainmentCommands(BaseCommands):
                 tip = "🟡 높은 확률이야. 기대해도 좋을 것 같아."
             elif success_percent >= 50:
                 tip = "🟠 반반 정도야. 운이 필요해."
-            elif success_percent >= 20:
-                tip = "🔴 낮은 확률이야. 운에 맡겨야겠어."
             else:
-                tip = "⚫ 매우 낮은 확률이야. 기적이 필요해."
+                # Calculate additional pulls needed for 50% chance
+                try:
+                    total_for_50 = self.gacha_calculator.calculate_attempts_for_probability(rate_decimal, 0.5)
+                    additional_needed = max(0, total_for_50 - attempts)
+                    
+                    if additional_needed == 0:
+                        tip = "🟠 이미 50% 확률에 가까워!"
+                    else:
+                        tip = f"💡 50% 확률까지 {additional_needed:,}회 더 필요해 (총 {total_for_50:,}회)"
+                except:
+                    # Fallback to original messages if calculation fails
+                    if success_percent >= 20:
+                        tip = "🔴 낮은 확률이야. 운에 맡겨야겠어."
+                    else:
+                        tip = "⚫ 매우 낮은 확률이야. 기적이 필요해."
 
             embed.add_field(
                 name="💡 팁",
@@ -620,14 +691,134 @@ class EntertainmentCommands(BaseCommands):
                 inline=False
             )
 
-            await ctx.send(embed=embed)
+            # Send response
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.send_message(embed=embed)
+            else:
+                await ctx_or_interaction.send(embed=embed)
 
         except ValueError as e:
-            await self.send_error(
-                ctx,
-                str(e),
-                ephemeral=True
-            )
+            error_msg = str(e)
+            if isinstance(ctx_or_interaction, discord.Interaction):
+                await ctx_or_interaction.response.send_message(
+                    f"❌ {error_msg}",
+                    ephemeral=True
+                )
+            else:
+                await self.send_error(ctx_or_interaction, error_msg, ephemeral=True)
+
+    @commands.command(
+        name="가챠",
+        help="일반 가챠 확률 계산",
+        brief="가챠 확률 계산",
+        aliases=["gacha", "뽑기확률"],
+        description="일반 가챠 게임의 확률을 계산해주는 명령어야.\n"
+                   "사용법 1: 뮤 가챠 [확률%] [시도횟수]\n"
+                   "사용법 2: 뮤 가챠 [확률%] [자원명:보유량/비용]\n"
+                   "예시: 뮤 가챠 0.75 30\n"
+                   "     뮤 가챠 0.75 돌:12050/600\n"
+                   "     뮤 가챠 1.5 젬:8400/300"
+    )
+    async def gacha_probability(
+        self, 
+        ctx: commands.Context, 
+        rate: float, 
+        *args
+    ) -> None:
+        """Calculate general gacha probabilities
+        
+        Args:
+            ctx: Command context
+            rate: Pull rate as percentage (e.g., 0.75 for 0.75%)
+            *args: Either [attempts] or [resource:amount/cost]
+        """
+        try:
+            # Parse arguments
+            if len(args) == 1:
+                arg = args[0]
+                
+                # Check if it's resource format or direct attempts
+                if ':' in arg and '/' in arg:
+                    # Resource format: 뮤 가챠 0.75 돌:12050/600
+                    try:
+                        # Split by colon first
+                        if arg.count(':') != 1:
+                            await self.send_error(
+                                ctx,
+                                "자원 형식: [자원명:보유량/비용] (예: 돌:12050/600)",
+                                ephemeral=True
+                            )
+                            return
+                        
+                        resource_name, amount_cost_str = arg.split(':', 1)
+                        
+                        # Split by slash
+                        if amount_cost_str.count('/') != 1:
+                            await self.send_error(
+                                ctx,
+                                "자원 형식: [자원명:보유량/비용] (예: 돌:12050/600)",
+                                ephemeral=True
+                            )
+                            return
+                        
+                        resource_amount_str, cost_per_pull_str = amount_cost_str.split('/', 1)
+                        
+                        resource_amount = int(resource_amount_str)
+                        cost_per_pull = int(cost_per_pull_str)
+                        
+                        if resource_amount <= 0 or cost_per_pull <= 0:
+                            raise ValueError("자원과 비용은 양수여야 해.")
+                        
+                        # Calculate possible attempts
+                        attempts = resource_amount // cost_per_pull
+                        remaining_resource = resource_amount % cost_per_pull
+                        
+                        if attempts == 0:
+                            await self.send_error(
+                                ctx,
+                                f"자원이 부족해. {cost_per_pull} 이상 필요하지만 {resource_amount}만 있어.",
+                                ephemeral=True
+                            )
+                            return
+                        
+                        resource_info = {
+                            'name': resource_name,
+                            'total': resource_amount,
+                            'cost_per_pull': cost_per_pull,
+                            'attempts': attempts,
+                            'remaining': remaining_resource
+                        }
+                        
+                    except ValueError as e:
+                        await self.send_error(
+                            ctx,
+                            f"자원 형식이 잘못됨: {str(e)}\n올바른 형식: [자원명:보유량/비용] (예: 돌:12050/600)",
+                            ephemeral=True
+                        )
+                        return
+                else:
+                    # Direct attempts format: 뮤 가챠 0.75 30
+                    try:
+                        attempts = int(arg)
+                        resource_info = None
+                    except ValueError:
+                        await self.send_error(
+                            ctx,
+                            "시도 횟수는 숫자여야 해.",
+                            ephemeral=True
+                        )
+                        return
+            else:
+                await self.send_error(
+                    ctx,
+                    "사용법: 뮤 가챠 [확률%] [시도횟수] 또는 뮤 가챠 [확률%] [자원명:보유량/비용]",
+                    ephemeral=True
+                )
+                return
+            
+            # Use unified handler
+            await self._handle_gacha_calc(ctx, rate, attempts, resource_info)
+
         except Exception as e:
             logger.error(f"Error in gacha command: {e}")
             await self.send_error(
