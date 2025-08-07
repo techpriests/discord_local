@@ -1613,6 +1613,9 @@ class TeamDraftCommands(BaseCommands):
             )
             
             for servant, user_ids in conflicts.items():
+                # Keep original list for later use
+                original_conflicted_users = user_ids.copy()
+                
                 # Roll dice for each conflicted user with tie-breaking
                 rolls = {}
                 max_attempts = 5  # Prevent infinite loops
@@ -1642,21 +1645,20 @@ class TeamDraftCommands(BaseCommands):
                     winner_id = min(winners)  # Use lowest user ID as tiebreaker
                     logger.warning(f"Max re-roll attempts reached for {servant}, using user ID tiebreaker")
                 
-                # Set winner and reset losers
+                # Set winner and reset losers - use original list to get ALL losers
                 current_draft.confirmed_servants[winner_id] = servant
-                original_losers = [uid for uid in user_ids if uid != winner_id]
+                original_losers = [uid for uid in original_conflicted_users if uid != winner_id]
                 current_draft.conflicted_servants[servant] = original_losers
                 
-                # Reset all original conflicted users except winner
-                for user_id in conflicts[servant]:  # Use original conflict list
-                    if user_id != winner_id:
-                        current_draft.players[user_id].selected_servant = None
-                        current_draft.selection_progress[user_id] = False  # Allow reselection
+                # Reset only the losers (not the winner)
+                for user_id in original_losers:
+                    current_draft.players[user_id].selected_servant = None
+                    current_draft.selection_progress[user_id] = False  # Allow reselection
                 
                 # Add to embed with tie information
                 roll_text = "\n".join([
                     f"{current_draft.players[uid].username}: {rolls[uid]} {'✅' if uid == winner_id else '❌'}"
-                    for uid in conflicts[servant]  # Show all original players
+                    for uid in original_conflicted_users  # Show all original players
                 ])
                 if attempt > 0:
                     roll_text += f"\n(재굴림 {attempt}회)"
