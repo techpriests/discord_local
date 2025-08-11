@@ -72,7 +72,7 @@ class DraftSession:
     servant_tiers: Dict[str, List[str]] = field(default_factory=lambda: {
         "S": ["헤클", "길가", "란슬", "가재"],  # '란슬' moved to S, '네로' moved to A
         "A": ["세이버", "네로", "카르나", "룰러"],  # '네로' moved to A, '란슬' moved to S
-        "B": ["디미", "이칸", "산노", "서문", "바토리", "아엑"]
+        "B": ["디미", "이칸", "산노", "서문", "바토리"]
     })
     
     # Servant selection - organized by categories
