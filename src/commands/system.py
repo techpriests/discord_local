@@ -496,6 +496,8 @@ class SystemCommands(BaseCommands):
                             cog.bot = self.bot
                         elif cog_name == "TeamDraftCommands":
                             cog = cmd_class(self.bot)  # Pass bot as constructor parameter
+                        elif cog_name == "FateReplayCommands":
+                            cog = cmd_class(self.bot)
                         else:
                             cog = cmd_class()
                             
