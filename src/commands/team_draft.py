@@ -1204,6 +1204,14 @@ class TeamDraftCommands(BaseCommands):
         # Initialize voting progress tracking
         for user_id in draft.players.keys():
             draft.captain_voting_progress[user_id] = 0  # Number of votes cast
+        # Logging: captain voting start snapshot
+        try:
+            player_snapshot = ", ".join(
+                f"{player.user_id}:{player.username}" for player in draft.players.values()
+            )
+            logger.info(f"[CaptainVote] phase_start channel={draft.channel_id} players=[{player_snapshot}]")
+        except Exception:
+            logger.info(f"[CaptainVote] phase_start channel={draft.channel_id} players_snapshot_error")
         
         # Start the timer
         draft.captain_voting_start_time = time.monotonic()
@@ -4185,6 +4193,12 @@ class CaptainVotingView(discord.ui.View):
         vote_counts = {}
         for player_id in self.draft.players.keys():
             vote_counts[player_id] = 0
+        # Logging: snapshot of user->votes before counting
+        try:
+            votes_snapshot = {uid: sorted(list(votes)) for uid, votes in self.user_votes.items()}
+            logger.info(f"[CaptainVote] finalize_snapshot channel={self.draft.channel_id} votes={votes_snapshot}")
+        except Exception as e:
+            logger.warning(f"[CaptainVote] finalize_snapshot_error: {e}")
         
         for votes in self.user_votes.values():
             for voted_player_id in votes:
@@ -4216,6 +4230,15 @@ class CaptainVotingView(discord.ui.View):
         else:
             # Normal mode: select top 2 vote getters
             self.draft.captains = [sorted_players[0][0], sorted_players[1][0]]
+        # Logging: vote counts and selected captains
+        try:
+            captain_names = [self.draft.players[cid].username for cid in self.draft.captains]
+            logger.info(
+                f"[CaptainVote] finalize_result channel={self.draft.channel_id} vote_counts={vote_counts} "
+                f"captains={self.draft.captains}({captain_names})"
+            )
+        except Exception as e:
+            logger.warning(f"[CaptainVote] finalize_result_logging_error: {e}")
         
         # Mark them as captains and initialize progress tracking
         for captain_id in self.draft.captains:
@@ -4268,12 +4291,33 @@ class CaptainVoteButton(discord.ui.Button):
         # Initialize user votes if needed
         if user_id not in view.user_votes:
             view.user_votes[user_id] = set()
+        # Logging: pre-click snapshot
+        try:
+            pre_votes = sorted(list(view.user_votes.get(user_id, set())))
+            voter_name = view.draft.players.get(user_id).username if user_id in view.draft.players else "unknown"
+            target_name = view.draft.players.get(self.player_id).username if self.player_id in view.draft.players else "unknown"
+            msg_id = getattr(interaction.message, 'id', None)
+            logger.info(
+                f"[CaptainVote] click channel={view.draft.channel_id} user={user_id}({voter_name}) "
+                f"target={self.player_id}({target_name}) pre={pre_votes} message={msg_id} view_id={id(view)}"
+            )
+        except Exception as e:
+            logger.warning(f"[CaptainVote] click_logging_error: {e}")
         
         # Toggle vote
         if self.player_id in view.user_votes[user_id]:
             view.user_votes[user_id].remove(self.player_id)
             # Update progress tracking
             view.draft.captain_voting_progress[user_id] = len(view.user_votes[user_id])
+            # Logging: cancellation
+            try:
+                post_votes = sorted(list(view.user_votes[user_id]))
+                logger.info(
+                    f"[CaptainVote] cancel channel={view.draft.channel_id} user={user_id} target={self.player_id} "
+                    f"post={post_votes} count={len(post_votes)}"
+                )
+            except Exception as e:
+                logger.warning(f"[CaptainVote] cancel_logging_error: {e}")
             await interaction.response.send_message(
                 f"{view.draft.players[self.player_id].username}에 대한 투표를 취소했어.", 
                 ephemeral=True
@@ -4281,6 +4325,15 @@ class CaptainVoteButton(discord.ui.Button):
         else:
             # Check vote limit (max 2 votes)
             if len(view.user_votes[user_id]) >= 2:
+                # Logging: limit reached
+                try:
+                    current_votes = sorted(list(view.user_votes[user_id]))
+                    logger.warning(
+                        f"[CaptainVote] limit_reached channel={view.draft.channel_id} user={user_id} "
+                        f"attempted_target={self.player_id} current={current_votes}"
+                    )
+                except Exception as e:
+                    logger.warning(f"[CaptainVote] limit_logging_error: {e}")
                 await interaction.response.send_message(
                     "최대 2명까지만 투표할 수 있어.", ephemeral=True
                 )
@@ -4289,6 +4342,15 @@ class CaptainVoteButton(discord.ui.Button):
             view.user_votes[user_id].add(self.player_id)
             # Update progress tracking
             view.draft.captain_voting_progress[user_id] = len(view.user_votes[user_id])
+            # Logging: cast
+            try:
+                post_votes = sorted(list(view.user_votes[user_id]))
+                logger.info(
+                    f"[CaptainVote] cast channel={view.draft.channel_id} user={user_id} target={self.player_id} "
+                    f"post={post_votes} count={len(post_votes)}"
+                )
+            except Exception as e:
+                logger.warning(f"[CaptainVote] cast_logging_error: {e}")
             await interaction.response.send_message(
                 f"{view.draft.players[self.player_id].username}에게 투표했어.", 
                 ephemeral=True
