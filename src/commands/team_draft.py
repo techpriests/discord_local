@@ -14,11 +14,26 @@ from src.utils.decorators import command_handler
 from .base_commands import BaseCommands
 from src.utils.types import CommandContext
 from src.utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
+from src.services.match_recorder import MatchRecorder, PlayerFeature
+from src.services.roster_store import RosterStore, RosterPlayer
+from src.services.auto_team_draft import AutoTeamDraftService, PlayerInput
+from src.services.auto_predictor import DraftOutcomePredictor, TeamPlayer
 
 logger = logging.getLogger(__name__)
 
 # Hot reload test comment - this should trigger the deployment action
 
+
+def owner_only():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        client = interaction.client
+        if isinstance(client, commands.Bot):
+            try:
+                return await client.is_owner(interaction.user)
+            except Exception:
+                return False
+        return False
+    return app_commands.check(predicate)
 
 class DraftPhase(Enum):
     """Phases of the draft system"""
@@ -57,6 +72,8 @@ class DraftSession:
     # Test mode tracking
     is_test_mode: bool = False
     real_user_id: Optional[int] = None  # The real user in test mode
+    # Simulation mode (balanced by expert) for logging
+    is_simulation: bool = False
     
     # Captain selection
     captain_vote_message_id: Optional[int] = None
@@ -190,6 +207,14 @@ class TeamDraftCommands(BaseCommands):
                 {"first_pick": 2, "second_pick": 1},  # Round 3
             ]
         }
+        # Auto draft service for quick pairing via '문셀'
+        self.auto_draft_service = AutoTeamDraftService()
+        # Match recorder for ML data collection
+        self.match_recorder = MatchRecorder()
+        # Outcome predictor (heuristic/ML placeholder)
+        self.outcome_predictor = DraftOutcomePredictor()
+        # Guild roster store for simulations
+        self.roster_store = RosterStore()
 
     def _audit_log(self, action: str, user_id: int, data: Dict = None) -> None:
         """Simple audit logging"""
@@ -553,6 +578,14 @@ class TeamDraftCommands(BaseCommands):
     )
     async def draft_start_chat(self, ctx: commands.Context, *, args: str = "") -> None:
         """Start team draft via chat command"""
+        # Parse auto-mode trigger: contains '문셀' -> run auto draft instead of interactive flow
+        if "문셀학습" in args:
+            await self._handle_auto_draft_quick(ctx, args, use_predictor=True)
+            return
+        if "문셀" in args:
+            await self._handle_auto_draft_quick(ctx, args, use_predictor=False)
+            return
+
         # Parse test_mode and team_size from args
         test_mode = "test_mode:true" in args.lower() or "test_mode=true" in args.lower()
         
@@ -581,6 +614,112 @@ class TeamDraftCommands(BaseCommands):
             
         # Pass the cleaned players_str to avoid counting captains twice
         await self._handle_draft_start(ctx, players_str, test_mode, team_size, captains_str)
+
+    async def _handle_auto_draft_quick(self, ctx: commands.Context, args: str, use_predictor: bool = False) -> None:
+        """Handle quick auto team draft when '문셀' flag is present in prefix command.
+
+        Usage examples:
+          - 뮤 페어 문셀 team_size:6
+          - 뮤 페어 문셀 @u1 @u2 @u3 ... team_size:3
+        If mentions are present, only mentioned users are considered. Otherwise, the current
+        text channel's members are used.
+        """
+        try:
+            # Determine team_size (defaults to 6)
+            team_size = 6
+            lowered = args.lower()
+            if "team_size:2" in lowered or "team_size=2" in lowered:
+                team_size = 2
+            elif "team_size:3" in lowered or "team_size=3" in lowered:
+                team_size = 3
+            elif "team_size:5" in lowered or "team_size=5" in lowered:
+                team_size = 5
+            elif "team_size:6" in lowered or "team_size=6" in lowered:
+                team_size = 6
+
+            if team_size not in [2, 3, 5, 6]:
+                await self.send_error(ctx, "팀 크기는 2,3,5,6 중 하나여야 해")
+                return
+
+            # Collect candidate members: prefer mentions if present
+            members = ctx.message.mentions
+            if not members and isinstance(ctx.channel, discord.TextChannel):
+                members = ctx.channel.members
+
+            # Filter out bots and duplicates, map to PlayerInput
+            unique_ids = set()
+            players_inputs: List[PlayerInput] = []
+            for m in members:
+                if m.bot:
+                    continue
+                if m.id in unique_ids:
+                    continue
+                unique_ids.add(m.id)
+                display = m.display_name if hasattr(m, 'display_name') else m.name
+                players_inputs.append(PlayerInput(user_id=m.id, display_name=display))
+
+            if len(players_inputs) < 2:
+                await self.send_error(ctx, "드래프트를 진행할 실제 플레이어가 부족해")
+                return
+
+            if use_predictor:
+                # Build predictor scoring function using roster ratings if available
+                guild_id = ctx.guild.id if ctx.guild else 0
+                roster = self.roster_store.load(guild_id)
+                rating_map = {p.user_id: p.rating for p in roster}
+                self.outcome_predictor.load_or_train()
+
+                def score_split(t1: List[PlayerInput], t2: List[PlayerInput]) -> float:
+                    tp1 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=rating_map.get(p.user_id)) for p in t1]
+                    tp2 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=rating_map.get(p.user_id)) for p in t2]
+                    return self.outcome_predictor.predict_team1_win_prob(tp1, tp2)
+
+                result = self.auto_draft_service.assign_with_predictor(players_inputs, team_size, score_split)
+            else:
+                result = self.auto_draft_service.assign_teams(players_inputs, team_size, balance_by_rating=True)
+
+        # Build and send embed
+            embed = discord.Embed(
+                title="⚙️ 문 셀 자동 드래프트",
+                description=f"자동으로 팀을 구성했어 (팀 규모: {team_size}v{team_size}).",
+                color=INFO_COLOR,
+            )
+            embed.add_field(
+                name=f"팀 1 ({len(result.team_one)}명)",
+                value="\n".join(getattr(p, 'display_name', getattr(p, 'username', str(p.user_id))) for p in result.team_one) or "없음",
+                inline=True,
+            )
+            embed.add_field(
+                name=f"팀 2 ({len(result.team_two)}명)",
+                value="\n".join(getattr(p, 'display_name', getattr(p, 'username', str(p.user_id))) for p in result.team_two) or "없음",
+                inline=True,
+            )
+            if result.extras:
+                embed.add_field(
+                    name=f"대기 ({len(result.extras)}명)",
+                    value="\n".join(getattr(p, 'display_name', getattr(p, 'username', str(p.user_id))) for p in result.extras),
+                    inline=False,
+                )
+
+            await self.send_response(ctx, embed=embed)
+
+            # Optional: show predicted balance if ratings are available later
+            try:
+                # Prepare predictor input with roster ratings if available
+                guild_id = ctx.guild.id if ctx.guild else 0
+                roster = self.roster_store.load(guild_id)
+                ratings = {p.user_id: p.rating for p in roster}
+                t1 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=ratings.get(p.user_id)) for p in result.team_one]
+                t2 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=ratings.get(p.user_id)) for p in result.team_two]
+                self.outcome_predictor.load_or_train()
+                prob = self.outcome_predictor.predict_team1_win_prob(t1, t2)
+                balance_text = f"예상 밸런스: 팀1 승률 {prob*100:.1f}%"
+                await ctx.send(balance_text)
+            except Exception:
+                pass
+        except Exception as e:
+            logger.error(f"Auto draft quick failed: {e}")
+            await self.send_error(ctx, "자동 드래프트 중 문제가 발생했어")
 
     @app_commands.command(name="페어", description="팀 드래프트를 시작해 (지원: 2v2/3v3/5v5/6v6)")
     async def draft_start_slash(
@@ -614,6 +753,201 @@ class TeamDraftCommands(BaseCommands):
                     f"⚠️ 명령어 실행 중 문제가 생겼어: {str(e)}", 
                     ephemeral=True
                 )
+
+    @commands.command(
+        name="페어결과",
+        help="최근 드래프트 경기의 결과를 기록합니다 (관리자/팀장 추천)",
+        brief="드래프트 결과 기록",
+        description="사용법: 뮤 페어결과 <승리팀:1|2> [점수]"
+    )
+    async def record_match_result_prefix(self, ctx: commands.Context, winner: int, score: str = "") -> None:
+        try:
+            await self._handle_record_result(ctx, winner, score)
+        except Exception as e:
+            logger.error(f"record_match_result_prefix failed: {e}")
+            await self.send_error(ctx, "결과 기록 중 문제가 발생했어")
+
+    @app_commands.command(name="페어결과", description="최근 드래프트 경기의 결과를 기록합니다")
+    async def record_match_result_slash(self, interaction: discord.Interaction, winner: int, score: str = "") -> None:
+        try:
+            await self._handle_record_result(interaction, winner, score)
+        except Exception as e:
+            logger.error(f"record_match_result_slash failed: {e}")
+            await self.send_error(interaction, "결과 기록 중 문제가 발생했어")
+
+    @command_handler()
+    async def _handle_record_result(self, ctx_or_interaction: CommandContext, winner: int, score: str = "") -> None:
+        if winner not in (1, 2):
+            await self.send_error(ctx_or_interaction, "승리 팀은 1 또는 2여야 해")
+            return
+
+        # Use the most recently completed draft for this channel
+        channel_id = self.get_channel_id(ctx_or_interaction)
+        guild_id = self.get_guild_id(ctx_or_interaction) or 0
+
+        # Construct the same match_id format used in prematch logging
+        # Note: prematch was recorded at completion time with epoch seconds; we cannot know exact seconds here,
+        # so we append an outcome entry that includes only match_id prefix (guild_id:channel_id), which consumers
+        # can match to the latest prematch in that channel.
+        match_id_prefix = f"{guild_id}:{channel_id}:"
+
+        try:
+            # Append an outcome entry tagged with the channel/guild prefix; training code can resolve to latest
+            self.match_recorder.write_outcome(match_id=match_id_prefix, winner=winner, score=score or None)
+            await self.send_success(ctx_or_interaction, "경기 결과를 기록했어")
+        except Exception as e:
+            logger.error(f"Failed to write outcome: {e}")
+            await self.send_error(ctx_or_interaction, "결과를 저장할 수가 없네")
+
+    # Roster management (owner-only)
+    @commands.command(name="로스터추가", help="서버 로스터에 플레이어를 추가/업데이트합니다 (owner-only)")
+    @commands.is_owner()
+    async def roster_add_prefix(self, ctx: commands.Context, member: discord.Member, rating: float | None = None) -> None:
+        guild_id = ctx.guild.id if ctx.guild else 0
+        player = RosterPlayer(user_id=member.id, display_name=member.display_name, rating=rating)
+        self.roster_store.add_or_update(guild_id, [player])
+        await self.send_success(ctx, f"로스터에 {member.display_name}를 추가/업데이트했어")
+
+    @app_commands.command(name="roster_add", description="서버 로스터에 플레이어를 추가/업데이트합니다 (owner-only)")
+    @owner_only()
+    async def roster_add_slash(self, interaction: discord.Interaction, member: discord.Member, rating: Optional[float] = None) -> None:
+        guild_id = interaction.guild_id or 0
+        player = RosterPlayer(user_id=member.id, display_name=member.display_name, rating=rating)
+        self.roster_store.add_or_update(guild_id, [player])
+        await self.send_success(interaction, f"로스터에 {member.display_name}를 추가/업데이트했어")
+
+    @commands.command(name="로스터삭제", help="서버 로스터에서 플레이어를 제거합니다 (owner-only)")
+    @commands.is_owner()
+    async def roster_remove_prefix(self, ctx: commands.Context, member: discord.Member) -> None:
+        guild_id = ctx.guild.id if ctx.guild else 0
+        self.roster_store.remove(guild_id, [member.id])
+        await self.send_success(ctx, f"로스터에서 {member.display_name}를 제거했어")
+
+    @app_commands.command(name="roster_remove", description="서버 로스터에서 플레이어를 제거합니다 (owner-only)")
+    @owner_only()
+    async def roster_remove_slash(self, interaction: discord.Interaction, member: discord.Member) -> None:
+        guild_id = interaction.guild_id or 0
+        self.roster_store.remove(guild_id, [member.id])
+        await self.send_success(interaction, f"로스터에서 {member.display_name}를 제거했어")
+
+    @commands.command(name="로스터서번트", help="특정 플레이어의 서번트 숙련도 점수를 설정합니다 (owner-only)")
+    @commands.is_owner()
+    async def roster_servant_prefix(self, ctx: commands.Context, member: discord.Member, servant: str, rating: float | None = None) -> None:
+        guild_id = ctx.guild.id if ctx.guild else 0
+        self.roster_store.set_servant_rating(guild_id, member.id, servant, rating)
+        await self.send_success(ctx, f"{member.display_name}의 {servant} 숙련도를 설정했어")
+
+    @app_commands.command(name="roster_servant", description="특정 플레이어의 서번트 숙련도 점수를 설정합니다 (owner-only)")
+    @owner_only()
+    async def roster_servant_slash(self, interaction: discord.Interaction, member: discord.Member, servant: str, rating: Optional[float] = None) -> None:
+        guild_id = interaction.guild_id or 0
+        self.roster_store.set_servant_rating(guild_id, member.id, servant, rating)
+        await self.send_success(interaction, f"{member.display_name}의 {servant} 숙련도를 설정했어")
+
+    @commands.command(name="로스터보기", help="서버 로스터를 표시합니다 (owner-only)")
+    @commands.is_owner()
+    async def roster_list_prefix(self, ctx: commands.Context) -> None:
+        guild_id = ctx.guild.id if ctx.guild else 0
+        roster = self.roster_store.load(guild_id)
+        if not roster:
+            await self.send_response(ctx, "로스터가 비어 있어")
+            return
+        lines = [f"• {p.display_name} ({p.user_id}) - rating: {p.rating if p.rating is not None else 'N/A'}" for p in roster]
+        await self.send_response(ctx, "\n".join(lines))
+
+    @app_commands.command(name="roster_list", description="서버 로스터를 표시합니다 (owner-only)")
+    @owner_only()
+    async def roster_list_slash(self, interaction: discord.Interaction) -> None:
+        guild_id = interaction.guild_id or 0
+        roster = self.roster_store.load(guild_id)
+        if not roster:
+            await self.send_response(interaction, "로스터가 비어 있어")
+            return
+        lines = [f"• {p.display_name} ({p.user_id}) - rating: {p.rating if p.rating is not None else 'N/A'}" for p in roster]
+        await self.send_response(interaction, "\n".join(lines))
+
+    @commands.command(
+        name="페어시뮬",
+        help="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다 (기본 6v6)",
+        brief="시뮬 드래프트",
+        description="사용법: 뮤 페어시뮬 [team_size:숫자] [players:@...]")
+    async def draft_simulate_prefix(self, ctx: commands.Context, *, args: str = "") -> None:
+        await self._handle_simulation_start(ctx, args)
+
+    @app_commands.command(name="페어시뮬", description="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다")
+    async def draft_simulate_slash(self, interaction: discord.Interaction, players: str = "", team_size: int = 6) -> None:
+        await self._handle_simulation_start(interaction, f"{players} team_size:{team_size}")
+
+    @command_handler()
+    async def _handle_simulation_start(self, ctx_or_interaction: CommandContext, args: str = "") -> None:
+        # Parse team_size (default 6)
+        team_size = 6
+        lowered = args.lower()
+        if "team_size:2" in lowered or "team_size=2" in lowered:
+            team_size = 2
+        elif "team_size:3" in lowered or "team_size=3" in lowered:
+            team_size = 3
+        elif "team_size:5" in lowered or "team_size=5" in lowered:
+            team_size = 5
+        elif "team_size:6" in lowered or "team_size=6" in lowered:
+            team_size = 6
+
+        # Collect players: prefer explicit mentions, else use saved guild roster
+        players_str = args
+        parsed_players = await self._parse_players(ctx_or_interaction, players_str)
+        real_user_id = self.get_user_id(ctx_or_interaction)
+        real_username = self.get_user_name(ctx_or_interaction)
+
+        if not parsed_players:
+            # Fallback to guild roster
+            guild_id = self.get_guild_id(ctx_or_interaction)
+            roster = self.roster_store.load(guild_id or 0)
+            parsed_players = [(p.user_id, p.display_name) for p in roster]
+            # Ensure invoker is in the roster
+            if real_user_id not in {uid for uid, _ in parsed_players}:
+                parsed_players.insert(0, (real_user_id, real_username))
+        else:
+            # Ensure invoker included when mentions exist
+            user_ids = {uid for uid, _ in parsed_players}
+            if real_user_id not in user_ids:
+                parsed_players.insert(0, (real_user_id, real_username))
+
+        # Create draft in test mode where the real user can act as both captains
+        channel_id = self.get_channel_id(ctx_or_interaction)
+        guild_id = self.get_guild_id(ctx_or_interaction)
+        if channel_id in self.active_drafts:
+            await self.send_error(ctx_or_interaction, "이미 진행 중인 드래프트가 있어.")
+            return
+
+        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+        draft.is_test_mode = True
+        draft.real_user_id = real_user_id
+
+        # Register players
+        for uid, uname in parsed_players:
+            draft.players[uid] = Player(user_id=uid, username=uname)
+
+        # Set real user as both captains logically by letting them act as any captain
+        # We will pick two captains automatically if not enough players
+        all_ids = list(draft.players.keys())
+        if len(all_ids) < 2:
+            await self.send_error(ctx_or_interaction, "플레이어가 부족해")
+            return
+        draft.captains = [real_user_id, real_user_id]  # Logical: same user can act for both
+
+        # Proceed to servant ban/selection like normal; test mode allows real user to do all actions
+        draft.is_simulation = True
+        # Tag simulation session ID and author to allow cross-captain comparison later
+        # Session ID groups independent runs for the same scenario if provided in args, else timestamp-based
+        import re
+        session_match = re.search(r"session:(\S+)", args, re.IGNORECASE)
+        session_id = session_match.group(1) if session_match else str(int(time.time()))
+        draft.simulation_session_id = session_id  # dynamic attribute for logging
+        draft.simulation_author_id = real_user_id
+        self.active_drafts[channel_id] = draft
+        await self.send_success(ctx_or_interaction, f"시뮬레이션 드래프트를 시작했어 ({team_size}v{team_size}).")
+        # Use the normal flow: start servant ban (system bans + captains)
+        await self._start_servant_ban_phase(draft)
 
     @command_handler()
     async def _handle_draft_start(
@@ -2532,6 +2866,51 @@ class TeamDraftCommands(BaseCommands):
             return
             
         current_draft.phase = DraftPhase.COMPLETED
+
+        # Record prematch features for ML dataset
+        try:
+            match_id = f"{current_draft.guild_id}:{current_draft.channel_id}:{int(time.time())}"
+            captains = [uid for uid, p in current_draft.players.items() if p.is_captain]
+            team1_players = [p for p in current_draft.players.values() if p.team == 1]
+            team2_players = [p for p in current_draft.players.values() if p.team == 2]
+
+            def _build_features(team_players: List[Player]) -> List[PlayerFeature]:
+                features: List[PlayerFeature] = []
+                for p in team_players:
+                    # Try to enrich with roster ratings if available
+                    rp = None
+                    try:
+                        roster = self.roster_store.load(current_draft.guild_id)
+                        rp = next((r for r in roster if r.user_id == p.user_id), None)
+                    except Exception:
+                        rp = None
+                    features.append(
+                        PlayerFeature(
+                            user_id=p.user_id,
+                            display_name=p.username,
+                            rating=(rp.rating if rp else None),
+                            servant=current_draft.confirmed_servants.get(p.user_id),
+                            is_captain=p.is_captain,
+                            pick_order=None,
+                        )
+                    )
+                return features
+
+            self.match_recorder.write_prematch(
+                match_id=match_id,
+                guild_id=current_draft.guild_id,
+                channel_id=current_draft.channel_id,
+                team_size=current_draft.team_size,
+                captains=captains,
+                team1=_build_features(team1_players),
+                team2=_build_features(team2_players),
+                bans=sorted(list(current_draft.banned_servants)) if current_draft.banned_servants else [],
+                mode_name=("sim_balanced" if current_draft.is_simulation else None),
+                sim_session=getattr(current_draft, "simulation_session_id", None),
+                author_id=getattr(current_draft, "simulation_author_id", None),
+            )
+        except Exception as e:
+            logger.warning(f"Failed to record prematch data: {e}")
         
         # Use thread if available, otherwise main channel
         channel = self._get_draft_channel(current_draft)

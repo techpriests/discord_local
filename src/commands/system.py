@@ -3,6 +3,8 @@ import os
 import time
 import asyncio
 from typing import List, Dict, Any, Optional, Union
+from pathlib import Path
+import zipfile
 
 import discord
 from discord.ext import commands
@@ -91,6 +93,161 @@ class SystemCommands(BaseCommands):
         except Exception as e:
             logger.error(f"Error in copy_message: {e}")
             raise ValueError("메시지를 복사하다가 문제가 생겼어") from e
+
+    @commands.command(
+        name="로그업로드",
+        help="현재 봇 로그 파일(bot.log)을 채널에 업로드합니다 (봇 소유자 전용)",
+        hidden=True,
+        aliases=["logupload", "업로그"]
+    )
+    @commands.is_owner()
+    async def upload_logs_prefix(self, ctx: commands.Context) -> None:
+        """Upload the current bot log file to the invoking channel (admin only)"""
+        try:
+            base_dir = Path(__file__).parents[2]
+            log_path = base_dir / "bot.log"
+
+            if not log_path.exists():
+                await ctx.send("음... 로그 파일을 찾을 수 없어. bot.log가 아직 생성되지 않았을 수도 있어.")
+                return
+
+            max_size_bytes = 8 * 1024 * 1024  # ~8MB typical upload limit
+
+            if log_path.stat().st_size <= max_size_bytes:
+                await ctx.send(
+                    content="📦 현재 로그 파일을 업로드할게.",
+                    file=discord.File(fp=str(log_path), filename="bot.log")
+                )
+                return
+
+            # Compress to ZIP if too large
+            zip_path = base_dir / "bot.log.zip"
+            try:
+                with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(log_path, arcname="bot.log")
+            except Exception as e:
+                logger.error(f"Failed to zip log file: {e}", exc_info=True)
+                await ctx.send("로그 파일 압축에 실패했어. 잠시 후 다시 시도해줘.")
+                return
+
+            try:
+                if zip_path.stat().st_size <= max_size_bytes:
+                    await ctx.send(
+                        content="📦 로그 파일이 커서 압축해서 보낼게.",
+                        file=discord.File(fp=str(zip_path), filename="bot.log.zip")
+                    )
+                    return
+            finally:
+                # Clean up the zip regardless of outcome after sending/size check
+                try:
+                    if zip_path.exists():
+                        os.remove(zip_path)
+                except Exception:
+                    pass
+
+            # As a fallback, send the last ~2MB of the log
+            tail_bytes = 2 * 1024 * 1024
+            tail_path = base_dir / "bot_tail.log"
+            try:
+                with open(log_path, "rb") as f:
+                    f.seek(0, os.SEEK_END)
+                    file_size = f.tell()
+                    start_pos = max(0, file_size - tail_bytes)
+                    f.seek(start_pos)
+                    data = f.read()
+                with open(tail_path, "wb") as out:
+                    out.write(data)
+
+                await ctx.send(
+                    content="⚠️ 로그 파일이 너무 커서 마지막 일부만 보낼게 (약 2MB).",
+                    file=discord.File(fp=str(tail_path), filename="bot_tail.log")
+                )
+            finally:
+                try:
+                    if tail_path.exists():
+                        os.remove(tail_path)
+                except Exception:
+                    pass
+        except discord.Forbidden:
+            raise commands.BotMissingPermissions(["attach_files", "send_messages"])
+        except Exception as e:
+            logger.error(f"Failed to upload logs: {e}", exc_info=True)
+            await ctx.send(f"로그 업로드 중 문제가 발생했어: {type(e).__name__}: {str(e)}")
+
+    @app_commands.command(name="upload_logs", description="현재 봇 로그 파일을 업로드합니다 (봇 소유자 전용)")
+    @app_commands.check(lambda i: i.client.is_owner(i.user))
+    async def upload_logs_slash(self, interaction: discord.Interaction) -> None:
+        """Slash command to upload the current bot log file (admin only)"""
+        try:
+            base_dir = Path(__file__).parents[2]
+            log_path = base_dir / "bot.log"
+
+            if not log_path.exists():
+                await interaction.response.send_message("음... 로그 파일을 찾을 수 없어. bot.log가 아직 생성되지 않았을 수도 있어.")
+                return
+
+            max_size_bytes = 8 * 1024 * 1024
+
+            if log_path.stat().st_size <= max_size_bytes:
+                await interaction.response.send_message(
+                    content="📦 현재 로그 파일을 업로드할게.",
+                    file=discord.File(fp=str(log_path), filename="bot.log")
+                )
+                return
+
+            # Compress to ZIP if too large
+            zip_path = base_dir / "bot.log.zip"
+            try:
+                with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+                    zf.write(log_path, arcname="bot.log")
+            except Exception as e:
+                logger.error(f"Failed to zip log file: {e}", exc_info=True)
+                await interaction.response.send_message("로그 파일 압축에 실패했어. 잠시 후 다시 시도해줘.")
+                return
+
+            try:
+                if zip_path.stat().st_size <= max_size_bytes:
+                    await interaction.response.send_message(
+                        content="📦 로그 파일이 커서 압축해서 보낼게.",
+                        file=discord.File(fp=str(zip_path), filename="bot.log.zip")
+                    )
+                    return
+            finally:
+                try:
+                    if zip_path.exists():
+                        os.remove(zip_path)
+                except Exception:
+                    pass
+
+            # Fallback: send last ~2MB
+            tail_bytes = 2 * 1024 * 1024
+            tail_path = base_dir / "bot_tail.log"
+            try:
+                with open(log_path, "rb") as f:
+                    f.seek(0, os.SEEK_END)
+                    file_size = f.tell()
+                    start_pos = max(0, file_size - tail_bytes)
+                    f.seek(start_pos)
+                    data = f.read()
+                with open(tail_path, "wb") as out:
+                    out.write(data)
+
+                await interaction.response.send_message(
+                    content="⚠️ 로그 파일이 너무 커서 마지막 일부만 보낼게 (약 2MB).",
+                    file=discord.File(fp=str(tail_path), filename="bot_tail.log")
+                )
+            finally:
+                try:
+                    if tail_path.exists():
+                        os.remove(tail_path)
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Failed to upload logs (slash): {e}", exc_info=True)
+            if interaction.response.is_done():
+                await interaction.followup.send(f"로그 업로드 중 문제가 발생했어: {type(e).__name__}: {str(e)}")
+            else:
+                await interaction.response.send_message(f"로그 업로드 중 문제가 발생했어: {type(e).__name__}: {str(e)}")
 
     @commands.command(aliases=["quit"])
     @commands.has_permissions(administrator=True)

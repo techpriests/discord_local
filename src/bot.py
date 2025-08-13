@@ -23,6 +23,7 @@ from src.commands.system import SystemCommands
 from src.commands.arknights import ArknightsCommands
 from src.commands.ai import AICommands
 from src.commands.team_draft import TeamDraftCommands
+from src.commands.auto_team_draft_commands import AutoTeamDraftCommands
 from src.commands.fate_replays import FateReplayCommands
 
 from src.services.api.service import APIService
@@ -76,6 +77,7 @@ class DiscordBot(commands.Bot):
             ArknightsCommands,
             AICommands,
             TeamDraftCommands,
+            AutoTeamDraftCommands,
             FateReplayCommands
         ]
         self.memory_db: Optional[MemoryDB] = None
