@@ -215,9 +215,7 @@ class TeamDraftCommands(BaseCommands):
         self.audit_logs: List[Dict] = []  # Simple in-memory audit log
         self.max_audit_logs = 1000  # Keep last 1000 events
         
-        # Start cleanup task
-        if bot:
-            bot.loop.create_task(self._cleanup_task())
+        # Cleanup task will be scheduled when cog is fully loaded
         
         # Rate limiting for Discord API calls
         self.rate_limit_buckets: Dict[str, float] = {}  # bucket -> last_call_time
@@ -253,6 +251,11 @@ class TeamDraftCommands(BaseCommands):
         self.performance_monitor = PerformanceMonitor()
         self.alert_system = AlertSystem(self.performance_monitor)
         self.ml_trainer = PostSelectionMLTrainer(self.match_recorder, self.roster_store)
+
+    async def cog_load(self) -> None:
+        """Start background cleanup task after cog is loaded."""
+        if self.bot:
+            self.bot.loop.create_task(self._cleanup_task())
 
     async def _offer_team_composition_options(self, draft: DraftSession) -> None:
         """Offer manual vs AI auto-balance options after selection."""
