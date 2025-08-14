@@ -65,6 +65,8 @@ class DraftSession:
     team_size: int = 6  # Number of players per team (2 for 2v2, 3 for 3v3, 5 for 5v5, 6 for 6v6)
     phase: DraftPhase = DraftPhase.WAITING
     players: Dict[int, Player] = field(default_factory=dict)
+    # Who started this draft (used for permissions on finish/result)
+    started_by_user_id: Optional[int] = None
     
     # Thread support for clean draft environment
     thread_id: Optional[int] = None  # Thread where draft takes place
@@ -114,6 +116,14 @@ class DraftSession:
         "헤클", "란슬", "여포", "프랑",
         "어벤저", "룰러", "멜트", "암굴"
     })
+    
+    # Special ability servants
+    detection_servants: Set[str] = field(default_factory=lambda: {
+        "아처", "룰러", "너서리", "아탈", "가웨인", "디미", "허새"
+    })
+    cloaking_servants: Set[str] = field(default_factory=lambda: {
+        "서문", "징어", "잭더리퍼", "세미", "안데"
+    })
     conflicted_servants: Dict[str, List[int]] = field(default_factory=dict)
     confirmed_servants: Dict[int, str] = field(default_factory=dict)
     
@@ -155,6 +165,16 @@ class DraftSession:
     selection_buttons_message_id: Optional[int] = None  # Separate message for buttons
     last_progress_update_hash: Optional[str] = field(default=None)  # Prevent unnecessary view recreation
     last_voting_progress_hash: Optional[str] = field(default=None)  # Prevent unnecessary captain voting updates
+
+    # Join-based start support
+    join_target_total_players: Optional[int] = None
+    join_user_ids: Set[int] = field(default_factory=set)
+    join_message_id: Optional[int] = None
+    # Match identifier for prematch/outcome correlation (optional)
+    match_id: Optional[str] = None
+    # Finish/outcome handling
+    finish_view_message_id: Optional[int] = None
+    outcome_recorded: bool = False
 
 
 
@@ -215,6 +235,135 @@ class TeamDraftCommands(BaseCommands):
         self.outcome_predictor = DraftOutcomePredictor()
         # Guild roster store for simulations
         self.roster_store = RosterStore()
+
+    # -------------------------
+    # Join-based draft start
+    # -------------------------
+    @commands.command(
+        name="페어시작",
+        help="버튼으로 참가를 받아 드래프트를 시작해. 사용법: 뮤 페어시작 <총인원수:짝수> (예: 12)",
+        brief="드래프트 참가 모집",
+        aliases=["draft_join_start"],
+        description="뮤 페어시작 12 처럼 입력하면 참가 버튼이 있는 메시지를 보내. 인원이 차면 팀장 투표로 진행돼."
+    )
+    async def draft_start_join_chat(self, ctx: commands.Context, total_players: int = 12) -> None:
+        if total_players % 2 != 0 or total_players <= 0:
+            await self.send_error(ctx, "총 인원수는 2의 배수여야 해")
+            return
+        if total_players // 2 not in [2, 3, 5, 6]:
+            await self.send_error(ctx, "팀 크기는 2,3,5,6 중 하나여야 해 (예: 12, 6v6)")
+            return
+        channel_id = ctx.channel.id
+        guild_id = ctx.guild.id if ctx.guild else 0
+        if channel_id in self.active_drafts:
+            await self.send_error(ctx, "이미 진행 중인 드래프트가 있어.")
+            return
+        team_size = total_players // 2
+        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+        draft.started_by_user_id = ctx.author.id
+        draft.join_target_total_players = total_players
+        self.active_drafts[channel_id] = draft
+        self.draft_start_times[channel_id] = time.time()
+
+        embed = discord.Embed(
+            title=f"🏁 드래프트 참가 모집 ({team_size}v{team_size})",
+            description="아래 버튼을 눌러 참가하거나 취소해. 인원이 차면 자동으로 진행돼.",
+            color=INFO_COLOR,
+        )
+        embed.add_field(name="필요 인원", value=f"{len(draft.join_user_ids)}/{total_players}")
+        embed.add_field(name="참가자", value="없음", inline=False)
+
+        view = JoinDraftView(draft, self)
+        self._register_view(channel_id, view)
+        msg = await ctx.send(embed=embed, view=view)
+        draft.join_message_id = msg.id
+
+    async def _final_cleanup_after_outcome(self, draft: DraftSession) -> None:
+        channel_id = draft.channel_id
+        # Audit log
+        self._audit_log("draft_outcome_recorded", draft.started_by_user_id or 0, {
+            "channel_id": channel_id
+        })
+        # Stop views and cleanup
+        await self._cleanup_views(channel_id)
+        await self._cleanup_all_message_ids(draft)
+        if channel_id in self.active_drafts:
+            del self.active_drafts[channel_id]
+        if channel_id in self.draft_start_times:
+            del self.draft_start_times[channel_id]
+        logger.info(f"Draft in channel {channel_id} cleaned up after outcome")
+
+    @app_commands.command(name="페어시작", description="버튼으로 참가를 받아 드래프트를 시작해. (예: 12명)")
+    async def draft_start_join_slash(self, interaction: discord.Interaction, total_players: int = 12) -> None:
+        if total_players % 2 != 0 or total_players <= 0:
+            await self.send_error(interaction, "총 인원수는 2의 배수여야 해")
+            return
+        if total_players // 2 not in [2, 3, 5, 6]:
+            await self.send_error(interaction, "팀 크기는 2,3,5,6 중 하나여야 해 (예: 12, 6v6)")
+            return
+        channel_id = interaction.channel_id or 0
+        guild_id = interaction.guild_id or 0
+        if channel_id in self.active_drafts:
+            await self.send_error(interaction, "이미 진행 중인 드래프트가 있어.")
+            return
+        team_size = total_players // 2
+        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+        draft.started_by_user_id = interaction.user.id
+        draft.join_target_total_players = total_players
+        self.active_drafts[channel_id] = draft
+        self.draft_start_times[channel_id] = time.time()
+
+        embed = discord.Embed(
+            title=f"🏁 드래프트 참가 모집 ({team_size}v{team_size})",
+            description="아래 버튼을 눌러 참가하거나 취소해. 인원이 차면 자동으로 진행돼.",
+            color=INFO_COLOR,
+        )
+        embed.add_field(name="필요 인원", value=f"0/{total_players}")
+        embed.add_field(name="참가자", value="없음", inline=False)
+
+        view = JoinDraftView(draft, self)
+        self._register_view(channel_id, view)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(embed=embed, view=view)
+            msg = await interaction.original_response()
+        else:
+            msg = await interaction.followup.send(embed=embed, view=view, wait=True)
+        draft.join_message_id = msg.id
+
+    async def _finalize_join_and_start(self, draft: DraftSession, starter_interaction: Optional[discord.Interaction] = None) -> None:
+        # Build player list from joined users
+        guild = None
+        channel = self.bot.get_channel(draft.channel_id) if self.bot else None
+        if channel and hasattr(channel, 'guild'):
+            guild = channel.guild
+        players: List[Tuple[int, str]] = []
+        for uid in list(draft.join_user_ids)[: (draft.join_target_total_players or len(draft.join_user_ids))]:
+            name = str(uid)
+            if guild:
+                member = guild.get_member(uid)
+                if member:
+                    name = member.display_name
+            players.append((uid, self._sanitize_username(name)))
+        # Validate count
+        need = draft.join_target_total_players or 0
+        if len(players) < 2 or len(players) % 2 != 0 or (need and len(players) != need):
+            # Allow force start with nearest even count if force-started by permissioned user
+            if len(players) < 2 or len(players) % 2 != 0:
+                return
+        # Convert to existing flow by populating draft.players and proceeding to captain voting
+        for user_id, username in players:
+            draft.players[user_id] = Player(user_id=user_id, username=username)
+        # Remove join view
+        try:
+            if draft.join_message_id and channel:
+                msg = await channel.fetch_message(draft.join_message_id)
+                await msg.edit(view=None)
+        except Exception:
+            pass
+        draft.join_target_total_players = None
+        # Create thread and continue
+        await self._create_draft_thread(draft)
+        await self._start_captain_voting(None, draft)
 
     def _audit_log(self, action: str, user_id: int, data: Dict = None) -> None:
         """Simple audit logging"""
@@ -777,6 +926,16 @@ class TeamDraftCommands(BaseCommands):
 
     @command_handler()
     async def _handle_record_result(self, ctx_or_interaction: CommandContext, winner: int, score: str = "") -> None:
+        # Prevent duplicates: if an active draft exists and outcome already recorded, block
+        try:
+            channel_id_active = self.get_channel_id(ctx_or_interaction)
+            draft_active = self.active_drafts.get(channel_id_active)
+            if draft_active and draft_active.outcome_recorded:
+                await self.send_error(ctx_or_interaction, "이미 결과가 기록되었어")
+                return
+        except Exception:
+            pass
+
         if winner not in (1, 2):
             await self.send_error(ctx_or_interaction, "승리 팀은 1 또는 2여야 해")
             return
@@ -794,6 +953,12 @@ class TeamDraftCommands(BaseCommands):
         try:
             # Append an outcome entry tagged with the channel/guild prefix; training code can resolve to latest
             self.match_recorder.write_outcome(match_id=match_id_prefix, winner=winner, score=score or None)
+            # Mark recorded if active draft exists
+            try:
+                if draft_active:
+                    draft_active.outcome_recorded = True
+            except Exception:
+                pass
             await self.send_success(ctx_or_interaction, "경기 결과를 기록했어")
         except Exception as e:
             logger.error(f"Failed to write outcome: {e}")
@@ -1030,6 +1195,7 @@ class TeamDraftCommands(BaseCommands):
             
             # Create draft session
             draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+            draft.started_by_user_id = self.get_user_id(ctx_or_interaction)
             
             # Set test mode flag and real user if in test mode
             if test_mode:
@@ -2077,6 +2243,42 @@ class TeamDraftCommands(BaseCommands):
         for servant, user_ids in draft.conflicted_servants.items():
             reselect_users.extend(user_ids)
         
+        # Auto-ban cloaking servants for reselection if no detection servant is confirmed
+        # This reduces second-mover advantage by removing hidden-info picks when counters are absent
+        auto_bans_for_reselection = []
+        try:
+            confirmed_now = set(draft.confirmed_servants.values())
+            has_detection = any(s in draft.detection_servants for s in confirmed_now)
+            if not has_detection:
+                auto_bans_for_reselection = [
+                    s for s in draft.cloaking_servants if s not in draft.banned_servants
+                ]
+                if auto_bans_for_reselection:
+                    draft.banned_servants.update(auto_bans_for_reselection)
+                    logger.info(
+                        f"Reselection auto-bans applied (no detection confirmed): {auto_bans_for_reselection}"
+                    )
+                    # Announce publicly for clarity
+                    announcement = discord.Embed(
+                        title="🚫 재선택 자동 금지 적용",
+                        description=(
+                            "탐지 능력을 가진 서번트가 존재하지 않아, \n"
+                            "은신 서번트들은 재선택 단계에서 제외되었어:"
+                        ),
+                        color=INFO_COLOR
+                    )
+                    announcement.add_field(
+                        name="은신 서번트 제외",
+                        value=", ".join(auto_bans_for_reselection),
+                        inline=False
+                    )
+                    await self._safe_api_call(
+                        lambda: channel.send(embed=announcement),
+                        bucket=f"reselection_autobans_{channel_id}"
+                    )
+        except Exception as e:
+            logger.warning(f"Failed to compute reselection auto-bans: {e}")
+        
         # Remove taken servants from available list
         taken_servants = set(draft.confirmed_servants.values())
         draft.available_servants = draft.available_servants - taken_servants - draft.banned_servants
@@ -2089,15 +2291,20 @@ class TeamDraftCommands(BaseCommands):
             color=INFO_COLOR
         )
         
-        # Show confirmed servants (locked in)
+        # Show confirmed servants (locked in) - hide player names during reselection
         if draft.confirmed_servants:
-            confirmed_list = []
-            for user_id, servant in draft.confirmed_servants.items():
-                player_name = draft.players[user_id].username
-                confirmed_list.append(f"🔒 {servant}: {player_name}")
+            confirmed_chars_only = sorted(set(draft.confirmed_servants.values()))
             embed.add_field(
                 name="✅ 확정된 서번트 (수정 불가)",
-                value="\n".join(confirmed_list),
+                value="\n".join([f"🔒 {s}" for s in confirmed_chars_only]),
+                inline=False
+            )
+        
+        # Announce any auto-bans applied for reselection
+        if auto_bans_for_reselection:
+            embed.add_field(
+                name="🚫 재선택 자동 금지 (은신)",
+                value=", ".join(auto_bans_for_reselection),
                 inline=False
             )
         
@@ -2472,7 +2679,7 @@ class TeamDraftCommands(BaseCommands):
         return sanitized
 
     async def _cleanup_task(self) -> None:
-        """Background task to clean up old drafts after 1 hour"""
+        """Background task to clean up old drafts after 1 hour (2 hours if waiting for outcome)"""
         while True:
             try:
                 await asyncio.sleep(300)  # Check every 5 minutes
@@ -2480,18 +2687,17 @@ class TeamDraftCommands(BaseCommands):
                 expired_channels = []
                 
                 for channel_id, start_time in self.draft_start_times.items():
-                    # Add 30-second safety buffer to prevent cleanup of very fresh drafts during edge cases
-                    if current_time - start_time > 3630:  # 1 hour + 30 seconds = 3630 seconds
-                        # Additional safety check: ensure draft exists and isn't in early stages
-                        draft = self.active_drafts.get(channel_id)
+                    # Determine timeout based on phase: if roster completed and waiting for outcome, use 2 hours
+                    draft = self.active_drafts.get(channel_id)
+                    timeout_seconds = 7200 + 30 if (draft and draft.phase == DraftPhase.COMPLETED and not draft.outcome_recorded) else 3630
+                    if current_time - start_time > timeout_seconds:
                         if draft:
-                            # Don't cleanup drafts in captain voting phase (early stage)
+                            # Skip very early stage only (captain voting), otherwise allow
                             if draft.phase != DraftPhase.CAPTAIN_VOTING:
                                 expired_channels.append(channel_id)
                             else:
                                 logger.info(f"Skipping cleanup of channel {channel_id} - still in captain voting phase")
                         else:
-                            # Orphaned timestamp - safe to clean
                             expired_channels.append(channel_id)
                 
                 for channel_id in expired_channels:
@@ -2518,7 +2724,7 @@ class TeamDraftCommands(BaseCommands):
                             if channel:
                                 embed = discord.Embed(
                                     title="⏰ 드래프트 자동 정리",
-                                    description="1시간이 지나서 드래프트를 자동으로 정리했어.",
+                                    description="시간이 지나서 드래프트를 자동으로 정리했어.",
                                     color=INFO_COLOR
                                 )
                                 await self._safe_api_call(
@@ -2878,6 +3084,7 @@ class TeamDraftCommands(BaseCommands):
         # Record prematch features for ML dataset
         try:
             match_id = f"{current_draft.guild_id}:{current_draft.channel_id}:{int(time.time())}"
+            current_draft.match_id = match_id
             captains = [uid for uid, p in current_draft.players.items() if p.is_captain]
             team1_players = [p for p in current_draft.players.values() if p.team == 1]
             team2_players = [p for p in current_draft.players.values() if p.team == 2]
@@ -2980,28 +3187,28 @@ class TeamDraftCommands(BaseCommands):
             except Exception as e:
                 logger.warning(f"Failed to send final roster to main channel: {e}")
         
-        # Clean up with comprehensive memory management
-        if current_channel_id in self.active_drafts:
-            draft = self.active_drafts[current_channel_id]
-            
-            # Audit log
-            self._audit_log("draft_complete", None, {
-                "channel_id": current_channel_id,
-                "team_size": current_draft.team_size,
-                "players_count": len(current_draft.players)
-            })
-            
-            # Stop all active views to prevent memory leaks
-            await self._cleanup_views(current_channel_id)
-            
-            # Clean up all message IDs to prevent memory leaks
-            await self._cleanup_all_message_ids(draft)
-            
-            del self.active_drafts[current_channel_id]
-        if current_channel_id in self.draft_start_times:
-            del self.draft_start_times[current_channel_id]
-        
-        logger.info(f"Draft completed in channel {current_channel_id} with full cleanup")
+        # After roster finalized, present Finish Game button to record outcome
+        try:
+            finish_embed = discord.Embed(
+                title="✅ 로스터 확정!",
+                description="경기가 끝났다면 아래 버튼을 눌러 결과를 기록해.",
+                color=SUCCESS_COLOR,
+            )
+            view = FinishGameView(current_draft, self)
+            self._register_view(current_draft.channel_id, view)
+            message = await self._safe_api_call(
+                lambda: channel.send(embed=finish_embed, view=view),
+                bucket=f"finish_game_{current_channel_id}"
+            )
+            try:
+                current_draft.finish_view_message_id = getattr(message, 'id', None)
+            except Exception:
+                current_draft.finish_view_message_id = None
+        except Exception as e:
+            logger.warning(f"Failed to send finish game view: {e}")
+
+        # Do not cleanup yet; wait for outcome recording
+        logger.info(f"Draft roster finalized in channel {current_channel_id}; waiting for outcome record")
 
     async def _check_voting_completion(self, view: 'CaptainVotingView') -> bool:
         """Check if voting should be completed"""
@@ -3296,6 +3503,206 @@ class FinalSwapView(discord.ui.View):
         
         self.add_item(CompleteButton(1))
         self.add_item(CompleteButton(2))
+
+
+class JoinDraftView(discord.ui.View):
+    """Join/Leave buttons to collect players before starting a draft"""
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=3600.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.add_item(JoinButton())
+        self.add_item(LeaveButton())
+        self.add_item(ForceStartButton())
+
+    async def on_timeout(self) -> None:
+        # If timed out without starting, clean up
+        channel_id = self.draft.channel_id
+        if channel_id in self.bot_commands.active_views:
+            try:
+                await self.bot_commands._cleanup_views(channel_id)
+            except Exception:
+                pass
+
+
+class JoinButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="참가", style=discord.ButtonStyle.success, custom_id="join")
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: JoinDraftView = self.view
+        draft = view.draft
+        user = interaction.user
+        if user.bot:
+            await interaction.response.send_message("봇은 참가할 수 없어", ephemeral=True)
+            return
+        if draft.join_target_total_players is None:
+            await interaction.response.send_message("이미 시작되었거나 잘못된 세션이야", ephemeral=True)
+            return
+        if user.id in draft.join_user_ids:
+            await interaction.response.send_message("이미 참가했어", ephemeral=True)
+            return
+        draft.join_user_ids.add(user.id)
+        # Update embed
+        await update_join_embed(view)
+        await interaction.response.defer()  # acknowledge silently
+        # Auto-start when full
+        if len(draft.join_user_ids) >= (draft.join_target_total_players or 0):
+            await view.bot_commands._finalize_join_and_start(draft, starter_interaction=interaction)
+
+
+class LeaveButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="취소", style=discord.ButtonStyle.secondary, custom_id="leave")
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: JoinDraftView = self.view
+        draft = view.draft
+        user = interaction.user
+        if draft.join_target_total_players is None:
+            await interaction.response.send_message("이미 시작되었거나 잘못된 세션이야", ephemeral=True)
+            return
+        if user.id not in draft.join_user_ids:
+            await interaction.response.send_message("참가 상태가 아니야", ephemeral=True)
+            return
+        draft.join_user_ids.discard(user.id)
+        await update_join_embed(view)
+        await interaction.response.send_message("참가 취소했어", ephemeral=True)
+
+
+class ForceStartButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="강제 시작", style=discord.ButtonStyle.primary, custom_id="force_start")
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: JoinDraftView = self.view
+        draft = view.draft
+        user = interaction.user
+        # Permission: starter or bot owner can force start
+        is_owner = False
+        try:
+            if isinstance(interaction.client, commands.Bot):
+                is_owner = await interaction.client.is_owner(user)
+        except Exception:
+            is_owner = False
+        if user.id != draft.started_by_user_id and not is_owner:
+            await interaction.response.send_message("시작자만 강제 시작할 수 있어", ephemeral=True)
+            return
+        if len(draft.join_user_ids) < 2 or (len(draft.join_user_ids) % 2) != 0:
+            await interaction.response.send_message("짝수 인원이 필요해", ephemeral=True)
+            return
+        await view.bot_commands._finalize_join_and_start(draft, starter_interaction=interaction)
+
+
+async def update_join_embed(view: 'JoinDraftView') -> None:
+    draft = view.draft
+    channel = view.bot_commands.bot.get_channel(draft.channel_id)
+    if not channel or not draft.join_message_id:
+        return
+    try:
+        msg = await channel.fetch_message(draft.join_message_id)
+    except Exception:
+        return
+    total = draft.join_target_total_players or 0
+    names: List[str] = []
+    guild = channel.guild if hasattr(channel, 'guild') else None
+    for uid in draft.join_user_ids:
+        name = str(uid)
+        try:
+            if guild:
+                member = guild.get_member(uid)
+                if member:
+                    name = member.display_name
+        except Exception:
+            pass
+        names.append(name)
+    embed = msg.embeds[0] if msg.embeds else discord.Embed(color=INFO_COLOR)
+    embed.title = f"🏁 드래프트 참가 모집 ({draft.team_size}v{draft.team_size})"
+    embed.description = "아래 버튼을 눌러 참가하거나 취소해. 인원이 차면 자동으로 진행돼."
+    embed.color = INFO_COLOR
+    value_list = "\n".join([f"• {n}" for n in names]) if names else "없음"
+    # rebuild fields
+    embed.clear_fields()
+    embed.add_field(name="필요 인원", value=f"{len(draft.join_user_ids)}/{total}")
+    embed.add_field(name="참가자", value=value_list, inline=False)
+    await msg.edit(embed=embed, view=view)
+
+
+class FinishGameView(discord.ui.View):
+    """View to finish the game and record outcome"""
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=7200.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.add_item(FinishGameButton())
+
+
+class FinishGameButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="경기 종료 및 결과 기록", style=discord.ButtonStyle.danger, custom_id="finish_game")
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: FinishGameView = self.view
+        draft = view.draft
+        user = interaction.user
+        if draft.outcome_recorded:
+            await interaction.response.send_message("이미 결과가 기록되었어", ephemeral=True)
+            return
+        # Permission: starter or bot owner only
+        is_owner = False
+        try:
+            if isinstance(interaction.client, commands.Bot):
+                is_owner = await interaction.client.is_owner(user)
+        except Exception:
+            is_owner = False
+        if user.id != (draft.started_by_user_id or 0) and not is_owner:
+            await interaction.response.send_message("시작자만 결과를 기록할 수 있어", ephemeral=True)
+            return
+        # Prompt modal for score input like 12:8
+        await interaction.response.send_modal(GameResultModal(draft, view.bot_commands))
+
+
+class GameResultModal(discord.ui.Modal, title="경기 결과 입력"):
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=300.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.score_input = discord.ui.TextInput(label="팀1 점수(왼쪽):팀2 점수(오른쪽) (예: 12:8)", placeholder="12:8", required=True, max_length=10)
+        self.add_item(self.score_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        text = str(self.score_input.value).strip()
+        import re
+        m = re.match(r"^(\d{1,2})\s*[:：]\s*(\d{1,2})$", text)
+        if not m:
+            await interaction.response.send_message("형식이 올바르지 않아. 예: 12:8", ephemeral=True)
+            return
+        a = int(m.group(1))
+        b = int(m.group(2))
+        if a == b:
+            await interaction.response.send_message("무승부는 허용되지 않아", ephemeral=True)
+            return
+        if a != 12 and b != 12:
+            await interaction.response.send_message("12점에 도달한 팀이 있어야 해", ephemeral=True)
+            return
+        winner = 1 if a > b else 2
+        score_str = f"{a}:{b}"
+        # Record outcome (idempotent)
+        try:
+            match_id = self.draft.match_id or f"{self.draft.guild_id}:{self.draft.channel_id}:"
+            if not self.draft.outcome_recorded:
+                self.bot_commands.match_recorder.write_outcome(match_id=match_id, winner=winner, score=score_str)
+                self.draft.outcome_recorded = True
+        except Exception as e:
+            await interaction.response.send_message("결과 저장에 실패했어", ephemeral=True)
+            return
+        await interaction.response.send_message("결과를 기록했어!", ephemeral=True)
+        # Disable finish view so it can't be used again
+        try:
+            channel = self.bot_commands._get_draft_channel(self.draft)
+            if channel and self.draft.finish_view_message_id:
+                msg = await channel.fetch_message(self.draft.finish_view_message_id)
+                await msg.edit(view=None)
+        except Exception:
+            pass
+        # Cleanup draft now
+        await self.bot_commands._final_cleanup_after_outcome(self.draft)
 
 
 class CompleteButton(discord.ui.Button):
