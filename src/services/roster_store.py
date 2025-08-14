@@ -10,6 +10,7 @@ class RosterPlayer:
     display_name: str
     rating: Optional[float] = None
     servant_ratings: Dict[str, float] = field(default_factory=dict)
+    preferred_servants: List[str] = field(default_factory=list)
 
 
 class RosterStore:
@@ -37,6 +38,7 @@ class RosterStore:
                     display_name=item.get("display_name", str(item["user_id"])),
                     rating=item.get("rating"),
                     servant_ratings=item.get("servant_ratings", {}),
+                    preferred_servants=item.get("preferred_servants", []),
                 )
             )
         return players
@@ -81,6 +83,37 @@ class RosterStore:
             if rating is not None:
                 rp.servant_ratings[servant] = rating
             players.append(rp)
+        self.save(guild_id, players)
+
+    def set_preferred_servants(self, guild_id: int, user_id: int, servants: List[str]) -> None:
+        players = self.load(guild_id)
+        for p in players:
+            if p.user_id == user_id:
+                p.preferred_servants = servants
+                break
+        else:
+            players.append(RosterPlayer(user_id=user_id, display_name=str(user_id), preferred_servants=servants))
+        self.save(guild_id, players)
+
+    def add_preferred_servant(self, guild_id: int, user_id: int, servant: str) -> None:
+        players = self.load(guild_id)
+        for p in players:
+            if p.user_id == user_id:
+                if servant not in p.preferred_servants:
+                    p.preferred_servants.append(servant)
+                break
+        else:
+            players.append(RosterPlayer(user_id=user_id, display_name=str(user_id), preferred_servants=[servant]))
+        self.save(guild_id, players)
+
+    def remove_preferred_servant(self, guild_id: int, user_id: int, servant: str) -> None:
+        players = self.load(guild_id)
+        for p in players:
+            if p.user_id == user_id:
+                p.preferred_servants = [s for s in p.preferred_servants if s != servant]
+                break
+        else:
+            players.append(RosterPlayer(user_id=user_id, display_name=str(user_id)))
         self.save(guild_id, players)
 
 

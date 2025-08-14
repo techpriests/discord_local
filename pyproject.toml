@@ -22,8 +22,14 @@ matplotlib = "^3.10.0"  # For generating player count charts
 psutil = "^5.9.8"  # For system resource monitoring
 beautifulsoup4 = "^4.13.3"
 anthropic = "^0.55.0"  # For Claude API integration
+
+[tool.poetry.group.ml]
+optional = true
+
+[tool.poetry.group.ml.dependencies]
 scikit-learn = "^1.5.0"
 joblib = "^1.4.2"
+scipy = "^1.13.1"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.0.0"

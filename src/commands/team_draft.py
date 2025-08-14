@@ -3,12 +3,13 @@ import random
 import asyncio
 import time
 import uuid
-from typing import Dict, List, Optional, Set, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union, Any
 from enum import Enum
 from dataclasses import dataclass, field
 import discord
 from discord.ext import commands
 from discord import app_commands
+import numpy as np
 
 from src.utils.decorators import command_handler
 from .base_commands import BaseCommands
@@ -16,13 +17,24 @@ from src.utils.types import CommandContext
 from src.utils.constants import ERROR_COLOR, INFO_COLOR, SUCCESS_COLOR
 from src.services.match_recorder import MatchRecorder, PlayerFeature
 from src.services.roster_store import RosterStore, RosterPlayer
-from src.services.auto_team_draft import AutoTeamDraftService, PlayerInput
-from src.services.auto_predictor import DraftOutcomePredictor, TeamPlayer
+from src.services.auto_balance_config import AutoBalanceConfig
+from src.services.performance_monitor import PerformanceMonitor, AlertSystem
+from src.services.post_selection_ml import PostSelectionMLTrainer
+from src.services.ab_test_validator import PostSelectionABTester, PostSelectionValidator
 
 logger = logging.getLogger(__name__)
 
 # Hot reload test comment - this should trigger the deployment action
 
+
+from src.commands.auto_balance import (
+    SelectedPlayer,
+    TeamBalanceRequest,
+    TeamBalanceResult,
+    PostSelectionFeatures,
+    PostSelectionTeamBalancer,
+    TeamCompositionChoiceView,
+)
 
 def owner_only():
     async def predicate(interaction: discord.Interaction) -> bool:
@@ -76,6 +88,8 @@ class DraftSession:
     real_user_id: Optional[int] = None  # The real user in test mode
     # Simulation mode (balanced by expert) for logging
     is_simulation: bool = False
+    simulation_session_id: Optional[str] = None
+    simulation_author_id: Optional[int] = None
     
     # Captain selection
     captain_vote_message_id: Optional[int] = None
@@ -175,6 +189,8 @@ class DraftSession:
     # Finish/outcome handling
     finish_view_message_id: Optional[int] = None
     outcome_recorded: bool = False
+    # Auto-balance result storage for review/acceptance
+    auto_balance_result: Optional[Dict[str, Any]] = None
 
 
 
@@ -227,14 +243,312 @@ class TeamDraftCommands(BaseCommands):
                 {"first_pick": 2, "second_pick": 1},  # Round 3
             ]
         }
-        # Auto draft service for quick pairing via '문셀'
-        self.auto_draft_service = AutoTeamDraftService()
         # Match recorder for ML data collection
         self.match_recorder = MatchRecorder()
-        # Outcome predictor (heuristic/ML placeholder)
-        self.outcome_predictor = DraftOutcomePredictor()
         # Guild roster store for simulations
         self.roster_store = RosterStore()
+        # New post-selection balancer (auto draft integration)
+        self.auto_balance_config = AutoBalanceConfig()
+        self.post_selection_balancer = PostSelectionTeamBalancer(self.roster_store)
+        self.performance_monitor = PerformanceMonitor()
+        self.alert_system = AlertSystem(self.performance_monitor)
+        self.ml_trainer = PostSelectionMLTrainer(self.match_recorder, self.roster_store)
+
+    async def _offer_team_composition_options(self, draft: DraftSession) -> None:
+        """Offer manual vs AI auto-balance options after selection."""
+        channel = self._get_draft_channel(draft)
+        if not channel:
+            return
+        embed = discord.Embed(
+            title="👥 팀 구성 방법 선택",
+            description="서번트 선택이 끝났어! 이제 어떻게 팀을 구성할지 선택해줘:",
+            color=INFO_COLOR
+        )
+        embed.add_field(
+            name="🎯 수동 팀 선택 (기존 방식)",
+            value="팀장이 직접 선택하는 전통적인 방식",
+            inline=False
+        )
+
+        # Hide AI option text for real-world drafts; show only in simulation
+        if getattr(draft, 'is_simulation', False):
+            embed.add_field(
+                name="🤖 AI 자동 밸런싱",
+                value="인공지능이 최적 밸런스로 팀을 구성",
+                inline=False
+            )
+
+        view = TeamCompositionChoiceView(draft, self)
+        self._register_view(draft.channel_id, view)
+        await self._safe_api_call(
+            lambda: channel.send(embed=embed, view=view),
+            bucket=f"composition_choice_{draft.channel_id}"
+        )
+
+    async def _perform_automatic_team_balancing(self, draft: DraftSession, algorithm: str = 'simple') -> None:
+        """Perform automatic balancing and present results; fall back to manual on error."""
+        channel = self._get_draft_channel(draft)
+        if not channel:
+            return
+        processing = discord.Embed(
+            title="🤖 AI 팀 밸런싱 진행 중...",
+            description=f"{algorithm.upper()} 알고리즘으로 계산 중",
+            color=INFO_COLOR
+        )
+        msg = await channel.send(embed=processing)
+        try:
+            # Build SelectedPlayer list with roster ratings
+            selected_players: List[SelectedPlayer] = []
+            try:
+                roster = self.roster_store.load(draft.guild_id)
+                rating_map = {p.user_id: p.rating for p in roster}
+                prof_map = {p.user_id: getattr(p, 'servant_ratings', {}) for p in roster}
+            except Exception:
+                rating_map, prof_map = {}, {}
+
+            for uid, player in draft.players.items():
+                char = draft.confirmed_servants.get(uid) or player.selected_servant
+                selected_players.append(
+                    SelectedPlayer(
+                        user_id=uid,
+                        display_name=player.username,
+                        selected_character=char,
+                        skill_rating=rating_map.get(uid),
+                        character_proficiency=(prof_map.get(uid, {}) or {}).get(char)
+                    )
+                )
+
+            req = TeamBalanceRequest(players=selected_players, team_size=draft.team_size, balance_algorithm=algorithm)
+            result = self.post_selection_balancer.balance_teams(req)
+
+            # Apply assignments
+            for p in result.team1:
+                if p.user_id in draft.players:
+                    draft.players[p.user_id].team = 1
+            for p in result.team2:
+                if p.user_id in draft.players:
+                    draft.players[p.user_id].team = 2
+            for p in result.extras:
+                if p.user_id in draft.players:
+                    draft.players[p.user_id].team = None
+
+            # Store result for accept/alternative actions
+            draft.auto_balance_result = {
+                "algorithm": algorithm,
+                "balance_score": result.balance_score,
+                "confidence": result.confidence,
+                "team1": [(p.user_id, p.display_name, p.selected_character) for p in result.team1],
+                "team2": [(p.user_id, p.display_name, p.selected_character) for p in result.team2],
+                "extras": [(p.user_id, p.display_name, p.selected_character) for p in result.extras],
+            }
+
+            # Present results with actions
+            embed = self._create_balance_result_embed(draft, result, algorithm)
+            from src.commands.auto_balance import BalanceResultView  # local import to avoid cycles
+            view = BalanceResultView(draft, result, self)
+            # Log performance
+            try:
+                self.performance_monitor.log_balance_attempt(algorithm, result.balance_score, float(result.analysis.get('processing_time', 0.0)), True)
+            except Exception:
+                pass
+            await msg.edit(embed=embed, view=view)
+        except Exception as e:
+            logger.error(f"Automatic balancing failed: {e}")
+            await msg.edit(embed=discord.Embed(title="❌ 자동 밸런싱 실패", description="수동 선택으로 진행할게.", color=ERROR_COLOR))
+            await self._start_team_selection(draft, draft.channel_id)
+
+    def _create_balance_result_embed(self, draft: DraftSession, result: TeamBalanceResult, algorithm: str) -> discord.Embed:
+        embed = discord.Embed(
+            title=f"🤖 AI 팀 밸런싱 완료 ({algorithm.upper()})",
+            description=f"밸런스 점수: {result.balance_score:.1%} (신뢰도: {result.confidence:.1%})",
+            color=SUCCESS_COLOR
+        )
+        t1 = "\n".join([f"**{p.selected_character or '?'}** - {p.display_name}" for p in result.team1])
+        t2 = "\n".join([f"**{p.selected_character or '?'}** - {p.display_name}" for p in result.team2])
+        embed.add_field(name=f"팀 1 ({len(result.team1)}명)", value=t1 or "-", inline=True)
+        embed.add_field(name=f"팀 2 ({len(result.team2)}명)", value=t2 or "-", inline=True)
+        return embed
+
+    @commands.command(
+        name="밸런스분석",
+        help="현재 완료된 드래프트의 밸런스를 AI가 분석해줘",
+        brief="AI 밸런스 분석"
+    )
+    async def analyze_completed_draft_balance(self, ctx: commands.Context) -> None:
+        channel_id = ctx.channel.id
+        if channel_id not in self.active_drafts:
+            await self.send_error(ctx, "진행 중인 드래프트가 없어")
+            return
+        draft = self.active_drafts[channel_id]
+        if draft.phase != DraftPhase.COMPLETED:
+            await self.send_error(ctx, "드래프트가 완료된 후에 분석할 수 있어")
+            return
+        if not draft.confirmed_servants:
+            await self.send_error(ctx, "캐릭터 선택 정보가 없어")
+            return
+
+        try:
+            team1_players = [p for p in draft.players.values() if p.team == 1]
+            team2_players = [p for p in draft.players.values() if p.team == 2]
+
+            team1_selected: List[SelectedPlayer] = []
+            team2_selected: List[SelectedPlayer] = []
+
+            for player in team1_players:
+                character = draft.confirmed_servants.get(player.user_id)
+                if character:
+                    team1_selected.append(SelectedPlayer(user_id=player.user_id, display_name=player.username, selected_character=character))
+
+            for player in team2_players:
+                character = draft.confirmed_servants.get(player.user_id)
+                if character:
+                    team2_selected.append(SelectedPlayer(user_id=player.user_id, display_name=player.username, selected_character=character))
+
+            balancer = self.post_selection_balancer
+            team1_features = balancer._extract_team_features(team1_selected)
+            team2_features = balancer._extract_team_features(team2_selected)
+
+            skill_balance = balancer._calculate_skill_balance(team1_features, team2_features)
+            synergy_balance = balancer._calculate_synergy_balance(team1_features, team2_features)
+
+            embed = discord.Embed(
+                title="📊 AI 드래프트 밸런스 분석",
+                description="완료된 드래프트의 팀 밸런스를 AI가 분석했어",
+                color=INFO_COLOR
+            )
+            overall_balance = (skill_balance + synergy_balance) / 2
+            balance_emoji = "🟢" if overall_balance > 0.8 else "🟡" if overall_balance > 0.6 else "🔴"
+            embed.add_field(name="🎯 종합 밸런스 평가", value=f"{balance_emoji} {overall_balance:.1%}", inline=False)
+            embed.add_field(
+                name="📈 세부 분석",
+                value=(
+                    f"스킬 밸런스: {skill_balance:.1%}\n"
+                    f"시너지 밸런스: {synergy_balance:.1%}\n"
+                    f"팀1 평균 스킬: {team1_features.avg_skill_rating:.0f}\n"
+                    f"팀2 평균 스킬: {team2_features.avg_skill_rating:.0f}"
+                ),
+                inline=True
+            )
+            await ctx.send(embed=embed)
+        except Exception as e:
+            logger.error(f"Balance analysis failed: {e}")
+            await self.send_error(ctx, "밸런스 분석 중 문제가 발생했어")
+
+    @commands.command(name="밸런스시너지", help="기록된 경기 데이터로부터 시너지 파일을 생성합니다 (owner-only)")
+    @commands.is_owner()
+    async def generate_synergy_from_matches(self, ctx: commands.Context) -> None:
+        try:
+            res = self.ml_trainer.learn_character_synergies_from_matches()
+            if res.get('success'):
+                await self.send_success(ctx, f"시너지 학습 완료: {res.get('pairs', 0)} 쌍, {res.get('matches', 0)} 경기")
+            else:
+                await self.send_error(ctx, f"시너지 학습 실패: {res}")
+        except Exception as e:
+            await self.send_error(ctx, f"시너지 학습 오류: {e}")
+
+    @commands.command(name="밸런스학습", help="기존 데이터로 밸런스 예측 모델을 학습합니다 (owner-only)")
+    @commands.is_owner()
+    async def train_balance_predictor(self, ctx: commands.Context) -> None:
+        try:
+            res = self.ml_trainer.train_balance_predictor_from_existing_data()
+            if res.get('success'):
+                await self.send_success(ctx, f"학습 완료 (CV: {res.get('cv_mean', 0):.3f}±{res.get('cv_std', 0):.3f}, Val: {res.get('val_accuracy', 0):.3f})")
+            else:
+                await self.send_error(ctx, f"학습 실패: {res.get('error')}")
+        except Exception as e:
+            await self.send_error(ctx, f"학습 오류: {e}")
+
+    @commands.command(name="밸런스설정", help="AI 밸런싱 가중치를 업데이트합니다 (owner-only)")
+    @commands.is_owner()
+    async def update_balance_weights(self, ctx: commands.Context, *, weights: str) -> None:
+        try:
+            # weights example: skill=0.3,synergy=0.25,role=0.2,tier=0.1,comfort=0.1,meta=0.05
+            parts = [p.strip() for p in weights.split(',') if p.strip()]
+            mapping = {
+                'skill': 'skill_balance',
+                'synergy': 'synergy_balance',
+                'role': 'role_balance',
+                'tier': 'tier_balance',
+                'comfort': 'comfort_balance',
+                'meta': 'meta_balance',
+            }
+            new_weights = {}
+            for part in parts:
+                k, v = part.split('=')
+                key = mapping.get(k.strip())
+                if not key:
+                    continue
+                new_weights[key] = float(v)
+            self.auto_balance_config.update_balance_weights(new_weights)
+            await self.send_success(ctx, "가중치를 업데이트했어")
+        except Exception as e:
+            await self.send_error(ctx, f"설정 업데이트 실패: {e}")
+
+    @commands.command(name="밸런스알고리즘", help="AI 밸런싱 알고리즘을 설정합니다 (owner-only)")
+    @commands.is_owner()
+    async def set_balance_algorithm(self, ctx: commands.Context, algorithm: str) -> None:
+        try:
+            self.auto_balance_config.set_default_algorithm(algorithm)
+            await self.send_success(ctx, f"기본 알고리즘을 {algorithm}로 설정했어")
+        except Exception as e:
+            await self.send_error(ctx, f"알고리즘 설정 실패: {e}")
+
+    async def _announce_final_auto_balanced_teams(self, draft: DraftSession, result: TeamBalanceResult) -> None:
+        main_channel = self.bot.get_channel(draft.channel_id) if self.bot else None
+        if not main_channel:
+            return
+        try:
+            team_format = f"{draft.team_size}v{draft.team_size}"
+            embed = discord.Embed(
+                title=f"🤖 AI 자동 밸런싱 완료! ({team_format})",
+                description=f"**인공지능이 최적의 밸런스로 팀을 구성했어!**\n밸런스 점수: {result.balance_score:.1%}",
+                color=SUCCESS_COLOR
+            )
+            t1 = "\n".join([f"• **{p.selected_character or '?'}** - {p.display_name}" for p in result.team1])
+            t2 = "\n".join([f"• **{p.selected_character or '?'}** - {p.display_name}" for p in result.team2])
+            embed.add_field(name="팀 1 최종 로스터", value=t1 or "-", inline=True)
+            embed.add_field(name="팀 2 최종 로스터", value=t2 or "-", inline=True)
+            await self._safe_api_call(lambda: main_channel.send(embed=embed), bucket=f"auto_balance_announce_{draft.channel_id}")
+        except Exception as e:
+            logger.warning(f"Failed to announce auto-balanced teams: {e}")
+
+
+class TeamCompositionChoiceView(discord.ui.View):
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=1800.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.add_item(ManualTeamSelectionButton())
+        self.add_item(AutoBalanceButton('simple'))
+
+
+class ManualTeamSelectionButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="🎯 수동 팀 선택", style=discord.ButtonStyle.primary, custom_id="manual_team_selection")
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: TeamCompositionChoiceView = self.view  # type: ignore
+        user_id = interaction.user.id
+        if (view.draft.is_test_mode and user_id == view.draft.real_user_id) or user_id in view.draft.captains:
+            await interaction.response.send_message("🎯 수동 팀 선택으로 진행할게.", ephemeral=True)
+            await view.bot_commands._start_team_selection(view.draft, view.draft.channel_id)
+        else:
+            await interaction.response.send_message("팀장만 팀 구성 방법을 선택할 수 있어.", ephemeral=True)
+
+
+class AutoBalanceButton(discord.ui.Button):
+    def __init__(self, algorithm: str):
+        super().__init__(label=f"🤖 AI 자동 구성 ({algorithm})", style=discord.ButtonStyle.success, custom_id=f"auto_balance_{algorithm}")
+        self.algorithm = algorithm
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: TeamCompositionChoiceView = self.view  # type: ignore
+        user_id = interaction.user.id
+        if (view.draft.is_test_mode and user_id == view.draft.real_user_id) or user_id in view.draft.captains:
+            await interaction.response.send_message(f"🤖 AI 자동 구성 ({self.algorithm})을 선택했어!", ephemeral=True)
+            await view.bot_commands._perform_automatic_team_balancing(view.draft, self.algorithm)
+        else:
+            await interaction.response.send_message("팀장만 팀 구성 방법을 선택할 수 있어.", ephemeral=True)
 
     # -------------------------
     # Join-based draft start
@@ -727,13 +1041,7 @@ class TeamDraftCommands(BaseCommands):
     )
     async def draft_start_chat(self, ctx: commands.Context, *, args: str = "") -> None:
         """Start team draft via chat command"""
-        # Parse auto-mode trigger: contains '문셀' -> run auto draft instead of interactive flow
-        if "문셀학습" in args:
-            await self._handle_auto_draft_quick(ctx, args, use_predictor=True)
-            return
-        if "문셀" in args:
-            await self._handle_auto_draft_quick(ctx, args, use_predictor=False)
-            return
+        # Legacy quick auto-draft disabled; proceed with interactive flow
 
         # Parse test_mode and team_size from args
         test_mode = "test_mode:true" in args.lower() or "test_mode=true" in args.lower()
@@ -765,110 +1073,8 @@ class TeamDraftCommands(BaseCommands):
         await self._handle_draft_start(ctx, players_str, test_mode, team_size, captains_str)
 
     async def _handle_auto_draft_quick(self, ctx: commands.Context, args: str, use_predictor: bool = False) -> None:
-        """Handle quick auto team draft when '문셀' flag is present in prefix command.
-
-        Usage examples:
-          - 뮤 페어 문셀 team_size:6
-          - 뮤 페어 문셀 @u1 @u2 @u3 ... team_size:3
-        If mentions are present, only mentioned users are considered. Otherwise, the current
-        text channel's members are used.
-        """
-        try:
-            # Determine team_size (defaults to 6)
-            team_size = 6
-            lowered = args.lower()
-            if "team_size:2" in lowered or "team_size=2" in lowered:
-                team_size = 2
-            elif "team_size:3" in lowered or "team_size=3" in lowered:
-                team_size = 3
-            elif "team_size:5" in lowered or "team_size=5" in lowered:
-                team_size = 5
-            elif "team_size:6" in lowered or "team_size=6" in lowered:
-                team_size = 6
-
-            if team_size not in [2, 3, 5, 6]:
-                await self.send_error(ctx, "팀 크기는 2,3,5,6 중 하나여야 해")
-                return
-
-            # Collect candidate members: prefer mentions if present
-            members = ctx.message.mentions
-            if not members and isinstance(ctx.channel, discord.TextChannel):
-                members = ctx.channel.members
-
-            # Filter out bots and duplicates, map to PlayerInput
-            unique_ids = set()
-            players_inputs: List[PlayerInput] = []
-            for m in members:
-                if m.bot:
-                    continue
-                if m.id in unique_ids:
-                    continue
-                unique_ids.add(m.id)
-                display = m.display_name if hasattr(m, 'display_name') else m.name
-                players_inputs.append(PlayerInput(user_id=m.id, display_name=display))
-
-            if len(players_inputs) < 2:
-                await self.send_error(ctx, "드래프트를 진행할 실제 플레이어가 부족해")
-                return
-
-            if use_predictor:
-                # Build predictor scoring function using roster ratings if available
-                guild_id = ctx.guild.id if ctx.guild else 0
-                roster = self.roster_store.load(guild_id)
-                rating_map = {p.user_id: p.rating for p in roster}
-                self.outcome_predictor.load_or_train()
-
-                def score_split(t1: List[PlayerInput], t2: List[PlayerInput]) -> float:
-                    tp1 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=rating_map.get(p.user_id)) for p in t1]
-                    tp2 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=rating_map.get(p.user_id)) for p in t2]
-                    return self.outcome_predictor.predict_team1_win_prob(tp1, tp2)
-
-                result = self.auto_draft_service.assign_with_predictor(players_inputs, team_size, score_split)
-            else:
-                result = self.auto_draft_service.assign_teams(players_inputs, team_size, balance_by_rating=True)
-
-        # Build and send embed
-            embed = discord.Embed(
-                title="⚙️ 문 셀 자동 드래프트",
-                description=f"자동으로 팀을 구성했어 (팀 규모: {team_size}v{team_size}).",
-                color=INFO_COLOR,
-            )
-            embed.add_field(
-                name=f"팀 1 ({len(result.team_one)}명)",
-                value="\n".join(getattr(p, 'display_name', getattr(p, 'username', str(p.user_id))) for p in result.team_one) or "없음",
-                inline=True,
-            )
-            embed.add_field(
-                name=f"팀 2 ({len(result.team_two)}명)",
-                value="\n".join(getattr(p, 'display_name', getattr(p, 'username', str(p.user_id))) for p in result.team_two) or "없음",
-                inline=True,
-            )
-            if result.extras:
-                embed.add_field(
-                    name=f"대기 ({len(result.extras)}명)",
-                    value="\n".join(getattr(p, 'display_name', getattr(p, 'username', str(p.user_id))) for p in result.extras),
-                    inline=False,
-                )
-
-            await self.send_response(ctx, embed=embed)
-
-            # Optional: show predicted balance if ratings are available later
-            try:
-                # Prepare predictor input with roster ratings if available
-                guild_id = ctx.guild.id if ctx.guild else 0
-                roster = self.roster_store.load(guild_id)
-                ratings = {p.user_id: p.rating for p in roster}
-                t1 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=ratings.get(p.user_id)) for p in result.team_one]
-                t2 = [TeamPlayer(user_id=p.user_id, display_name=getattr(p, 'display_name', ''), rating=ratings.get(p.user_id)) for p in result.team_two]
-                self.outcome_predictor.load_or_train()
-                prob = self.outcome_predictor.predict_team1_win_prob(t1, t2)
-                balance_text = f"예상 밸런스: 팀1 승률 {prob*100:.1f}%"
-                await ctx.send(balance_text)
-            except Exception:
-                pass
-        except Exception as e:
-            logger.error(f"Auto draft quick failed: {e}")
-            await self.send_error(ctx, "자동 드래프트 중 문제가 발생했어")
+        # Legacy path removed in favor of the new AI balancing integrated flow
+        await self.send_error(ctx, "이 기능은 더 이상 지원되지 않아. 새 AI 드래프트를 사용해줘.")
 
     @app_commands.command(name="페어", description="팀 드래프트를 시작해 (지원: 2v2/3v3/5v5/6v6)")
     async def draft_start_slash(
@@ -1009,6 +1215,8 @@ class TeamDraftCommands(BaseCommands):
         self.roster_store.set_servant_rating(guild_id, member.id, servant, rating)
         await self.send_success(interaction, f"{member.display_name}의 {servant} 숙련도를 설정했어")
 
+    # Preferred servants management commands removed per request; preferences will be updated automatically on data collection
+
     @commands.command(name="로스터보기", help="서버 로스터를 표시합니다 (owner-only)")
     @commands.is_owner()
     async def roster_list_prefix(self, ctx: commands.Context) -> None:
@@ -1064,10 +1272,12 @@ class TeamDraftCommands(BaseCommands):
         real_username = self.get_user_name(ctx_or_interaction)
 
         if not parsed_players:
-            # Fallback to guild roster
+            # Fallback to guild roster; prioritize players with preferred servants to limit combinations
             guild_id = self.get_guild_id(ctx_or_interaction)
             roster = self.roster_store.load(guild_id or 0)
-            parsed_players = [(p.user_id, p.display_name) for p in roster]
+            # Sort: those with any preferred_servants first
+            roster_sorted = sorted(roster, key=lambda rp: 0 if getattr(rp, 'preferred_servants', []) else 1)
+            parsed_players = [(p.user_id, p.display_name) for p in roster_sorted]
             # Ensure invoker is in the roster
             if real_user_id not in {uid for uid, _ in parsed_players}:
                 parsed_players.insert(0, (real_user_id, real_username))
@@ -1107,7 +1317,7 @@ class TeamDraftCommands(BaseCommands):
         import re
         session_match = re.search(r"session:(\S+)", args, re.IGNORECASE)
         session_id = session_match.group(1) if session_match else str(int(time.time()))
-        draft.simulation_session_id = session_id  # dynamic attribute for logging
+        draft.simulation_session_id = session_id
         draft.simulation_author_id = real_user_id
         self.active_drafts[channel_id] = draft
         await self.send_success(ctx_or_interaction, f"시뮬레이션 드래프트를 시작했어 ({team_size}v{team_size}).")
@@ -2078,7 +2288,7 @@ class TeamDraftCommands(BaseCommands):
                     logger.info(f"Auto-selected {servant} for fake player {player.username}")
 
     async def _reveal_servant_selections(self, draft: DraftSession = None) -> None:
-        """Reveal servant selections and handle conflicts"""
+        """Reveal servant selections and handle conflicts. After confirmations, offer manual vs AI team composition."""
         # Use provided draft or find the current one
         if draft:
             current_draft = draft
@@ -2187,7 +2397,12 @@ class TeamDraftCommands(BaseCommands):
                 current_draft.phase = DraftPhase.SERVANT_RESELECTION
                 await self._start_servant_reselection(current_draft, current_channel_id)
             else:
-                await self._start_team_selection(current_draft, current_channel_id)
+                # No conflicts left; offer composition options instead of jumping straight to manual selection
+                try:
+                    await self._offer_team_composition_options(current_draft)
+                except Exception as e:
+                    logger.warning(f"Failed to present composition options, fallback to manual selection: {e}")
+                    await self._start_team_selection(current_draft, current_channel_id)
         else:
             # No conflicts, confirm all
             for user_id, player in current_draft.players.items():
@@ -2195,7 +2410,7 @@ class TeamDraftCommands(BaseCommands):
             
             embed = discord.Embed(
                 title="✅ 서번트 선택 완료",
-                description="모든 플레이어의 서번트 선택이 완료됐어.",
+                description="모든 플레이어의 서번트 선택이 완료됐어. 이제 팀 구성 방법을 선택해:",
                 color=SUCCESS_COLOR
             )
             
@@ -2213,14 +2428,21 @@ class TeamDraftCommands(BaseCommands):
                         inline=True
                     )
             
-            # Send selection completion to thread if available, otherwise main channel
+            # Send selection completion and offer team composition options
             completion_channel = self._get_draft_channel(current_draft)
             if completion_channel:
                 await self._safe_api_call(
                     lambda: completion_channel.send(embed=embed),
                     bucket=f"reveal_{current_draft.channel_id}"
                 )
-            await self._start_team_selection(current_draft, current_channel_id)
+                # Offer manual vs automatic team composition choice
+                try:
+                    await self._offer_team_composition_options(current_draft)
+                except Exception as e:
+                    logger.warning(f"Failed to present composition options, falling back to manual: {e}")
+                    await self._start_team_selection(current_draft, current_channel_id)
+            else:
+                await self._start_team_selection(current_draft, current_channel_id)
 
     async def _start_servant_reselection(self, draft: DraftSession, channel_id: int) -> None:
         """Start servant reselection for conflict losers"""
@@ -3123,7 +3345,40 @@ class TeamDraftCommands(BaseCommands):
                 mode_name=("sim_balanced" if current_draft.is_simulation else None),
                 sim_session=getattr(current_draft, "simulation_session_id", None),
                 author_id=getattr(current_draft, "simulation_author_id", None),
+                is_simulation=current_draft.is_simulation,
+                sim_author_captain=getattr(current_draft, "simulation_author_id", None),
+                sim_note=("expert_balanced" if current_draft.is_simulation else None),
+                draft_type=("simulation" if current_draft.is_simulation else "manual"),
+                balance_algorithm=(current_draft.auto_balance_result.get("algorithm") if getattr(current_draft, "auto_balance_result", None) else None),
+                predicted_balance_score=(current_draft.auto_balance_result.get("balance_score") if getattr(current_draft, "auto_balance_result", None) else None),
+                predicted_confidence=(current_draft.auto_balance_result.get("confidence") if getattr(current_draft, "auto_balance_result", None) else None),
+                processing_time=(0.0),
+                auto_balance_used=(True if getattr(current_draft, "auto_balance_result", None) else False),
             )
+            # Auto-update preferred_servants: add any played servant if missing
+            try:
+                roster = self.roster_store.load(current_draft.guild_id)
+                rp_map = {rp.user_id: rp for rp in roster}
+                played: List[Tuple[int, str]] = []
+                for p in team1_players + team2_players:
+                    char = current_draft.confirmed_servants.get(p.user_id)
+                    if char:
+                        played.append((p.user_id, char))
+                updated: List[RosterPlayer] = []
+                for uid, char in played:
+                    rp = rp_map.get(uid)
+                    if not rp:
+                        rp = RosterPlayer(user_id=uid, display_name=str(uid))
+                        rp_map[uid] = rp
+                    prefs = getattr(rp, 'preferred_servants', []) or []
+                    if char not in prefs:
+                        prefs.append(char)
+                        rp.preferred_servants = prefs
+                        updated.append(rp)
+                if updated:
+                    self.roster_store.add_or_update(current_draft.guild_id, list(rp_map.values()))
+            except Exception as _e:
+                logger.info(f"Preferred-servants auto-update skipped: {_e}")
         except Exception as e:
             logger.warning(f"Failed to record prematch data: {e}")
         
@@ -3151,9 +3406,16 @@ class TeamDraftCommands(BaseCommands):
         embed.add_field(name="팀 1", value=format_final_team(team1_players), inline=True)
         embed.add_field(name="팀 2", value=format_final_team(team2_players), inline=True)
         
-        # Send to thread
+        # Send to thread with simulation-finish button when applicable
+        view = None
+        try:
+            if current_draft.is_simulation:
+                view = SimulationFinishView(current_draft, self)
+                self._register_view(current_draft.channel_id, view)
+        except Exception:
+            view = None
         await self._safe_api_call(
-            lambda: channel.send(embed=embed),
+            lambda: channel.send(embed=embed, view=view),
             bucket=f"draft_complete_{current_channel_id}"
         )
         
@@ -3187,23 +3449,24 @@ class TeamDraftCommands(BaseCommands):
             except Exception as e:
                 logger.warning(f"Failed to send final roster to main channel: {e}")
         
-        # After roster finalized, present Finish Game button to record outcome
+        # After roster finalized, present Finish Game button to record outcome (non-simulation)
         try:
-            finish_embed = discord.Embed(
-                title="✅ 로스터 확정!",
-                description="경기가 끝났다면 아래 버튼을 눌러 결과를 기록해.",
-                color=SUCCESS_COLOR,
-            )
-            view = FinishGameView(current_draft, self)
-            self._register_view(current_draft.channel_id, view)
-            message = await self._safe_api_call(
-                lambda: channel.send(embed=finish_embed, view=view),
-                bucket=f"finish_game_{current_channel_id}"
-            )
-            try:
-                current_draft.finish_view_message_id = getattr(message, 'id', None)
-            except Exception:
-                current_draft.finish_view_message_id = None
+            if not current_draft.is_simulation:
+                finish_embed = discord.Embed(
+                    title="✅ 로스터 확정!",
+                    description="경기가 끝났다면 아래 버튼을 눌러 결과를 기록해.",
+                    color=SUCCESS_COLOR,
+                )
+                view_fg = FinishGameView(current_draft, self)
+                self._register_view(current_draft.channel_id, view_fg)
+                message = await self._safe_api_call(
+                    lambda: channel.send(embed=finish_embed, view=view_fg),
+                    bucket=f"finish_game_{current_channel_id}"
+                )
+                try:
+                    current_draft.finish_view_message_id = getattr(message, 'id', None)
+                except Exception:
+                    current_draft.finish_view_message_id = None
         except Exception as e:
             logger.warning(f"Failed to send finish game view: {e}")
 
@@ -3632,6 +3895,131 @@ class FinishGameView(discord.ui.View):
         self.draft = draft
         self.bot_commands = bot_commands
         self.add_item(FinishGameButton())
+
+
+class SimulationFinishView(discord.ui.View):
+    """View to submit a completed simulation roster by an experienced captain"""
+    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
+        super().__init__(timeout=3600.0)
+        self.draft = draft
+        self.bot_commands = bot_commands
+        self.add_item(SimulationSubmitButton())
+
+
+class SimulationSubmitButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(label="🧪 시뮬 결과 제출", style=discord.ButtonStyle.success, custom_id="submit_simulation")
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        view: SimulationFinishView = self.view  # type: ignore
+        draft = view.draft
+        user = interaction.user
+        # Only the simulation author (experienced captain) or bot owner can submit
+        is_owner = False
+        try:
+            if isinstance(interaction.client, commands.Bot):
+                is_owner = await interaction.client.is_owner(user)
+        except Exception:
+            is_owner = False
+        if user.id != (draft.simulation_author_id or 0) and not is_owner:
+            await interaction.response.send_message("시뮬레이션을 시작한 팀장만 제출할 수 있어", ephemeral=True)
+            return
+
+        # Persist the simulated balanced roster using MatchRecorder with simulation flags
+        try:
+            match_id = draft.match_id or f"{draft.guild_id}:{draft.channel_id}:{int(time.time())}"
+            draft.match_id = match_id
+            team1_players = [p for p in draft.players.values() if p.team == 1]
+            team2_players = [p for p in draft.players.values() if p.team == 2]
+
+            def _build_features(team_players: List[Player]) -> List[PlayerFeature]:
+                features: List[PlayerFeature] = []
+                roster = []
+                try:
+                    roster = view.bot_commands.roster_store.load(draft.guild_id)
+                except Exception:
+                    roster = []
+                for p in team_players:
+                    rp = next((r for r in roster if r.user_id == p.user_id), None)
+                    features.append(
+                        PlayerFeature(
+                            user_id=p.user_id,
+                            display_name=p.username,
+                            rating=(rp.rating if rp else None),
+                            servant=draft.confirmed_servants.get(p.user_id),
+                            is_captain=p.is_captain,
+                            pick_order=None,
+                        )
+                    )
+                return features
+
+            record = view.bot_commands.match_recorder.write_prematch(
+                match_id=match_id,
+                guild_id=draft.guild_id,
+                channel_id=draft.channel_id,
+                team_size=draft.team_size,
+                captains=[uid for uid, pl in draft.players.items() if pl.is_captain],
+                team1=_build_features(team1_players),
+                team2=_build_features(team2_players),
+                bans=sorted(list(draft.banned_servants)) if draft.banned_servants else [],
+                mode_name="sim_balanced",
+                sim_session=getattr(draft, "simulation_session_id", None),
+                author_id=getattr(draft, "simulation_author_id", None),
+                is_simulation=True,
+                sim_author_captain=getattr(draft, "simulation_author_id", None),
+                sim_note="expert_balanced",
+                draft_type="simulation",
+                balance_algorithm=(draft.auto_balance_result.get("algorithm") if getattr(draft, "auto_balance_result", None) else None),
+                predicted_balance_score=(draft.auto_balance_result.get("balance_score") if getattr(draft, "auto_balance_result", None) else None),
+                predicted_confidence=(draft.auto_balance_result.get("confidence") if getattr(draft, "auto_balance_result", None) else None),
+                processing_time=float((draft.auto_balance_result or {}).get("processing_time", 0.0)) if hasattr(draft, 'auto_balance_result') else 0.0,
+                auto_balance_used=(True if getattr(draft, "auto_balance_result", None) else False),
+            )
+            # Enrich with flags if available
+            try:
+                record.is_simulation = True  # type: ignore[attr-defined]
+                record.sim_author_captain = draft.simulation_author_id  # type: ignore[attr-defined]
+                record.sim_note = "expert_balanced"  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        except Exception as e:
+            await interaction.response.send_message("제출 중 문제가 발생했어", ephemeral=True)
+            return
+
+        # Auto-update preferred_servants based on this simulation roster
+        try:
+            roster = view.bot_commands.roster_store.load(draft.guild_id)
+            rp_map = {rp.user_id: rp for rp in roster}
+            for p in team1_players + team2_players:
+                char = draft.confirmed_servants.get(p.user_id)
+                if not char:
+                    continue
+                rp = rp_map.get(p.user_id)
+                if not rp:
+                    rp = RosterPlayer(user_id=p.user_id, display_name=str(p.user_id))
+                    rp_map[p.user_id] = rp
+                prefs = getattr(rp, 'preferred_servants', []) or []
+                if char not in prefs:
+                    prefs.append(char)
+                    rp.preferred_servants = prefs
+            view.bot_commands.roster_store.add_or_update(draft.guild_id, list(rp_map.values()))
+        except Exception as _e:
+            logger.info(f"Preferred-servants auto-update (simulation) skipped: {_e}")
+
+        await interaction.response.send_message("시뮬레이션 결과를 저장했어! 고마워.", ephemeral=True)
+        # Disable the view to prevent duplicate submissions
+        try:
+            channel = view.bot_commands._get_draft_channel(draft)
+            if channel:
+                async for msg in channel.history(limit=10):
+                    if msg.embeds and msg.author == view.bot_commands.bot.user:
+                        try:
+                            await msg.edit(view=None)
+                        except Exception:
+                            pass
+                        break
+        except Exception:
+            pass
 
 
 class FinishGameButton(discord.ui.Button):
