@@ -55,7 +55,6 @@ class DraftPhase(Enum):
     SERVANT_SELECTION = "servant_selection"
     SERVANT_RESELECTION = "servant_reselection"
     TEAM_SELECTION = "team_selection"
-    FINAL_SWAP = "final_swap"
     COMPLETED = "completed"
 
 
@@ -375,7 +374,8 @@ class TeamDraftCommands(BaseCommands):
     @commands.command(
         name="밸런스분석",
         help="현재 완료된 드래프트의 밸런스를 AI가 분석해줘",
-        brief="AI 밸런스 분석"
+        brief="AI 밸런스 분석",
+        hidden=True
     )
     async def analyze_completed_draft_balance(self, ctx: commands.Context) -> None:
         channel_id = ctx.channel.id
@@ -662,9 +662,7 @@ class TeamDraftCommands(BaseCommands):
     async def draft_simulate_prefix(self, ctx: commands.Context, *, args: str = "") -> None:
         await self._handle_simulation_start(ctx, args)
 
-    @app_commands.command(name="페어시뮬", description="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다")
-    async def draft_simulate_slash(self, interaction: discord.Interaction, players: str = "", team_size: int = 6) -> None:
-        await self._handle_simulation_start(interaction, f"{players} team_size:{team_size}")
+
 
     @command_handler()
     async def _handle_simulation_start(self, ctx_or_interaction: CommandContext, args: str = "") -> None:
@@ -703,10 +701,6 @@ class TeamDraftCommands(BaseCommands):
         await self.send_success(ctx_or_interaction, f"시뮬레이션 드래프트가 시작되었어! ({team_size}v{team_size})")
 
     # Status, cancel, and test commands that were previously outside the class
-    @app_commands.command(name="페어상태", description="현재 드래프트 상태를 확인해")
-    async def draft_status_slash(self, interaction: discord.Interaction) -> None:
-        """Check current draft status"""
-        await self._handle_draft_status(interaction)
 
     @commands.command(
         name="페어상태",
@@ -746,11 +740,6 @@ class TeamDraftCommands(BaseCommands):
             
         await self.send_response(ctx_or_interaction, embed=embed)
 
-    @app_commands.command(name="페어취소", description="진행 중인 드래프트를 취소해")
-    async def draft_cancel_slash(self, interaction: discord.Interaction) -> None:
-        """Cancel current draft"""
-        await self._handle_draft_cancel(interaction)
-
     @commands.command(
         name="페어취소",
         help="진행 중인 드래프트를 취소해",
@@ -781,29 +770,6 @@ class TeamDraftCommands(BaseCommands):
             del self.draft_start_times[channel_id]
         
         await self.send_success(ctx_or_interaction, "드래프트를 취소했어.")
-
-    @app_commands.command(name="페어테스트", description="팀 드래프트 시스템 테스트")
-    async def draft_test_slash(self, interaction: discord.Interaction) -> None:
-        """Test if team draft system is working"""
-        logger.info(f"페어테스트 command called by {interaction.user.name}")
-        
-        test_embed = discord.Embed(
-            title="🧪 팀 드래프트 시스템 테스트",
-            description="시스템이 정상 작동 중이야! 사용 가능한 명령어들:\n\n"
-            "• `/페어 team_size:2` - 2v2 드래프트 (4명 필요)\n"
-            "• `/페어 team_size:3` - 3v3 드래프트 (6명 필요)\n"
-            "• `/페어 team_size:5` - 5v5 드래프트 (10명 필요)\n"
-            "• `/페어` - 6v6 드래프트 (12명 필요, 기본값)\n\n"
-            "**매개변수 예시:**\n"
-            "• `test_mode:True` - 테스트 모드 (AI가 자동 선택)\n"
-            "• 예시: `뮤 페어 @user1 @user2 @user3 @user4 captains:@user1 @user3`\n\n"
-            "**기타 명령어:**\n"
-            "• `/페어상태` - 현재 드래프트 상태 확인\n"
-            "• `/페어취소` - 진행 중인 드래프트 취소\n\n",
-            color=SUCCESS_COLOR
-        )
-        
-        await self.send_response(interaction, embed=test_embed)
 
     # Utility methods that were previously outside the class
     async def _cleanup_views(self, channel_id: int) -> None:
@@ -863,6 +829,78 @@ class TeamDraftCommands(BaseCommands):
             sanitized = sanitized[:29] + "..."
             
         return sanitized
+
+    def _register_view(self, channel_id: int, view: discord.ui.View) -> None:
+        """Register a view for cleanup tracking"""
+        if channel_id not in self.registered_views:
+            self.registered_views[channel_id] = []
+        self.registered_views[channel_id].append(view)
+
+    async def _safe_api_call(self, call_func, bucket: str = "default", max_retries: int = 3):
+        """Safely make Discord API calls with rate limiting and retry logic"""
+        
+        for attempt in range(max_retries):
+            try:
+                # Check rate limit bucket
+                current_time = time.time()
+                last_call = self.rate_limit_buckets.get(bucket, 0)
+                call_count = self.api_call_counts.get(bucket, 0)
+                
+                # Reset call count every minute
+                if current_time - last_call > 60:
+                    self.api_call_counts[bucket] = 0
+                    call_count = 0
+                
+                # Rate limit: max 50 calls per minute per bucket
+                if call_count >= 50:
+                    wait_time = 60 - (current_time - last_call)
+                    if wait_time > 0:
+                        logger.info(f"Rate limiting bucket '{bucket}', waiting {wait_time:.1f}s")
+                        await asyncio.sleep(wait_time)
+                        self.api_call_counts[bucket] = 0
+                
+                # Update counters
+                self.rate_limit_buckets[bucket] = current_time
+                self.api_call_counts[bucket] = call_count + 1
+                
+                # Make the API call
+                return await call_func()
+                
+            except discord.HTTPException as e:
+                if e.status == 429:  # Rate limited
+                    retry_after = e.retry_after if hasattr(e, 'retry_after') else (2 ** attempt)
+                    logger.warning(f"Discord rate limit hit, retrying after {retry_after}s (attempt {attempt+1})")
+                    await asyncio.sleep(retry_after)
+                    continue
+                elif e.status >= 500:  # Server error
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)  # Exponential backoff with jitter
+                    logger.warning(f"Discord server error {e.status}, retrying after {wait_time:.1f}s (attempt {attempt+1})")
+                    await asyncio.sleep(wait_time)
+                    continue
+                else:
+                    # Client error, don't retry
+                    raise e
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    raise e
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(f"API call failed, retrying after {wait_time:.1f}s (attempt {attempt+1}): {e}")
+                await asyncio.sleep(wait_time)
+        
+        raise Exception(f"API call failed after {max_retries} attempts")
+
+    def _get_draft_channel(self, draft: DraftSession):
+        """Get the channel where draft messages should be sent (thread if exists, otherwise main channel)"""
+        if draft.thread_id and self.bot:
+            # Try to get the thread first
+            thread = self.bot.get_channel(draft.thread_id)
+            if thread:
+                return thread
+        
+        # Fall back to main channel
+        if self.bot:
+            return self.bot.get_channel(draft.channel_id)
+        return None
 
 
 class TeamCompositionChoiceView(discord.ui.View):
@@ -958,43 +996,6 @@ class AutoBalanceButton(discord.ui.Button):
         if channel_id in self.draft_start_times:
             del self.draft_start_times[channel_id]
         logger.info(f"Draft in channel {channel_id} cleaned up after outcome")
-
-    @app_commands.command(name="페어시작", description="버튼으로 참가를 받아 드래프트를 시작해. (예: 12명)")
-    async def draft_start_join_slash(self, interaction: discord.Interaction, total_players: int = 12) -> None:
-        if total_players % 2 != 0 or total_players <= 0:
-            await self.send_error(interaction, "총 인원수는 2의 배수여야 해")
-            return
-        if total_players // 2 not in [2, 3, 5, 6]:
-            await self.send_error(interaction, "팀 크기는 2,3,5,6 중 하나여야 해 (예: 12, 6v6)")
-            return
-        channel_id = interaction.channel_id or 0
-        guild_id = interaction.guild_id or 0
-        if channel_id in self.active_drafts:
-            await self.send_error(interaction, "이미 진행 중인 드래프트가 있어.")
-            return
-        team_size = total_players // 2
-        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
-        draft.started_by_user_id = interaction.user.id
-        draft.join_target_total_players = total_players
-        self.active_drafts[channel_id] = draft
-        self.draft_start_times[channel_id] = time.time()
-
-        embed = discord.Embed(
-            title=f"🏁 드래프트 참가 모집 ({team_size}v{team_size})",
-            description="아래 버튼을 눌러 참가하거나 취소해. 인원이 차면 자동으로 진행돼.",
-            color=INFO_COLOR,
-        )
-        embed.add_field(name="필요 인원", value=f"0/{total_players}")
-        embed.add_field(name="참가자", value="없음", inline=False)
-
-        view = JoinDraftView(draft, self)
-        self._register_view(channel_id, view)
-        if not interaction.response.is_done():
-            await interaction.response.send_message(embed=embed, view=view)
-            msg = await interaction.original_response()
-        else:
-            msg = await interaction.followup.send(embed=embed, view=view, wait=True)
-        draft.join_message_id = msg.id
 
     async def _finalize_join_and_start(self, draft: DraftSession, starter_interaction: Optional[discord.Interaction] = None) -> None:
         # Build player list from joined users
@@ -1428,38 +1429,7 @@ class AutoBalanceButton(discord.ui.Button):
         # Legacy path removed in favor of the new AI balancing integrated flow
         await self.send_error(ctx, "이 기능은 더 이상 지원되지 않아. 새 AI 드래프트를 사용해줘.")
 
-    @app_commands.command(name="페어", description="팀 드래프트를 시작해 (지원: 2v2/3v3/5v5/6v6)")
-    async def draft_start_slash(
-        self,
-        interaction: discord.Interaction,
-        players: str = "",
-        test_mode: bool = False,
-        team_size: int = 6,
-        captains: str = ""
-    ) -> None:
-        """Start a new draft session"""
-        # Validate team_size
-        if team_size not in [2, 3, 5, 6]:
-            await interaction.response.send_message(
-                "팀 크기는 2 (2v2), 3 (3v3), 5 (5v5), 또는 6 (6v6)만 가능해.", ephemeral=True
-            )
-            return
-            
-        logger.info(f"페어 command called by {interaction.user.name} with test_mode={test_mode}, team_size={team_size} (v5)")
-        try:
-            await self._handle_draft_start(interaction, players, test_mode, team_size, captains)
-        except Exception as e:
-            logger.error(f"Error in draft_start_slash: {e}", exc_info=True)
-            if not interaction.response.is_done():
-                await interaction.response.send_message(
-                    f"⚠️ 명령어 실행 중 문제가 생겼어: {str(e)}", 
-                    ephemeral=True
-                )
-            else:
-                await interaction.followup.send(
-                    f"⚠️ 명령어 실행 중 문제가 생겼어: {str(e)}", 
-                    ephemeral=True
-                )
+
 
     @commands.command(
         name="페어결과",
@@ -1474,13 +1444,7 @@ class AutoBalanceButton(discord.ui.Button):
             logger.error(f"record_match_result_prefix failed: {e}")
             await self.send_error(ctx, "결과 기록 중 문제가 발생했어")
 
-    @app_commands.command(name="페어결과", description="최근 드래프트 경기의 결과를 기록합니다")
-    async def record_match_result_slash(self, interaction: discord.Interaction, winner: int, score: str = "") -> None:
-        try:
-            await self._handle_record_result(interaction, winner, score)
-        except Exception as e:
-            logger.error(f"record_match_result_slash failed: {e}")
-            await self.send_error(interaction, "결과 기록 중 문제가 발생했어")
+
 
     @command_handler()
     async def _handle_record_result(self, ctx_or_interaction: CommandContext, winner: int, score: str = "") -> None:
@@ -1522,84 +1486,19 @@ class AutoBalanceButton(discord.ui.Button):
             logger.error(f"Failed to write outcome: {e}")
             await self.send_error(ctx_or_interaction, "결과를 저장할 수가 없네")
 
-    # Roster management (owner-only)
-    @commands.command(name="로스터추가", help="서버 로스터에 플레이어를 추가/업데이트합니다 (owner-only)")
-    @commands.is_owner()
-    async def roster_add_prefix(self, ctx: commands.Context, member: discord.Member, rating: float | None = None) -> None:
-        guild_id = ctx.guild.id if ctx.guild else 0
-        player = RosterPlayer(user_id=member.id, display_name=member.display_name, rating=rating)
-        self.roster_store.add_or_update(guild_id, [player])
-        await self.send_success(ctx, f"로스터에 {member.display_name}를 추가/업데이트했어")
+    # Roster management commands moved to src/commands/roster_management.py
 
-    @app_commands.command(name="roster_add", description="서버 로스터에 플레이어를 추가/업데이트합니다 (owner-only)")
-    @owner_only()
-    async def roster_add_slash(self, interaction: discord.Interaction, member: discord.Member, rating: Optional[float] = None) -> None:
-        guild_id = interaction.guild_id or 0
-        player = RosterPlayer(user_id=member.id, display_name=member.display_name, rating=rating)
-        self.roster_store.add_or_update(guild_id, [player])
-        await self.send_success(interaction, f"로스터에 {member.display_name}를 추가/업데이트했어")
 
-    @commands.command(name="로스터삭제", help="서버 로스터에서 플레이어를 제거합니다 (owner-only)")
-    @commands.is_owner()
-    async def roster_remove_prefix(self, ctx: commands.Context, member: discord.Member) -> None:
-        guild_id = ctx.guild.id if ctx.guild else 0
-        self.roster_store.remove(guild_id, [member.id])
-        await self.send_success(ctx, f"로스터에서 {member.display_name}를 제거했어")
-
-    @app_commands.command(name="roster_remove", description="서버 로스터에서 플레이어를 제거합니다 (owner-only)")
-    @owner_only()
-    async def roster_remove_slash(self, interaction: discord.Interaction, member: discord.Member) -> None:
-        guild_id = interaction.guild_id or 0
-        self.roster_store.remove(guild_id, [member.id])
-        await self.send_success(interaction, f"로스터에서 {member.display_name}를 제거했어")
-
-    @commands.command(name="로스터서번트", help="특정 플레이어의 서번트 숙련도 점수를 설정합니다 (owner-only)")
-    @commands.is_owner()
-    async def roster_servant_prefix(self, ctx: commands.Context, member: discord.Member, servant: str, rating: float | None = None) -> None:
-        guild_id = ctx.guild.id if ctx.guild else 0
-        self.roster_store.set_servant_rating(guild_id, member.id, servant, rating)
-        await self.send_success(ctx, f"{member.display_name}의 {servant} 숙련도를 설정했어")
-
-    @app_commands.command(name="roster_servant", description="특정 플레이어의 서번트 숙련도 점수를 설정합니다 (owner-only)")
-    @owner_only()
-    async def roster_servant_slash(self, interaction: discord.Interaction, member: discord.Member, servant: str, rating: Optional[float] = None) -> None:
-        guild_id = interaction.guild_id or 0
-        self.roster_store.set_servant_rating(guild_id, member.id, servant, rating)
-        await self.send_success(interaction, f"{member.display_name}의 {servant} 숙련도를 설정했어")
-
-    # Preferred servants management commands removed per request; preferences will be updated automatically on data collection
-
-    @commands.command(name="로스터보기", help="서버 로스터를 표시합니다 (owner-only)")
-    @commands.is_owner()
-    async def roster_list_prefix(self, ctx: commands.Context) -> None:
-        guild_id = ctx.guild.id if ctx.guild else 0
-        roster = self.roster_store.load(guild_id)
-        if not roster:
-            await self.send_response(ctx, "로스터가 비어 있어")
-            return
-        lines = [f"• {p.display_name} ({p.user_id}) - rating: {p.rating if p.rating is not None else 'N/A'}" for p in roster]
-        await self.send_response(ctx, "\n".join(lines))
-
-    @app_commands.command(name="roster_list", description="서버 로스터를 표시합니다 (owner-only)")
-    @owner_only()
-    async def roster_list_slash(self, interaction: discord.Interaction) -> None:
-        guild_id = interaction.guild_id or 0
-        roster = self.roster_store.load(guild_id)
-        if not roster:
-            await self.send_response(interaction, "로스터가 비어 있어")
-            return
-        lines = [f"• {p.display_name} ({p.user_id}) - rating: {p.rating if p.rating is not None else 'N/A'}" for p in roster]
-        await self.send_response(interaction, "\n".join(lines))
 
     @commands.command(
         name="페어시뮬",
-        help="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다 (기본 6v6)",
+        help="팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다 (기본 6v6)",
         brief="시뮬 드래프트",
         description="사용법: 뮤 페어시뮬 [team_size:숫자] [players:@...]")
     async def draft_simulate_prefix(self, ctx: commands.Context, *, args: str = "") -> None:
         await self._handle_simulation_start(ctx, args)
 
-    @app_commands.command(name="페어시뮬", description="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다")
+    @app_commands.command(name="페어시뮬", description="팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다")
     async def draft_simulate_slash(self, interaction: discord.Interaction, players: str = "", team_size: int = 6) -> None:
         await self._handle_simulation_start(interaction, f"{players} team_size:{team_size}")
 
@@ -2245,7 +2144,6 @@ class AutoBalanceButton(discord.ui.Button):
             DraftPhase.SERVANT_SELECTION: "서번트 선택",
             DraftPhase.SERVANT_RESELECTION: "서번트 재선택",
             DraftPhase.TEAM_SELECTION: "팀원 선택",
-            DraftPhase.FINAL_SWAP: "최종 교체",
             DraftPhase.COMPLETED: "완료"
         }
         
@@ -3580,7 +3478,7 @@ class AutoBalanceButton(discord.ui.Button):
         if not current_draft:
             # Fallback: search for any draft that needs completion
             for channel_id, draft in self.active_drafts.items():
-                if draft.phase in [DraftPhase.FINAL_SWAP, DraftPhase.TEAM_SELECTION]:
+                if draft.phase == DraftPhase.TEAM_SELECTION:
                     current_draft = draft
                     current_channel_id = channel_id
                     break
@@ -3780,41 +3678,6 @@ class AutoBalanceButton(discord.ui.Button):
         
         return False
 
-    async def _start_final_swap_phase_for_draft(self, draft: DraftSession) -> None:
-        """Start final swap phase for specific draft"""
-        draft.phase = DraftPhase.FINAL_SWAP
-        
-        # Use thread if available, otherwise main channel
-        channel = self._get_draft_channel(draft)
-        if not channel:
-            return
-        
-        embed = discord.Embed(
-            title="🔄 최종 교체 단계",
-            description="팀 내에서 서번트를 자유롭게 교체할 수 있어.\n"
-                       "교체를 원하지 않으면 완료 버튼을 눌러줘.",
-            color=INFO_COLOR
-        )
-        
-        # Show final teams
-        team1_players = [p for p in draft.players.values() if p.team == 1]
-        team2_players = [p for p in draft.players.values() if p.team == 2]
-        
-        def format_final_team(players):
-            return "\n".join([
-                f"{draft.confirmed_servants[p.user_id]} - {p.username}"
-                for p in players
-            ])
-        
-        embed.add_field(name="팀 1 최종 로스터", value=format_final_team(team1_players), inline=True)
-        embed.add_field(name="팀 2 최종 로스터", value=format_final_team(team2_players), inline=True)
-        
-        view = FinalSwapView(draft, self)
-        self._register_view(draft.channel_id, view)
-        await self._safe_api_call(
-            lambda: channel.send(embed=embed, view=view),
-            bucket=f"final_swap_{draft.channel_id}"
-        )
 
 
 class TeamSelectionView(discord.ui.View):
@@ -4048,17 +3911,7 @@ class PlayerDropdown(discord.ui.Select):
                     team2_count += 1
 
 
-class FinalSwapView(discord.ui.View):
-    """View for final swapping phase"""
-    
-    def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
-        super().__init__(timeout=1800.0)  # 30 minutes
-        self.draft = draft
-        self.bot_commands = bot_commands
-        self.team_ready = {1: False, 2: False}
-        
-        self.add_item(CompleteButton(1))
-        self.add_item(CompleteButton(2))
+
 
 
 class JoinDraftView(discord.ui.View):
@@ -4386,60 +4239,7 @@ class GameResultModal(discord.ui.Modal, title="경기 결과 입력"):
         await self.bot_commands._final_cleanup_after_outcome(self.draft)
 
 
-class CompleteButton(discord.ui.Button):
-    """Button to complete the draft for a team"""
-    
-    def __init__(self, team_number: int):
-        super().__init__(
-            label=f"팀 {team_number} 완료",
-            style=discord.ButtonStyle.primary,
-            custom_id=f"complete_{team_number}"
-        )
-        self.team_number = team_number
 
-    async def callback(self, interaction: discord.Interaction) -> None:
-        """Handle team completion"""
-        view: FinalSwapView = self.view
-        user_id = interaction.user.id
-        
-        # Validate current phase - reject if not in final swap phase
-        if view.draft.phase != DraftPhase.FINAL_SWAP:
-            await interaction.response.send_message(
-                "최종 교체 단계가 이미 끝났어. 이 인터페이스는 더 이상 사용할 수 없어.", ephemeral=True
-            )
-            return
-        
-        # Check if user is captain of this team
-        player = view.draft.players.get(user_id)
-        if not player:
-            await interaction.response.send_message(
-                "드래프트 참가자가 아니야.", ephemeral=True
-            )
-            return
-            
-        user_team = player.team
-        is_captain = player.is_captain
-        
-        # In test mode, allow the real user to complete for any team
-        if view.draft.is_test_mode and user_id == view.draft.real_user_id:
-            # In test mode, the real user can act as any captain for any team
-            is_captain = True
-            user_team = self.team_number  # Override team check in test mode
-        
-        if not is_captain or user_team != self.team_number:
-            await interaction.response.send_message(
-                f"팀 {self.team_number}의 팀장만 완료할 수 있어.", ephemeral=True
-            )
-            return
-        
-        view.team_ready[self.team_number] = True
-        self.disabled = True
-        
-        await interaction.response.edit_message(view=view)
-        
-        # Check if both teams are ready
-        if all(view.team_ready.values()):
-            await view.bot_commands._complete_draft(view.draft)
 
 
 
@@ -6100,38 +5900,3 @@ class ConfirmTeamSelectionButton(discord.ui.Button):
             elif team2_count < target_team_size:
                 player.team = 2
                 team2_count += 1
-
-
-# =============================================================================
-# FIXES IMPLEMENTED FOR DRAFT SYSTEM ISSUES
-# =============================================================================
-#
-# Issue 1: "자신의 선택 인터페이스만 사용할 수 있어." error during servant selection
-# ---------------------------------------------------------------------------------
-# Problem: Race conditions in Discord's interaction handling when multiple users 
-#          interact simultaneously caused incorrect user ID validation
-#
-# Solutions implemented:
-# 1. Enhanced validation with null checks for interaction.user
-# 2. Added detailed logging with user display names for debugging
-# 3. Added check to verify users are actually in the draft
-# 4. Graceful error handling with user-friendly messages
-# 5. Additional validation layers to catch Discord API inconsistencies
-#
-# Issue 2: Captain voting duplicate vote count race conditions
-# ------------------------------------------------------------
-# Problem: Non-atomic vote toggle operations allowed duplicate votes and 
-#          multiple completion triggers during concurrent interactions
-#
-# Solutions implemented:
-# 1. Added asyncio.Lock for atomic vote operations in CaptainVotingView
-# 2. All vote manipulation now happens within the lock
-# 3. Added _finalization_started flag to prevent multiple finalization calls
-# 4. Atomic check for vote limits and completion triggers
-# 5. Protection against voting after finalization starts
-#
-# These fixes ensure the draft system is robust against high concurrent load
-# and provides better error reporting for troubleshooting.
-# =============================================================================
-
-

@@ -23,6 +23,7 @@ from src.commands.system import SystemCommands
 from src.commands.arknights import ArknightsCommands
 from src.commands.ai import AICommands
 from src.commands.team_draft import TeamDraftCommands
+from src.commands.roster_management import RosterCommands
 from src.commands.fate_replays import FateReplayCommands
 
 from src.services.api.service import APIService
@@ -76,6 +77,7 @@ class DiscordBot(commands.Bot):
             ArknightsCommands,
             AICommands,
             TeamDraftCommands,
+            RosterCommands,
             FateReplayCommands
         ]
         self.memory_db: Optional[MemoryDB] = None
@@ -220,7 +222,7 @@ class DiscordBot(commands.Bot):
                     elif command_class == AICommands:
                         cog = command_class()
                         cog.bot = self  # Set bot instance for API access
-                    elif command_class in [TeamDraftCommands, FateReplayCommands]:
+                    elif command_class in [TeamDraftCommands, RosterCommands, FateReplayCommands]:
                         cog = command_class(self)  # Pass bot as constructor parameter
                     else:
                         cog = command_class()
