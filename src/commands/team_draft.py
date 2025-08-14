@@ -515,6 +515,65 @@ class TeamDraftCommands(BaseCommands):
         except Exception as e:
             logger.warning(f"Failed to announce auto-balanced teams: {e}")
 
+    async def _cleanup_task(self) -> None:
+        """Background task to clean up old drafts after 1 hour (2 hours if waiting for outcome)"""
+        while True:
+            try:
+                await asyncio.sleep(300)  # Check every 5 minutes
+                current_time = time.time()
+                expired_channels = []
+                
+                for channel_id, start_time in self.draft_start_times.items():
+                    # Determine timeout based on phase: if roster completed and waiting for outcome, use 2 hours
+                    draft = self.active_drafts.get(channel_id)
+                    timeout_seconds = 7200 + 30 if (draft and draft.phase == DraftPhase.COMPLETED and not draft.outcome_recorded) else 3630
+                    if current_time - start_time > timeout_seconds:
+                        if draft:
+                            # Skip very early stage only (captain voting), otherwise allow
+                            if draft.phase != DraftPhase.CAPTAIN_VOTING:
+                                expired_channels.append(channel_id)
+                            else:
+                                logger.info(f"Skipping cleanup of channel {channel_id} - still in captain voting phase")
+                        else:
+                            expired_channels.append(channel_id)
+                
+                for channel_id in expired_channels:
+                    logger.info(f"Auto-cleaning expired draft in channel {channel_id} (safety check passed)")
+                    
+                    # Clean up draft state
+                    if channel_id in self.active_drafts:
+                        draft = self.active_drafts[channel_id]
+                        
+                        # Stop all active views to prevent memory leaks
+                        await self._cleanup_views(channel_id)
+                        
+                        # Clean up all message IDs to prevent memory leaks
+                        await self._cleanup_all_message_ids(draft)
+                        
+                        del self.active_drafts[channel_id]
+                    if channel_id in self.draft_start_times:
+                        del self.draft_start_times[channel_id]
+                    
+                    # Send cleanup notification to channel if possible
+                    if self.bot:
+                        try:
+                            channel = self.bot.get_channel(channel_id)
+                            if channel:
+                                embed = discord.Embed(
+                                    title="⏰ 드래프트 자동 정리",
+                                    description="시간이 지나서 드래프트를 자동으로 정리했어.",
+                                    color=INFO_COLOR
+                                )
+                                await self._safe_api_call(
+                                    lambda: channel.send(embed=embed),
+                                    bucket=f"cleanup_{channel_id}"
+                                )
+                        except Exception as e:
+                            logger.warning(f"Failed to send cleanup notification: {e}")
+                            
+            except Exception as e:
+                logger.error(f"Error in cleanup task: {e}")
+
 
 class TeamCompositionChoiceView(discord.ui.View):
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
@@ -2902,65 +2961,6 @@ class AutoBalanceButton(discord.ui.Button):
             sanitized = sanitized[:29] + "..."
             
         return sanitized
-
-    async def _cleanup_task(self) -> None:
-        """Background task to clean up old drafts after 1 hour (2 hours if waiting for outcome)"""
-        while True:
-            try:
-                await asyncio.sleep(300)  # Check every 5 minutes
-                current_time = time.time()
-                expired_channels = []
-                
-                for channel_id, start_time in self.draft_start_times.items():
-                    # Determine timeout based on phase: if roster completed and waiting for outcome, use 2 hours
-                    draft = self.active_drafts.get(channel_id)
-                    timeout_seconds = 7200 + 30 if (draft and draft.phase == DraftPhase.COMPLETED and not draft.outcome_recorded) else 3630
-                    if current_time - start_time > timeout_seconds:
-                        if draft:
-                            # Skip very early stage only (captain voting), otherwise allow
-                            if draft.phase != DraftPhase.CAPTAIN_VOTING:
-                                expired_channels.append(channel_id)
-                            else:
-                                logger.info(f"Skipping cleanup of channel {channel_id} - still in captain voting phase")
-                        else:
-                            expired_channels.append(channel_id)
-                
-                for channel_id in expired_channels:
-                    logger.info(f"Auto-cleaning expired draft in channel {channel_id} (safety check passed)")
-                    
-                    # Clean up draft state
-                    if channel_id in self.active_drafts:
-                        draft = self.active_drafts[channel_id]
-                        
-                        # Stop all active views to prevent memory leaks
-                        await self._cleanup_views(channel_id)
-                        
-                        # Clean up all message IDs to prevent memory leaks
-                        await self._cleanup_all_message_ids(draft)
-                        
-                        del self.active_drafts[channel_id]
-                    if channel_id in self.draft_start_times:
-                        del self.draft_start_times[channel_id]
-                    
-                    # Send cleanup notification to channel if possible
-                    if self.bot:
-                        try:
-                            channel = self.bot.get_channel(channel_id)
-                            if channel:
-                                embed = discord.Embed(
-                                    title="⏰ 드래프트 자동 정리",
-                                    description="시간이 지나서 드래프트를 자동으로 정리했어.",
-                                    color=INFO_COLOR
-                                )
-                                await self._safe_api_call(
-                                    lambda: channel.send(embed=embed),
-                                    bucket=f"cleanup_{channel_id}"
-                                )
-                        except Exception as e:
-                            logger.warning(f"Failed to send cleanup notification: {e}")
-                            
-            except Exception as e:
-                logger.error(f"Error in cleanup task: {e}")
 
     async def _start_servant_ban_phase(self, draft: DraftSession) -> None:
         """Start servant ban phase with automated system bans followed by captain bans"""
