@@ -796,6 +796,108 @@ class TeamDraftCommands(BaseCommands):
             return self.bot.get_channel(draft.channel_id)
         return None
 
+    @app_commands.command(name="페어취소", description="진행 중인 드래프트를 취소해")
+    async def draft_cancel_slash(self, interaction: discord.Interaction) -> None:
+        """Cancel current draft"""
+        await self._handle_draft_cancel(interaction)
+
+    @commands.command(
+        name="페어취소",
+        help="진행 중인 드래프트를 취소해",
+        brief="드래프트 취소",
+        aliases=["draft_cancel", "드래프트취소"]
+    )
+    async def draft_cancel_chat(self, ctx: commands.Context) -> None:
+        """Cancel current draft via chat command"""
+        await self._handle_draft_cancel(ctx)
+
+    @app_commands.command(name="페어정리", description="진행 중인 드래프트를 강제로 정리해 (관리자용)")
+    @app_commands.default_permissions(manage_messages=True)
+    async def draft_force_cleanup_slash(self, interaction: discord.Interaction, channel_id: str = None) -> None:
+        """Force cleanup a draft (admin only)"""
+        await self._handle_force_cleanup(interaction, channel_id)
+
+    @commands.command(name="페어정리", help="진행 중인 드래프트를 강제로 정리해 (관리자용)", aliases=["draft_cleanup"], hidden=True)
+    @commands.has_permissions(manage_messages=True)
+    async def draft_force_cleanup_chat(self, ctx: commands.Context, channel_id: str = None) -> None:
+        """Force cleanup a draft (admin only)"""
+        await self._handle_force_cleanup(ctx, channel_id)
+
+    async def _handle_draft_cancel(self, ctx_or_interaction) -> None:
+        """Handle draft cancellation"""
+        channel_id = self.get_channel_id(ctx_or_interaction)
+        
+        if channel_id not in self.active_drafts:
+            await self.send_error(ctx_or_interaction, "진행 중인 드래프트가 없어.")
+            return
+        
+        draft = self.active_drafts[channel_id]
+        user_id = self.get_user_id(ctx_or_interaction)
+        
+        # Audit log
+        self._audit_log("draft_cancel", user_id, {
+            "channel_id": channel_id,
+            "draft_phase": draft.phase.value,
+            "players_count": len(draft.players),
+            "team_size": draft.team_size
+        })
+        
+        # Clean up
+        await self._cleanup_views(channel_id)
+        await self._cleanup_all_message_ids(draft)
+        
+        # Remove from tracking
+        if channel_id in self.active_drafts:
+            del self.active_drafts[channel_id]
+        if channel_id in self.draft_start_times:
+            del self.draft_start_times[channel_id]
+        
+        await self.send_success(ctx_or_interaction, "드래프트를 취소했어.")
+
+    async def _handle_force_cleanup(self, ctx_or_interaction, channel_id_str: str = None) -> None:
+        """Handle forced cleanup with permission check"""
+        if not self._has_admin_permission(ctx_or_interaction):
+            await self.send_error(ctx_or_interaction, "이 명령어는 메시지 관리 권한이 있는 사용자만 사용할 수 있어.")
+            return
+        
+        user_id = self.get_user_id(ctx_or_interaction)
+        
+        # Determine target channel
+        if channel_id_str:
+            try:
+                target_channel_id = int(channel_id_str)
+            except ValueError:
+                await self.send_error(ctx_or_interaction, "올바른 채널 ID를 입력해줘.")
+                return
+        else:
+            target_channel_id = self.get_channel_id(ctx_or_interaction)
+        
+        # Check if draft exists
+        if target_channel_id not in self.active_drafts:
+            await self.send_error(ctx_or_interaction, f"채널 {target_channel_id}에 진행 중인 드래프트가 없어.")
+            return
+        
+        # Get draft info for audit logging
+        draft = self.active_drafts[target_channel_id]
+        self._audit_log("force_cleanup", user_id, {
+            "channel_id": target_channel_id,
+            "draft_phase": draft.phase.value,
+            "players_count": len(draft.players),
+            "team_size": draft.team_size
+        })
+        
+        # Reuse existing cleanup logic
+        await self._cleanup_views(target_channel_id)
+        await self._cleanup_all_message_ids(draft)
+        
+        # Remove from tracking
+        if target_channel_id in self.active_drafts:
+            del self.active_drafts[target_channel_id]
+        if target_channel_id in self.draft_start_times:
+            del self.draft_start_times[target_channel_id]
+        
+        await self.send_success(ctx_or_interaction, f"채널 {target_channel_id}의 드래프트를 강제로 정리했어.")
+
 
 class TeamCompositionChoiceView(discord.ui.View):
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
