@@ -209,6 +209,10 @@ class TeamDraftCommands(BaseCommands):
         
         # View tracking for memory management
         self.active_views: Dict[int, List[discord.ui.View]] = {}  # channel_id -> views
+        # Temporary alias for backward-compatibility with older helper methods
+        # Some utility methods may still reference `registered_views`.
+        # Keep an alias to avoid AttributeError during runtime until all callsites are unified.
+        self.registered_views = self.active_views
         
         # Audit logging
         self.audit_logs: List[Dict] = []  # Simple in-memory audit log
