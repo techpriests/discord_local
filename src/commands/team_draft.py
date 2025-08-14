@@ -653,123 +653,13 @@ class TeamDraftCommands(BaseCommands):
             msg = await interaction.followup.send(embed=embed, view=view, wait=True)
         draft.join_message_id = msg.id
 
-    # Simulation commands that were previously outside the class
-    @commands.command(
-        name="페어시뮬",
-        help="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다 (기본 6v6)",
-        brief="시뮬 드래프트",
-        description="사용법: 뮤 페어시뮬 [team_size:숫자] [players:@...]")
-    async def draft_simulate_prefix(self, ctx: commands.Context, *, args: str = "") -> None:
-        await self._handle_simulation_start(ctx, args)
 
-
-
-    @command_handler()
-    async def _handle_simulation_start(self, ctx_or_interaction: CommandContext, args: str = "") -> None:
-        # Parse team_size (default 6)
-        team_size = 6
-        lowered = args.lower()
-        if "team_size:2" in lowered or "team_size=2" in lowered:
-            team_size = 2
-        elif "team_size:3" in lowered or "team_size=3" in lowered:
-            team_size = 3
-        elif "team_size:5" in lowered or "team_size=5" in lowered:
-            team_size = 5
-        elif "team_size:6" in lowered or "team_size=6" in lowered:
-            team_size = 6
-        
-        if team_size not in [2, 3, 5, 6]:
-            await self.send_error(ctx_or_interaction, "팀 크기는 2, 3, 5, 6 중 하나여야 해")
-            return
-            
-        total_players = team_size * 2
-        channel_id = self.get_channel_id(ctx_or_interaction)
-        guild_id = self.get_guild_id(ctx_or_interaction) or 0
-        
-        if channel_id in self.active_drafts:
-            await self.send_error(ctx_or_interaction, "이미 진행 중인 드래프트가 있어.")
-            return
-            
-        # Create draft
-        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
-        draft.is_simulation = True
-        draft.started_by_user_id = self.get_user_id(ctx_or_interaction)
-        
-        self.active_drafts[channel_id] = draft
-        self.draft_start_times[channel_id] = time.time()
-        
-        await self.send_success(ctx_or_interaction, f"시뮬레이션 드래프트가 시작되었어! ({team_size}v{team_size})")
 
     # Status, cancel, and test commands that were previously outside the class
 
-    @commands.command(
-        name="페어상태",
-        help="현재 드래프트 상태를 확인해",
-        brief="드래프트 상태",
-        aliases=["draft_status"]
-    )
-    async def draft_status_chat(self, ctx: commands.Context) -> None:
-        """Check current draft status"""
-        await self._handle_draft_status(ctx)
 
-    @command_handler()
-    async def _handle_draft_status(self, ctx_or_interaction: CommandContext) -> None:
-        """Handle draft status check"""
-        channel_id = self.get_channel_id(ctx_or_interaction)
-        
-        if channel_id not in self.active_drafts:
-            await self.send_response(ctx_or_interaction, "진행 중인 드래프트가 없어.")
-            return
-            
-        draft = self.active_drafts[channel_id]
-        embed = discord.Embed(
-            title="📊 드래프트 상태",
-            description=f"현재 단계: {draft.phase.value}",
-            color=INFO_COLOR
-        )
-        
-        embed.add_field(
-            name="팀 구성",
-            value=f"{draft.team_size}v{draft.team_size} ({len(draft.players)}/{draft.team_size * 2}명)",
-            inline=True
-        )
-        
-        if draft.captains:
-            captain_names = [draft.players[cap_id].username for cap_id in draft.captains if cap_id in draft.players]
-            embed.add_field(name="팀장", value=", ".join(captain_names), inline=True)
-            
-        await self.send_response(ctx_or_interaction, embed=embed)
 
-    @commands.command(
-        name="페어취소",
-        help="진행 중인 드래프트를 취소해",
-        brief="드래프트 취소",
-        aliases=["draft_cancel"]
-    )
-    async def draft_cancel_chat(self, ctx: commands.Context) -> None:
-        """Cancel current draft"""
-        await self._handle_draft_cancel(ctx)
 
-    async def _handle_draft_cancel(self, ctx_or_interaction: CommandContext) -> None:
-        """Handle draft cancellation"""
-        channel_id = self.get_channel_id(ctx_or_interaction)
-        
-        if channel_id not in self.active_drafts:
-            await self.send_error(ctx_or_interaction, "취소할 드래프트가 없어.")
-            return
-            
-        draft = self.active_drafts[channel_id]
-        
-        # Clean up
-        await self._cleanup_views(channel_id)
-        await self._cleanup_all_message_ids(draft)
-        
-        # Remove from tracking
-        del self.active_drafts[channel_id]
-        if channel_id in self.draft_start_times:
-            del self.draft_start_times[channel_id]
-        
-        await self.send_success(ctx_or_interaction, "드래프트를 취소했어.")
 
     # Utility methods that were previously outside the class
     async def _cleanup_views(self, channel_id: int) -> None:
@@ -939,48 +829,6 @@ class AutoBalanceButton(discord.ui.Button):
             await view.bot_commands._perform_automatic_team_balancing(view.draft, self.algorithm)
         else:
             await interaction.response.send_message("팀장만 팀 구성 방법을 선택할 수 있어.", ephemeral=True)
-
-    # -------------------------
-    # Join-based draft start
-    # -------------------------
-    @commands.command(
-        name="페어시작",
-        help="버튼으로 참가를 받아 드래프트를 시작해. 사용법: 뮤 페어시작 <총인원수:짝수> (예: 12)",
-        brief="드래프트 참가 모집",
-        aliases=["draft_join_start"],
-        description="뮤 페어시작 12 처럼 입력하면 참가 버튼이 있는 메시지를 보내. 인원이 차면 팀장 투표로 진행돼."
-    )
-    async def draft_start_join_chat(self, ctx: commands.Context, total_players: int = 12) -> None:
-        if total_players % 2 != 0 or total_players <= 0:
-            await self.send_error(ctx, "총 인원수는 2의 배수여야 해")
-            return
-        if total_players // 2 not in [2, 3, 5, 6]:
-            await self.send_error(ctx, "팀 크기는 2,3,5,6 중 하나여야 해 (예: 12, 6v6)")
-            return
-        channel_id = ctx.channel.id
-        guild_id = ctx.guild.id if ctx.guild else 0
-        if channel_id in self.active_drafts:
-            await self.send_error(ctx, "이미 진행 중인 드래프트가 있어.")
-            return
-        team_size = total_players // 2
-        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
-        draft.started_by_user_id = ctx.author.id
-        draft.join_target_total_players = total_players
-        self.active_drafts[channel_id] = draft
-        self.draft_start_times[channel_id] = time.time()
-
-        embed = discord.Embed(
-            title=f"🏁 드래프트 참가 모집 ({team_size}v{team_size})",
-            description="아래 버튼을 눌러 참가하거나 취소해. 인원이 차면 자동으로 진행돼.",
-            color=INFO_COLOR,
-        )
-        embed.add_field(name="필요 인원", value=f"{len(draft.join_user_ids)}/{total_players}")
-        embed.add_field(name="참가자", value="없음", inline=False)
-
-        view = JoinDraftView(draft, self)
-        self._register_view(channel_id, view)
-        msg = await ctx.send(embed=embed, view=view)
-        draft.join_message_id = msg.id
 
     async def _final_cleanup_after_outcome(self, draft: DraftSession) -> None:
         channel_id = draft.channel_id

@@ -15,7 +15,8 @@ class RosterCommands(BaseCommands):
     """Commands for managing server roster"""
     
     def __init__(self, bot: commands.Bot):
-        super().__init__(bot)
+        super().__init__()
+        self.bot = bot
         self.roster_store = RosterStore()
     
     @commands.command(name="로스터추가", help="서버 로스터에 플레이어를 추가/업데이트합니다 (owner-only)")
