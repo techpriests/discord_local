@@ -574,6 +574,296 @@ class TeamDraftCommands(BaseCommands):
             except Exception as e:
                 logger.error(f"Error in cleanup task: {e}")
 
+    # -------------------------
+    # Join-based draft start
+    # -------------------------
+    @commands.command(
+        name="페어시작",
+        help="버튼으로 참가를 받아 드래프트를 시작해. 사용법: 뮤 페어시작 <총인원수:짝수> (예: 12)",
+        brief="드래프트 참가 모집",
+        aliases=["draft_join_start"],
+        description="뮤 페어시작 12 처럼 입력하면 참가 버튼이 있는 메시지를 보내. 인원이 차면 팀장 투표로 진행돼."
+    )
+    async def draft_start_join_chat(self, ctx: commands.Context, total_players: int = 12) -> None:
+        if total_players % 2 != 0 or total_players <= 0:
+            await self.send_error(ctx, "총 인원수는 2의 배수여야 해")
+            return
+        if total_players // 2 not in [2, 3, 5, 6]:
+            await self.send_error(ctx, "팀 크기는 2,3,5,6 중 하나여야 해 (예: 12, 6v6)")
+            return
+        channel_id = ctx.channel.id
+        guild_id = ctx.guild.id if ctx.guild else 0
+        if channel_id in self.active_drafts:
+            await self.send_error(ctx, "이미 진행 중인 드래프트가 있어.")
+            return
+        team_size = total_players // 2
+        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+        draft.started_by_user_id = ctx.author.id
+        draft.join_target_total_players = total_players
+        self.active_drafts[channel_id] = draft
+        self.draft_start_times[channel_id] = time.time()
+
+        embed = discord.Embed(
+            title=f"🏁 드래프트 참가 모집 ({team_size}v{team_size})",
+            description="아래 버튼을 눌러 참가하거나 취소해. 인원이 차면 자동으로 진행돼.",
+            color=INFO_COLOR,
+        )
+        embed.add_field(name="필요 인원", value=f"{len(draft.join_user_ids)}/{total_players}")
+        embed.add_field(name="참가자", value="없음", inline=False)
+
+        view = JoinDraftView(draft, self)
+        self._register_view(channel_id, view)
+        msg = await ctx.send(embed=embed, view=view)
+        draft.join_message_id = msg.id
+
+    @app_commands.command(name="페어시작", description="버튼으로 참가를 받아 드래프트를 시작해. (예: 12명)")
+    async def draft_start_join_slash(self, interaction: discord.Interaction, total_players: int = 12) -> None:
+        if total_players % 2 != 0 or total_players <= 0:
+            await self.send_error(interaction, "총 인원수는 2의 배수여야 해")
+            return
+        if total_players // 2 not in [2, 3, 5, 6]:
+            await self.send_error(interaction, "팀 크기는 2,3,5,6 중 하나여야 해 (예: 12, 6v6)")
+            return
+        channel_id = interaction.channel_id or 0
+        guild_id = interaction.guild_id or 0
+        if channel_id in self.active_drafts:
+            await self.send_error(interaction, "이미 진행 중인 드래프트가 있어.")
+            return
+        team_size = total_players // 2
+        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+        draft.started_by_user_id = interaction.user.id
+        draft.join_target_total_players = total_players
+        self.active_drafts[channel_id] = draft
+        self.draft_start_times[channel_id] = time.time()
+
+        embed = discord.Embed(
+            title=f"🏁 드래프트 참가 모집 ({team_size}v{team_size})",
+            description="아래 버튼을 눌러 참가하거나 취소해. 인원이 차면 자동으로 진행돼.",
+            color=INFO_COLOR,
+        )
+        embed.add_field(name="필요 인원", value=f"0/{total_players}")
+        embed.add_field(name="참가자", value="없음", inline=False)
+
+        view = JoinDraftView(draft, self)
+        self._register_view(channel_id, view)
+        if not interaction.response.is_done():
+            await interaction.response.send_message(embed=embed, view=view)
+            msg = await interaction.original_response()
+        else:
+            msg = await interaction.followup.send(embed=embed, view=view, wait=True)
+        draft.join_message_id = msg.id
+
+    # Simulation commands that were previously outside the class
+    @commands.command(
+        name="페어시뮬",
+        help="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다 (기본 6v6)",
+        brief="시뮬 드래프트",
+        description="사용법: 뮤 페어시뮬 [team_size:숫자] [players:@...]")
+    async def draft_simulate_prefix(self, ctx: commands.Context, *, args: str = "") -> None:
+        await self._handle_simulation_start(ctx, args)
+
+    @app_commands.command(name="페어시뮬", description="경험 많은 팀장이 양 팀을 모두 구성하는 시뮬레이션 드래프트를 시작합니다")
+    async def draft_simulate_slash(self, interaction: discord.Interaction, players: str = "", team_size: int = 6) -> None:
+        await self._handle_simulation_start(interaction, f"{players} team_size:{team_size}")
+
+    @command_handler()
+    async def _handle_simulation_start(self, ctx_or_interaction: CommandContext, args: str = "") -> None:
+        # Parse team_size (default 6)
+        team_size = 6
+        lowered = args.lower()
+        if "team_size:2" in lowered or "team_size=2" in lowered:
+            team_size = 2
+        elif "team_size:3" in lowered or "team_size=3" in lowered:
+            team_size = 3
+        elif "team_size:5" in lowered or "team_size=5" in lowered:
+            team_size = 5
+        elif "team_size:6" in lowered or "team_size=6" in lowered:
+            team_size = 6
+        
+        if team_size not in [2, 3, 5, 6]:
+            await self.send_error(ctx_or_interaction, "팀 크기는 2, 3, 5, 6 중 하나여야 해")
+            return
+            
+        total_players = team_size * 2
+        channel_id = self.get_channel_id(ctx_or_interaction)
+        guild_id = self.get_guild_id(ctx_or_interaction) or 0
+        
+        if channel_id in self.active_drafts:
+            await self.send_error(ctx_or_interaction, "이미 진행 중인 드래프트가 있어.")
+            return
+            
+        # Create draft
+        draft = DraftSession(channel_id=channel_id, guild_id=guild_id, team_size=team_size)
+        draft.is_simulation = True
+        draft.started_by_user_id = self.get_user_id(ctx_or_interaction)
+        
+        self.active_drafts[channel_id] = draft
+        self.draft_start_times[channel_id] = time.time()
+        
+        await self.send_success(ctx_or_interaction, f"시뮬레이션 드래프트가 시작되었어! ({team_size}v{team_size})")
+
+    # Status, cancel, and test commands that were previously outside the class
+    @app_commands.command(name="페어상태", description="현재 드래프트 상태를 확인해")
+    async def draft_status_slash(self, interaction: discord.Interaction) -> None:
+        """Check current draft status"""
+        await self._handle_draft_status(interaction)
+
+    @commands.command(
+        name="페어상태",
+        help="현재 드래프트 상태를 확인해",
+        brief="드래프트 상태",
+        aliases=["draft_status"]
+    )
+    async def draft_status_chat(self, ctx: commands.Context) -> None:
+        """Check current draft status"""
+        await self._handle_draft_status(ctx)
+
+    @command_handler()
+    async def _handle_draft_status(self, ctx_or_interaction: CommandContext) -> None:
+        """Handle draft status check"""
+        channel_id = self.get_channel_id(ctx_or_interaction)
+        
+        if channel_id not in self.active_drafts:
+            await self.send_response(ctx_or_interaction, "진행 중인 드래프트가 없어.")
+            return
+            
+        draft = self.active_drafts[channel_id]
+        embed = discord.Embed(
+            title="📊 드래프트 상태",
+            description=f"현재 단계: {draft.phase.value}",
+            color=INFO_COLOR
+        )
+        
+        embed.add_field(
+            name="팀 구성",
+            value=f"{draft.team_size}v{draft.team_size} ({len(draft.players)}/{draft.team_size * 2}명)",
+            inline=True
+        )
+        
+        if draft.captains:
+            captain_names = [draft.players[cap_id].username for cap_id in draft.captains if cap_id in draft.players]
+            embed.add_field(name="팀장", value=", ".join(captain_names), inline=True)
+            
+        await self.send_response(ctx_or_interaction, embed=embed)
+
+    @app_commands.command(name="페어취소", description="진행 중인 드래프트를 취소해")
+    async def draft_cancel_slash(self, interaction: discord.Interaction) -> None:
+        """Cancel current draft"""
+        await self._handle_draft_cancel(interaction)
+
+    @commands.command(
+        name="페어취소",
+        help="진행 중인 드래프트를 취소해",
+        brief="드래프트 취소",
+        aliases=["draft_cancel"]
+    )
+    async def draft_cancel_chat(self, ctx: commands.Context) -> None:
+        """Cancel current draft"""
+        await self._handle_draft_cancel(ctx)
+
+    async def _handle_draft_cancel(self, ctx_or_interaction: CommandContext) -> None:
+        """Handle draft cancellation"""
+        channel_id = self.get_channel_id(ctx_or_interaction)
+        
+        if channel_id not in self.active_drafts:
+            await self.send_error(ctx_or_interaction, "취소할 드래프트가 없어.")
+            return
+            
+        draft = self.active_drafts[channel_id]
+        
+        # Clean up
+        await self._cleanup_views(channel_id)
+        await self._cleanup_all_message_ids(draft)
+        
+        # Remove from tracking
+        del self.active_drafts[channel_id]
+        if channel_id in self.draft_start_times:
+            del self.draft_start_times[channel_id]
+        
+        await self.send_success(ctx_or_interaction, "드래프트를 취소했어.")
+
+    @app_commands.command(name="페어테스트", description="팀 드래프트 시스템 테스트")
+    async def draft_test_slash(self, interaction: discord.Interaction) -> None:
+        """Test if team draft system is working"""
+        logger.info(f"페어테스트 command called by {interaction.user.name}")
+        
+        test_embed = discord.Embed(
+            title="🧪 팀 드래프트 시스템 테스트",
+            description="시스템이 정상 작동 중이야! 사용 가능한 명령어들:\n\n"
+            "• `/페어 team_size:2` - 2v2 드래프트 (4명 필요)\n"
+            "• `/페어 team_size:3` - 3v3 드래프트 (6명 필요)\n"
+            "• `/페어 team_size:5` - 5v5 드래프트 (10명 필요)\n"
+            "• `/페어` - 6v6 드래프트 (12명 필요, 기본값)\n\n"
+            "**매개변수 예시:**\n"
+            "• `test_mode:True` - 테스트 모드 (AI가 자동 선택)\n"
+            "• 예시: `뮤 페어 @user1 @user2 @user3 @user4 captains:@user1 @user3`\n\n"
+            "**기타 명령어:**\n"
+            "• `/페어상태` - 현재 드래프트 상태 확인\n"
+            "• `/페어취소` - 진행 중인 드래프트 취소\n\n",
+            color=SUCCESS_COLOR
+        )
+        
+        await self.send_response(interaction, embed=test_embed)
+
+    # Utility methods that were previously outside the class
+    async def _cleanup_views(self, channel_id: int) -> None:
+        """Clean up all registered views for a channel"""
+        if channel_id in self.registered_views:
+            try:
+                # Stop all views gracefully with timeout handling
+                views_to_stop = list(self.registered_views[channel_id])
+                for view in views_to_stop:
+                    try:
+                        if not view.is_finished():
+                            view.stop()
+                    except Exception as e:
+                        logger.warning(f"Failed to stop view {type(view).__name__}: {e}")
+                        
+                # Clear the channel's views
+                del self.registered_views[channel_id]
+                logger.info(f"Cleaned up {len(views_to_stop)} views for channel {channel_id}")
+            except Exception as e:
+                logger.error(f"Error during view cleanup for channel {channel_id}: {e}")
+
+    async def _cleanup_all_message_ids(self, draft: DraftSession) -> None:
+        """Clean up all message IDs to prevent memory leaks"""
+        try:
+            # Clear various message IDs
+            draft.captain_voting_message_id = None
+            draft.selection_progress_message_id = None
+            draft.join_message_id = None
+            
+            # Clear any message IDs stored in collections
+            if hasattr(draft, 'ban_interface_message_ids'):
+                draft.ban_interface_message_ids.clear()
+            if hasattr(draft, 'selection_interface_message_ids'):
+                draft.selection_interface_message_ids.clear()
+            if hasattr(draft, 'team_selection_message_ids'):
+                draft.team_selection_message_ids.clear()
+                
+            logger.debug(f"Cleaned up message IDs for draft in channel {draft.channel_id}")
+        except Exception as e:
+            logger.warning(f"Error cleaning up message IDs: {e}")
+
+    def _sanitize_username(self, username: str) -> str:
+        """Sanitize username to prevent Discord embed issues"""
+        # Remove or escape characters that could break Discord embeds
+        sanitized = username.replace('`', '\\`')  # Escape backticks
+        sanitized = sanitized.replace('*', '\\*')  # Escape asterisks
+        sanitized = sanitized.replace('_', '\\_')  # Escape underscores
+        sanitized = sanitized.replace('~', '\\~')  # Escape tildes
+        sanitized = sanitized.replace('|', '\\|')  # Escape pipes
+        sanitized = sanitized.replace('[', '\\[')  # Escape brackets
+        sanitized = sanitized.replace(']', '\\]')  # Escape brackets
+        sanitized = sanitized.replace('(', '\\(')  # Escape parentheses
+        sanitized = sanitized.replace(')', '\\)')  # Escape parentheses
+        
+        # Limit length to prevent extremely long names
+        if len(sanitized) > 32:
+            sanitized = sanitized[:29] + "..."
+            
+        return sanitized
+
 
 class TeamCompositionChoiceView(discord.ui.View):
     def __init__(self, draft: DraftSession, bot_commands: 'TeamDraftCommands'):
