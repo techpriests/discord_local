@@ -19,7 +19,7 @@ class RosterCommands(BaseCommands):
         self.bot = bot
         self.roster_store = RosterStore()
     
-    @commands.command(name="로스터추가", help="서버 로스터에 플레이어를 추가/업데이트합니다 (owner-only)")
+    @commands.command(name="로스터추가", help="서버 로스터에 플레이어를 추가/업데이트합니다 (owner-only)", hidden=True)
     @commands.is_owner()
     async def roster_add_prefix(self, ctx: commands.Context, member: discord.Member, rating: Optional[float] = None) -> None:
         guild_id = ctx.guild.id if ctx.guild else 0
@@ -27,21 +27,21 @@ class RosterCommands(BaseCommands):
         self.roster_store.add_or_update(guild_id, [player])
         await self.send_success(ctx, f"로스터에 {member.display_name}를 추가/업데이트했어")
 
-    @commands.command(name="로스터삭제", help="서버 로스터에서 플레이어를 제거합니다 (owner-only)")
+    @commands.command(name="로스터삭제", help="서버 로스터에서 플레이어를 제거합니다 (owner-only)", hidden=True)
     @commands.is_owner()
     async def roster_remove_prefix(self, ctx: commands.Context, member: discord.Member) -> None:
         guild_id = ctx.guild.id if ctx.guild else 0
         self.roster_store.remove(guild_id, [member.id])
         await self.send_success(ctx, f"로스터에서 {member.display_name}를 제거했어")
 
-    @commands.command(name="로스터서번트", help="특정 플레이어의 서번트 숙련도 점수를 설정합니다 (owner-only)")
+    @commands.command(name="로스터서번트", help="특정 플레이어의 서번트 숙련도 점수를 설정합니다 (owner-only)", hidden=True)
     @commands.is_owner()
     async def roster_servant_prefix(self, ctx: commands.Context, member: discord.Member, servant: str, rating: Optional[float] = None) -> None:
         guild_id = ctx.guild.id if ctx.guild else 0
         self.roster_store.set_servant_rating(guild_id, member.id, servant, rating)
         await self.send_success(ctx, f"{member.display_name}의 {servant} 숙련도를 설정했어")
 
-    @commands.command(name="로스터보기", help="서버 로스터를 표시합니다 (owner-only)")
+    @commands.command(name="로스터보기", help="서버 로스터를 표시합니다 (owner-only)", hidden=True)
     @commands.is_owner()
     async def roster_list_prefix(self, ctx: commands.Context) -> None:
         guild_id = ctx.guild.id if ctx.guild else 0

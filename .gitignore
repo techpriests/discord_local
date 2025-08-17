@@ -95,3 +95,16 @@ data/*.json
 # Temporary exclusions
 src/commands/mystery_game.py
 src/commands/mystery_skills.py
+
+# Refactoring documentation (temporary)
+docs/team_draft_refactor_specs.md
+docs/migration_strategy.md
+docs/deployment_instructions.md
+docs/implementation_plan.md
+docs/implementation_approach_updated.md
+docs/integration_example.py
+docs/refined_structure_plan.md
+docs/refactoring_complete.md
+DEPLOYMENT_READY.md
+SWITCH_TO_NEW_SYSTEM.md
+validate_new_system.py

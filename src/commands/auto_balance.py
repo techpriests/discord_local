@@ -4,13 +4,17 @@ import random
 import json
 import os
 import time
+import logging
 from dataclasses import dataclass, field
 from typing import List, Optional, Dict, Tuple, Any, TYPE_CHECKING, Set
+from discord.ext import commands
 
 from src.services.roster_store import RosterStore
 if TYPE_CHECKING:
     # Only for type hints; avoids circular imports at runtime
     from src.commands.team_draft import DraftSession, TeamDraftCommands
+
+logger = logging.getLogger(__name__)
 
 
 # -------- Data Models --------
