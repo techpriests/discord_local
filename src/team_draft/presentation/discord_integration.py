@@ -8,7 +8,7 @@ Provides feature flag support for gradual migration.
 import discord
 from discord.ext import commands
 from typing import Optional
-from ..infrastructure.config import DraftContainer, initialize_container
+from ..infrastructure.container import DraftContainer, initialize_container
 from .presenters.draft_presenter import DraftPresenter
 
 

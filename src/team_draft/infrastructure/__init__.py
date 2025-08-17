@@ -5,6 +5,6 @@ Adapters for external systems and services.
 """
 
 from .storage_adapter import MemoryDraftRepository
-from .config import DraftContainer
+from .container import DraftContainer
 
 __all__ = ["MemoryDraftRepository", "DraftContainer"]

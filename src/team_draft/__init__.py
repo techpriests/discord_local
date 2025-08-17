@@ -9,7 +9,7 @@ providing a clean, separated codebase.
 """
 
 from .application.draft_service import DraftApplicationService
-from .infrastructure.config import DraftContainer, initialize_container
+from .infrastructure.container import DraftContainer, initialize_container
 from .presentation.discord_integration import DiscordIntegration, initialize_integration
 
 __all__ = [
