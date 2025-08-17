@@ -5,7 +5,7 @@ Mock implementations of interfaces for testing without Discord dependencies.
 """
 
 from typing import Optional, List, Dict, Any
-from ..application.interfaces import INotificationService, IPermissionChecker, IUIPresenter
+from ..application.interfaces import INotificationService, IPermissionChecker, IUIPresenter, IThreadService
 from ..application.dto import DraftDTO
 
 
@@ -70,3 +70,50 @@ class MockUIPresenter(IUIPresenter):
     
     async def update_draft_status(self, draft_dto: DraftDTO) -> None:
         self.updated_status.append(f"UPDATE: {draft_dto.channel_id} - {draft_dto.phase}")
+    
+    async def show_captain_voting_progress(self, draft_dto: DraftDTO, progress_details: Dict[str, Any]) -> None:
+        print(f"Mock: Captain voting progress - {progress_details}")
+    
+    async def show_team_selection_progress(self, draft_dto: DraftDTO, round_info: Dict[str, Any]) -> None:
+        print(f"Mock: Team selection progress - Round {round_info.get('round', 'N/A')}")
+    
+    async def show_dice_roll_results(self, draft_dto: DraftDTO, dice_results: Dict[int, int]) -> None:
+        print(f"Mock: Dice roll results - {dice_results}")
+    
+    async def show_system_ban_results(self, draft_dto: DraftDTO, banned_servants: List[str]) -> None:
+        print(f"Mock: System bans - {banned_servants}")
+    
+    async def cleanup_channel(self, channel_id: int) -> None:
+        print(f"Mock: Cleanup channel {channel_id}")
+    
+    async def show_servant_ban_phase(self, draft_dto: DraftDTO) -> None:
+        self.shown_views.append(f"SERVANT_BAN: {draft_dto.channel_id}")
+    
+    async def update_captain_ban_progress(self, draft_dto: DraftDTO) -> None:
+        print(f"Mock: Captain ban progress - Channel {draft_dto.channel_id}")
+    
+    async def show_servant_selection(self, draft_dto: DraftDTO) -> None:
+        self.shown_views.append(f"SERVANT_SELECTION: {draft_dto.channel_id}")
+    
+    async def update_servant_selection_progress(self, draft_dto: DraftDTO) -> None:
+        print(f"Mock: Servant selection progress - Channel {draft_dto.channel_id}")
+    
+    async def show_servant_reselection(self, draft_dto: DraftDTO) -> None:
+        self.shown_views.append(f"SERVANT_RESELECTION: {draft_dto.channel_id}")
+
+
+class MockThreadService(IThreadService):
+    """Mock thread service for testing"""
+    
+    async def create_draft_thread(self, channel_id: int, thread_name: str, team_format: str, players: List[str]) -> Optional[int]:
+        """Mock thread creation"""
+        thread_id = 999999  # Mock thread ID
+        print(f"Mock: Created thread '{thread_name}' for format {team_format} in channel {channel_id}")
+        return thread_id
+    
+    async def send_to_thread_and_main(self, channel_id: int, thread_id: Optional[int], embed, view=None) -> None:
+        """Mock hybrid messaging"""
+        if thread_id:
+            print(f"Mock: Sent message to thread {thread_id} and main channel {channel_id}")
+        else:
+            print(f"Mock: Sent message to main channel {channel_id}")

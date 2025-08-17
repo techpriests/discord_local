@@ -6,9 +6,10 @@ Acts as the facade for all draft-related use cases and coordinates domain servic
 """
 
 import asyncio
-from typing import Dict, List, Optional, Set, Any
+from typing import Dict, List, Optional, Set, Any, Tuple
 from ..domain.entities.draft import Draft
 from ..domain.entities.draft_phase import DraftPhase
+from ..domain.entities.player import Player
 from ..domain.services.draft_orchestrator import DraftOrchestrator
 from ..domain.services.captain_service import CaptainService
 from ..domain.services.team_service import TeamService
@@ -25,7 +26,8 @@ from .interfaces import (
     IUIPresenter,
     IMatchRecorder,
     IBalanceCalculator,
-    INotificationService
+    INotificationService,
+    IThreadService
 )
 from .dto import (
     DraftDTO,
@@ -52,13 +54,15 @@ class DraftApplicationService:
         ui_presenter: IUIPresenter,
         match_recorder: IMatchRecorder,
         balance_calculator: IBalanceCalculator,
-        notification_service: INotificationService
+        notification_service: INotificationService,
+        thread_service: IThreadService
     ):
         self._draft_repository = draft_repository
         self._ui_presenter = ui_presenter
         self._match_recorder = match_recorder
         self._balance_calculator = balance_calculator
         self._notification_service = notification_service
+        self._thread_service = thread_service
         
         # Domain services
         self._orchestrator = DraftOrchestrator()
@@ -100,12 +104,91 @@ class DraftApplicationService:
             is_test_mode=is_test_mode
         )
         
+        # Prepare thread creation for draft 
+        self._orchestrator.prepare_thread_creation(draft)
+        
         # Save draft
         await self._draft_repository.save_draft(draft)
+        
+        # Create thread if ready 
+        if draft.thread_ready_for_creation and draft.thread_name:
+            team_format = f"{draft.team_size}v{draft.team_size}"
+            player_names = [player.display_name for player in draft.players.values()]
+            
+            thread_id = await self._thread_service.create_draft_thread(
+                channel_id=draft.channel_id,
+                thread_name=draft.thread_name,
+                team_format=team_format,
+                players=player_names
+            )
+            
+            if thread_id:
+                draft.thread_id = thread_id
+                await self._draft_repository.save_draft(draft)
         
         # Show UI
         draft_dto = DraftDTO.from_domain(draft)
         await self._ui_presenter.show_draft_lobby(draft_dto)
+        
+        return draft_dto
+    
+    async def create_manual_draft_with_players(
+        self,
+        channel_id: int,
+        guild_id: int,
+        players: List[Tuple[int, str]],  # (user_id, display_name)
+        team_size: int = 6,
+        started_by_user_id: Optional[int] = None,
+        is_test_mode: bool = False
+    ) -> DraftDTO:
+        """Create a manual draft with specific players already added"""
+        # Validate parameters
+        validation_errors = self._validation_service.validate_draft_creation(
+            channel_id, guild_id, team_size
+        )
+        if validation_errors:
+            raise DraftError(f"Invalid draft parameters: {', '.join(validation_errors)}")
+            
+        # Validate player count
+        expected_players = team_size * 2
+        if len(players) != expected_players:
+            raise DraftError(f"Expected {expected_players} players for {team_size}v{team_size}, got {len(players)}")
+        
+        # Check if draft already exists
+        existing_draft = await self._draft_repository.get_draft(channel_id)
+        if existing_draft:
+            raise DraftError("A draft is already active in this channel")
+        
+        # Create draft
+        draft = self._orchestrator.create_draft(
+            channel_id=channel_id,
+            guild_id=guild_id,
+            team_size=team_size,
+            started_by_user_id=started_by_user_id,
+            is_test_mode=is_test_mode
+        )
+        
+        # Add all players to the draft
+        for user_id, display_name in players:
+            player = Player(
+                user_id=user_id,
+                username=display_name,
+                team=None,
+                selected_servant=None
+            )
+            draft.add_player(player)
+        
+        # Save draft
+        await self._draft_repository.save_draft(draft)
+        
+        # Show appropriate UI based on draft state
+        draft_dto = DraftDTO.from_domain(draft)
+        if draft.can_start:
+            # Draft is full - start captain voting immediately (legacy behavior)
+            await self._ui_presenter.show_captain_voting(draft_dto)
+        else:
+            # Draft not full - show lobby for more players to join
+            await self._ui_presenter.show_draft_lobby(draft_dto)
         
         return draft_dto
     
@@ -135,8 +218,27 @@ class DraftApplicationService:
             started_by_user_id=started_by_user_id
         )
         
+        # Prepare thread creation for draft 
+        self._orchestrator.prepare_thread_creation(draft)
+        
         # Save draft
         await self._draft_repository.save_draft(draft)
+        
+        # Create thread if ready 
+        if draft.thread_ready_for_creation and draft.thread_name:
+            team_format = f"{draft.team_size}v{draft.team_size}"
+            player_names = [player.display_name for player in draft.players.values()]
+            
+            thread_id = await self._thread_service.create_draft_thread(
+                channel_id=draft.channel_id,
+                thread_name=draft.thread_name,
+                team_format=team_format,
+                players=player_names
+            )
+            
+            if thread_id:
+                draft.thread_id = thread_id
+                await self._draft_repository.save_draft(draft)
         
         # Show UI
         draft_dto = DraftDTO.from_domain(draft)
@@ -299,15 +401,8 @@ class DraftApplicationService:
         # Finalize selection
         captain_ids = self._captain_service.finalize_captain_selection(draft, user_votes_list)
         
-        # Start servant ban phase
-        self._orchestrator.start_servant_ban_phase(draft)
-        
-        # Save updated draft
-        await self._draft_repository.save_draft(draft)
-        
-        # Update UI
-        draft_dto = DraftDTO.from_domain(draft)
-        await self._ui_presenter.show_servant_selection(draft_dto)
+        # Transition to servant ban phase with full workflow (system bans + dice + captain ban setup)
+        await self.transition_to_servant_ban_phase(channel_id)
         
         return captain_ids
     
@@ -513,6 +608,87 @@ class DraftApplicationService:
                 error_code="DRAFT_ERROR"
             )
     
+    async def confirm_captain_team_selections(
+        self,
+        channel_id: int,
+        captain_id: int,
+        selected_player_ids: List[int]
+    ) -> bool:
+        """Confirm captain's batch team selections (legacy batch confirmation behavior)"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            if draft.phase != DraftPhase.TEAM_SELECTION:
+                return False
+            
+            # Validate captain
+            if not draft.is_captain(captain_id):
+                return False
+            
+            # Validate it's captain's turn
+            if draft.current_picking_captain != captain_id:
+                return False
+            
+            # Get captain's team
+            captain_team = draft.get_captain_team(captain_id)
+            if not captain_team:
+                return False
+            
+            # Validate selection count matches pattern requirements
+            team_size = draft.team_size
+            round_num = draft.team_selection_round
+            
+            # Get expected picks for this round using team selection service
+            round_info = self._team_service.get_round_info(team_size, round_num)
+            is_first_pick = captain_id == draft.first_pick_captain
+            expected_picks = round_info["first_pick"] if is_first_pick else round_info["second_pick"]
+            
+            if len(selected_player_ids) != expected_picks:
+                return False
+            
+            # Assign all selected players to captain's team
+            for player_id in selected_player_ids:
+                player = draft.get_player(player_id)
+                if not player or player.is_assigned_to_team:
+                    return False
+                
+                # Assign player to team
+                draft.assign_player_to_team(captain_id, player_id, captain_team)
+            
+            # Update picks for this round
+            draft.picks_this_round[captain_id] = draft.picks_this_round.get(captain_id, 0) + len(selected_player_ids)
+            
+            # Clear pending selections for this captain
+            draft.pending_team_selections[captain_id] = []
+            
+            # Check if round is complete and advance if needed
+            should_advance = self._team_service.is_team_selection_complete(draft)
+            if should_advance:
+                self._orchestrator.complete_team_selection(draft)
+            else:
+                # Advance to next captain or next round
+                self._team_service.advance_team_selection_turn(draft)
+            
+            # Save updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            # Update UI based on state
+            draft_dto = DraftDTO.from_domain(draft)
+            if should_advance and draft.phase == DraftPhase.COMPLETED:
+                await self._ui_presenter.show_game_results(draft_dto)
+            else:
+                await self._ui_presenter.show_team_selection(draft_dto)
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to confirm captain team selections: {e}")
+            return False
+    
     # ====================
     # Draft Management
     # ====================
@@ -565,22 +741,129 @@ class DraftApplicationService:
         winner: Optional[int],
         score: Optional[str] = None
     ) -> bool:
-        """Record match result for completed draft"""
-        draft = await self._draft_repository.get_draft(channel_id)
-        if not draft:
+        """Record match result for completed draft - preserves legacy behavior"""
+        try:
+            # Check for active draft first
+            draft = await self._draft_repository.get_draft(channel_id)
+            
+            if draft:
+                # Check if already recorded
+                if draft.outcome_recorded:
+                    raise DraftError("이미 결과가 기록되었어")
+                
+                # Must be completed to record result
+                if draft.phase != DraftPhase.COMPLETED:
+                    return False
+                
+                # Record match
+                await self._match_recorder.record_match(draft, winner, score)
+                
+                # Mark outcome as recorded
+                draft.outcome_recorded = True
+                await self._draft_repository.save_draft(draft)
+                
+                return True
+            else:
+                # No active draft - try to record for recently completed draft
+                # Use legacy match_id format: guild_id:channel_id:
+                match_id_prefix = f"0:{channel_id}:"  # Default guild_id to 0
+                
+                # Create a minimal match record for recently completed drafts
+                # This preserves the legacy behavior of recording results even after cleanup
+                await self._match_recorder.record_match_outcome(match_id_prefix, winner, score)
+                return True
+                
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to record match result: {e}")
             return False
-        
-        if draft.phase != DraftPhase.COMPLETED:
+    
+    async def force_cleanup_draft(
+        self,
+        channel_id: int,
+        admin_user_id: int
+    ) -> bool:
+        """Force cleanup a stuck draft (admin only) - preserves legacy behavior"""
+        try:
+            # Check if draft exists
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            # Audit log the force cleanup
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.info(f"Force cleanup initiated by admin {admin_user_id} for channel {channel_id}")
+            logger.info(f"Draft state: phase={draft.phase.value}, players={len(draft.players)}, team_size={draft.team_size}")
+            
+            # Clean up the draft
+            await self._draft_repository.delete_draft(channel_id)
+            
+            # Notify UI presenter to cleanup views
+            try:
+                await self._ui_presenter.cleanup_channel(channel_id)
+            except Exception as e:
+                logger.warning(f"UI cleanup failed during force cleanup: {e}")
+            
+            logger.info(f"Force cleanup completed for channel {channel_id}")
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Force cleanup failed: {e}")
             return False
-        
-        # Record match
-        await self._match_recorder.record_match(draft, winner, score)
-        
-        # Mark outcome as recorded
-        draft.outcome_recorded = True
-        await self._draft_repository.save_draft(draft)
-        
-        return True
+    
+    async def show_enhanced_progress(
+        self,
+        channel_id: int,
+        progress_type: str,
+        **kwargs
+    ) -> bool:
+        """Show enhanced progress tracking for different phases"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            draft_dto = DraftDTO.from_domain(draft)
+            
+            if progress_type == "captain_voting":
+                progress_details = {
+                    "total_votes_needed": len(draft.players) * 2,  # Each player votes for 2 captains
+                    "votes_cast": sum(draft.captain_voting_progress.values()),
+                    "progress_by_player": draft.captain_voting_progress,
+                    "time_remaining": kwargs.get("time_remaining", 0)
+                }
+                await self._ui_presenter.show_captain_voting_progress(draft_dto, progress_details)
+            
+            elif progress_type == "team_selection":
+                round_info = {
+                    "round": draft.team_selection_round,
+                    "current_captain": draft.current_picking_captain,
+                    "picks_made": draft.picks_this_round,
+                    "pattern": self._orchestrator.get_team_selection_pattern(draft.team_size),
+                    "pending_selections": draft.pending_team_selections
+                }
+                await self._ui_presenter.show_team_selection_progress(draft_dto, round_info)
+            
+            elif progress_type == "dice_roll":
+                await self._ui_presenter.show_dice_roll_results(draft_dto, draft.captain_ban_dice_rolls)
+            
+            elif progress_type == "system_bans":
+                await self._ui_presenter.show_system_ban_results(draft_dto, draft.system_bans)
+            
+            elif progress_type == "auto_cloak_bans":
+                await self._ui_presenter.show_system_ban_results(draft_dto, draft.reselection_auto_bans)
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to show enhanced progress: {e}")
+            return False
     
     # ====================
     # Auto-Balance Integration
@@ -607,3 +890,216 @@ class DraftApplicationService:
         await self._draft_repository.save_draft(draft)
         
         return balance_result
+    
+    # ====================
+    # New Phase Workflows
+    # ====================
+    
+    async def transition_to_servant_ban_phase(
+        self,
+        channel_id: int
+    ) -> bool:
+        """Transition draft from captain voting to servant ban phase"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            # Transition to servant ban phase (assigns captains to teams)
+            self._orchestrator.transition_to_servant_ban_phase(draft)
+            
+            # Perform complete servant ban phase (system + captain bans)
+            self._orchestrator.complete_servant_ban_phase(draft)
+            
+            # Save updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            # Show servant ban UI (system bans + captain ban interface)
+            draft_dto = DraftDTO.from_domain(draft)
+            await self._ui_presenter.show_servant_ban_phase(draft_dto)
+            
+            # Show dice roll results
+            if draft.captain_ban_dice_rolls:
+                await self.show_enhanced_progress(channel_id, "dice_roll")
+            
+            # Show system ban results
+            if draft.system_bans:
+                await self.show_enhanced_progress(channel_id, "system_bans")
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to transition to servant ban phase: {e}")
+            return False
+    
+    async def apply_captain_ban(
+        self,
+        channel_id: int,
+        captain_id: int,
+        servant_name: str
+    ) -> bool:
+        """Apply a captain ban during servant ban phase"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            # Apply the ban
+            success = self._orchestrator.apply_captain_ban(draft, captain_id, servant_name)
+            if not success:
+                return False
+            
+            # Save updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            # Check if all captain bans are complete
+            if self._orchestrator.are_captain_bans_complete(draft):
+                # Transition to servant selection phase
+                await self.transition_to_servant_selection_phase(channel_id)
+            else:
+                # Update captain ban progress UI
+                draft_dto = DraftDTO.from_domain(draft)
+                await self._ui_presenter.update_captain_ban_progress(draft_dto)
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to apply captain ban: {e}")
+            return False
+    
+    async def transition_to_servant_selection_phase(
+        self,
+        channel_id: int
+    ) -> bool:
+        """Transition to servant selection phase after bans complete"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            # Transition phase
+            self._orchestrator.transition_to_servant_selection_phase(draft)
+            
+            # Save updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            # Show servant selection UI
+            draft_dto = DraftDTO.from_domain(draft)
+            await self._ui_presenter.show_servant_selection(draft_dto)
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to transition to servant selection phase: {e}")
+            return False
+    
+    async def apply_servant_selection(
+        self,
+        channel_id: int,
+        user_id: int,
+        servant_name: str
+    ) -> bool:
+        """Apply a player's servant selection"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            # Apply selection
+            from ..domain.services.servant_service import ServantService
+            servant_service = ServantService()
+            success = servant_service.apply_servant_selection(draft, user_id, servant_name)
+            
+            if not success:
+                return False
+            
+            # Save updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            # Check if all selections are complete
+            if servant_service.is_servant_selection_complete(draft):
+                # Check for conflicts and transition appropriately
+                await self.check_conflicts_and_transition(channel_id)
+            else:
+                # Update selection progress
+                draft_dto = DraftDTO.from_domain(draft)
+                await self._ui_presenter.update_servant_selection_progress(draft_dto)
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to apply servant selection: {e}")
+            return False
+    
+    async def check_conflicts_and_transition(
+        self,
+        channel_id: int
+    ) -> bool:
+        """Check for servant conflicts and transition to appropriate next phase"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            # Check conflicts and transition
+            has_conflicts = self._orchestrator.check_servant_conflicts_and_transition(draft)
+            
+            # Save updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            if has_conflicts:
+                # Show reselection UI with auto-cloak bans applied
+                draft_dto = DraftDTO.from_domain(draft)
+                await self._ui_presenter.show_servant_reselection(draft_dto)
+                
+                # Show auto-cloak ban results if any
+                if draft.reselection_auto_bans:
+                    await self.show_enhanced_progress(channel_id, "auto_cloak_bans")
+            else:
+                # No conflicts - move to team selection
+                draft_dto = DraftDTO.from_domain(draft)
+                await self._ui_presenter.show_team_selection(draft_dto)
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to check conflicts and transition: {e}")
+            return False
+    
+    async def resolve_servant_conflicts(
+        self,
+        channel_id: int
+    ) -> bool:
+        """Complete servant reselection and move to team selection"""
+        try:
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return False
+            
+            # Transition to team selection phase
+            self._orchestrator.transition_to_team_selection_phase(draft)
+            
+            # Save updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            # Show team selection UI
+            draft_dto = DraftDTO.from_domain(draft)
+            await self._ui_presenter.show_team_selection(draft_dto)
+            
+            return True
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to resolve servant conflicts: {e}")
+            return False

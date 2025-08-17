@@ -41,6 +41,7 @@ class DiscordIntegration:
         self.presenter = DraftPresenter(
             draft_service=self.container.get_draft_service(),
             permission_checker=self.container.get_permission_checker(),
+            thread_service=self.container.get_thread_service(),
             bot=self.bot
         )
         
@@ -150,6 +151,69 @@ class DiscordIntegration:
             return None
         except Exception:
             return None
+    
+    async def apply_servant_selection(self, channel_id: int, user_id: int, servant_name: str) -> bool:
+        """
+        Apply servant selection for a player.
+        
+        Args:
+            channel_id: Channel where draft is happening
+            user_id: Player making the selection
+            servant_name: Name of the servant being selected
+            
+        Returns:
+            bool: True if selection was applied successfully
+        """
+        try:
+            draft_service = self.container.get_draft_service()
+            return await draft_service.apply_servant_selection(channel_id, user_id, servant_name)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to apply servant selection: {e}")
+            return False
+    
+    async def apply_captain_ban(self, channel_id: int, user_id: int, servant_name: str) -> bool:
+        """
+        Apply captain ban for a player.
+        
+        Args:
+            channel_id: Channel where draft is happening
+            user_id: Captain making the ban
+            servant_name: Name of the servant being banned
+            
+        Returns:
+            bool: True if ban was applied successfully
+        """
+        try:
+            draft_service = self.container.get_draft_service()
+            return await draft_service.apply_captain_ban(channel_id, user_id, servant_name)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to apply captain ban: {e}")
+            return False
+    
+    async def record_match_result(self, channel_id: int, winner: int, score: str = None) -> bool:
+        """
+        Record match result for a completed draft.
+        
+        Args:
+            channel_id: Channel where draft happened
+            winner: Winning team number (1 or 2)
+            score: Optional score string
+            
+        Returns:
+            bool: True if result was recorded successfully
+        """
+        try:
+            draft_service = self.container.get_draft_service()
+            return await draft_service.record_match_result(channel_id, winner, score)
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to record match result: {e}")
+            return False
     
     # ===================
     # Feature Flag Methods

@@ -70,18 +70,16 @@ class DraftDTO:
     # Captain information
     captains: List[int]
     captain_voting_progress: Dict[int, int]
-    captain_voting_time_remaining: Optional[int]
+    # captain_voting_time_remaining: Optional[int]  # Removed - legacy doesn't show real-time countdown
     
     # Servant information
-    available_servants: List[str]
-    banned_servants: List[str]
     servant_categories: Dict[str, List[str]]
     detection_servants: List[str]
     cloaking_servants: List[str]
     
     # Selection progress
     selection_progress: Dict[int, bool]
-    selection_time_remaining: Optional[int]
+    # selection_time_remaining: Optional[int]  # Removed - legacy doesn't show real-time countdown
     
     # Team selection
     current_picking_captain: Optional[int]
@@ -93,10 +91,31 @@ class DraftDTO:
     is_simulation: bool
     started_by_user_id: Optional[int]
     thread_id: Optional[int]
+    thread_name: Optional[str]
+    
+    # Servant system state
+    servant_tiers: Dict[str, List[str]]
+    banned_servants: Set[str]
+    available_servants: Set[str]
+    system_bans: List[str]
+    captain_bans: Dict[int, List[str]]
+    reselection_auto_bans: List[str]
+    
+    # Servant selection state
+    conflicted_servants: Dict[str, List[int]]
+    confirmed_servants: Dict[int, str]
+    
+    # Captain ban state
+    captain_ban_dice_rolls: Dict[int, int]
+    captain_ban_order: List[int]
+    current_banning_captain: Optional[int]
+    captain_ban_progress: Dict[int, bool]
+    ban_progress_message_id: Optional[int]
     
     # Join lobby state
     join_target_total_players: Optional[int]
     join_user_ids: List[int]
+    join_message_id: Optional[int]
     
     # Status flags
     can_start: bool
@@ -145,18 +164,16 @@ class DraftDTO:
             # Captain information
             captains=draft.captains.copy(),
             captain_voting_progress=dict(draft.captain_voting_progress),
-            captain_voting_time_remaining=draft._get_captain_voting_time_remaining(),
+            # captain_voting_time_remaining=draft._get_captain_voting_time_remaining(),  # Removed
             
-            # Servant information
-            available_servants=list(draft.get_available_servants()),
-            banned_servants=list(draft.banned_servants),
+            # Servant information (legacy)
             servant_categories=dict(draft.servant_categories),
             detection_servants=list(draft.detection_servants),
             cloaking_servants=list(draft.cloaking_servants),
             
             # Selection progress
             selection_progress=dict(draft.selection_progress),
-            selection_time_remaining=draft._get_selection_time_remaining(),
+            # selection_time_remaining=draft._get_selection_time_remaining(),  # Removed
             
             # Team selection
             current_picking_captain=draft.current_picking_captain,
@@ -168,10 +185,31 @@ class DraftDTO:
             is_simulation=draft.is_simulation,
             started_by_user_id=draft.started_by_user_id,
             thread_id=draft.thread_id,
+            thread_name=draft.thread_name,
+            
+            # Servant system state
+            servant_tiers=dict(draft.servant_tiers),
+            banned_servants=set(draft.banned_servants),
+            available_servants=set(draft.available_servants),
+            system_bans=list(draft.system_bans),
+            captain_bans=dict(draft.captain_bans),
+            reselection_auto_bans=list(draft.reselection_auto_bans),
+            
+            # Servant selection state
+            conflicted_servants=dict(draft.conflicted_servants),
+            confirmed_servants=dict(draft.confirmed_servants),
+            
+            # Captain ban state
+            captain_ban_dice_rolls=dict(draft.captain_ban_dice_rolls),
+            captain_ban_order=list(draft.captain_ban_order),
+            current_banning_captain=draft.current_banning_captain,
+            captain_ban_progress=dict(draft.captain_ban_progress),
+            ban_progress_message_id=draft.ban_progress_message_id,
             
             # Join lobby state
             join_target_total_players=draft.join_target_total_players,
             join_user_ids=list(draft.join_user_ids),
+            join_message_id=draft.join_message_id,
             
             # Status flags
             can_start=draft.can_start,

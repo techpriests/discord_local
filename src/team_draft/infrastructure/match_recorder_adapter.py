@@ -35,6 +35,21 @@ class MatchRecorderAdapter(IMatchRecorder):
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to record match: {e}")
     
+    async def record_match_outcome(self, match_id_prefix: str, winner: int, score: Optional[str]) -> None:
+        """Record match outcome by match ID prefix - preserves legacy behavior"""
+        try:
+            # Use the existing match recorder's write_outcome method
+            self._recorder.write_outcome(
+                match_id=match_id_prefix,
+                winner=winner,
+                score=score
+            )
+            
+            logger.info(f"Recorded match outcome: {match_id_prefix} winner={winner} score={score}")
+            
+        except Exception as e:
+            logger.error(f"Failed to record match outcome: {e}")
+    
     def _convert_draft_to_match_record(
         self, 
         draft: Draft, 

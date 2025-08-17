@@ -307,3 +307,33 @@ class CaptainService:
                 return other_captain
         
         return None
+    
+    def determine_captain_ban_order(self, draft: Draft) -> List[int]:
+        """Determine captain ban order using dice roll - preserves legacy logic"""
+        import random
+        
+        if len(draft.captains) != 2:
+            raise ValueError("Exactly 2 captains required for ban order determination")
+        
+        captain1, captain2 = draft.captains
+        
+        # Roll dice until we get different results
+        roll1 = random.randint(1, 20)
+        roll2 = random.randint(1, 20)
+        
+        # Handle ties with re-rolls (legacy behavior)
+        while roll1 == roll2:
+            roll1 = random.randint(1, 20)
+            roll2 = random.randint(1, 20)
+        
+        # Higher roll goes first
+        if roll1 > roll2:
+            ban_order = [captain1, captain2]
+        else:
+            ban_order = [captain2, captain1]
+        
+        # Store dice results for UI display
+        draft.captain_ban_dice_rolls = {captain1: roll1, captain2: roll2}
+        draft.captain_ban_order = ban_order
+        
+        return ban_order

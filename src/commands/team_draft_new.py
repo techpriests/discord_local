@@ -152,7 +152,7 @@ class TeamDraftCommands(BaseCommands):
             logger.error(f"Draft cancel failed: {e}")
             await interaction.response.send_message("드래프트 취소 중 오류가 발생했어.", ephemeral=True)
     
-    @commands.command(name="페어취소")
+    @commands.command(name="페어취소", aliases=["드래프트취소", "페어정리"])
     @command_handler()
     async def draft_cancel_chat(self, ctx: commands.Context) -> None:
         """Cancel draft (prefix command)"""
@@ -168,7 +168,7 @@ class TeamDraftCommands(BaseCommands):
             logger.error(f"Draft cancel failed: {e}")
             await self.send_error(ctx, "드래프트 취소 중 오류가 발생했어.")
     
-    @commands.command(name="드래프트상태")
+    @commands.command(name="드래프트상태", aliases=["페어상태"])
     @command_handler()
     async def draft_status(self, ctx: commands.Context) -> None:
         """Show draft status"""
@@ -201,10 +201,21 @@ class TeamDraftCommands(BaseCommands):
     @commands.command(name="페어")
     @command_handler()
     async def draft_manual(self, ctx: commands.Context, *, args: str = "") -> None:
-        """Manual draft creation with advanced options"""
+        """Manual draft creation with mentioned players"""
         try:
+            # Parse mentions and arguments
+            mentioned_users = ctx.message.mentions
+            
+            # If no mentions, show error
+            if not mentioned_users:
+                await self.send_error(ctx, 
+                    "참가자를 멘션해야 해!\n"
+                    "사용법: `뮤 페어 @user1 @user2 @user3 @user4` (2v2)\n"
+                    "또는 `뮤 페어시작 12` (버튼으로 참가 모집)")
+                return
+            
             # Parse team_size from args
-            team_size = 6  # default
+            team_size = len(mentioned_users) // 2  # default based on mentions
             is_test_mode = False
             
             args_lower = args.lower()
@@ -221,10 +232,21 @@ class TeamDraftCommands(BaseCommands):
             if "test_mode" in args_lower or "테스트" in args_lower:
                 is_test_mode = True
             
-            # Create manual draft
-            success = await self.draft_system.create_manual_draft(
+            # Validate player count
+            expected_players = team_size * 2
+            if len(mentioned_users) != expected_players:
+                await self.send_error(ctx, 
+                    f"{team_size}v{team_size} 드래프트에는 {expected_players}명이 필요해! "
+                    f"(현재 {len(mentioned_users)}명 멘션됨)")
+                return
+            
+            # Create manual draft with specific players
+            player_list = [(user.id, user.display_name) for user in mentioned_users]
+            
+            success = await self.draft_system.create_manual_draft_with_players(
                 channel_id=ctx.channel.id,
                 guild_id=ctx.guild.id if ctx.guild else 0,
+                players=player_list,
                 team_size=team_size,
                 started_by_user_id=ctx.author.id,
                 is_test_mode=is_test_mode
@@ -240,9 +262,135 @@ class TeamDraftCommands(BaseCommands):
             logger.error(f"Manual draft failed: {e}")
             await self.send_error(ctx, "드래프트 시작 중 오류가 발생했어.")
     
+        # ===================
+    # Match Result Commands
+    # ===================
+    
+    @commands.command(name="페어결과", help="최근 드래프트 경기의 결과를 기록합니다")
+    @command_handler()
+    async def record_match_result(self, ctx: commands.Context, winner: int, *, score: str = "") -> None:
+        """Record match result for completed draft"""
+        try:
+            # Validate winner
+            if winner not in (1, 2):
+                await self.send_error(ctx, "승리 팀은 1 또는 2여야 해")
+                return
+            
+            # Record result through draft system
+            success = await self.draft_system.record_match_result(
+                channel_id=ctx.channel.id,
+                winner=winner,
+                score=score or None
+            )
+            
+            if success:
+                result_text = f"팀 {winner} 승리"
+                if score:
+                    result_text += f" ({score})"
+                await self.send_success(ctx, f"경기 결과가 기록됐어: {result_text}")
+            else:
+                await self.send_error(ctx, "결과를 기록할 수 없어. 완료된 드래프트가 있는지 확인해줘.")
+                
+        except Exception as e:
+            logger.error(f"Match result recording failed: {e}")
+            await self.send_error(ctx, "결과 기록 중 문제가 발생했어")
+    
+    @app_commands.command(name="페어결과", description="드래프트 경기 결과를 기록해")
+    async def record_match_result_slash(self, interaction: discord.Interaction, winner: int, score: str = "") -> None:
+        """Record match result (slash command)"""
+        try:
+            # Validate winner
+            if winner not in (1, 2):
+                await interaction.response.send_message("승리 팀은 1 또는 2여야 해", ephemeral=True)
+                return
+            
+            # Record result through draft system
+            success = await self.draft_system.record_match_result(
+                channel_id=interaction.channel_id or 0,
+                winner=winner,
+                score=score or None
+            )
+            
+            if success:
+                result_text = f"팀 {winner} 승리"
+                if score:
+                    result_text += f" ({score})"
+                await interaction.response.send_message(f"경기 결과가 기록됐어: {result_text}")
+            else:
+                await interaction.response.send_message("결과를 기록할 수 없어. 완료된 드래프트가 있는지 확인해줘.", ephemeral=True)
+                
+        except Exception as e:
+            logger.error(f"Match result recording failed: {e}")
+            await interaction.response.send_message("결과 기록 중 문제가 발생했어", ephemeral=True)
+    
+    # ===================
+    # Admin Commands  
+    # ===================
+    
+    @commands.command(name="페어정리", help="진행 중인 드래프트를 강제로 정리해 (관리자용)", hidden=True)
+    @commands.has_permissions(manage_messages=True)
+    @command_handler()
+    async def draft_force_cleanup(self, ctx: commands.Context, channel_id: str = None) -> None:
+        """Force cleanup a draft (admin only)"""
+        try:
+            # Determine target channel
+            if channel_id:
+                try:
+                    target_channel_id = int(channel_id)
+                except ValueError:
+                    await self.send_error(ctx, "올바른 채널 ID를 입력해줘.")
+                    return
+            else:
+                target_channel_id = ctx.channel.id
+            
+            # Force cleanup through draft system
+            success = await self.draft_system.force_cleanup_draft(
+                channel_id=target_channel_id,
+                admin_user_id=ctx.author.id
+            )
+            
+            if success:
+                await self.send_success(ctx, f"채널 {target_channel_id}의 드래프트를 강제로 정리했어.")
+            else:
+                await self.send_error(ctx, f"채널 {target_channel_id}에 정리할 드래프트가 없어.")
+                
+        except Exception as e:
+            logger.error(f"Force cleanup failed: {e}")
+            await self.send_error(ctx, "드래프트 정리 중 문제가 발생했어")
+    
+    @app_commands.command(name="페어정리", description="진행 중인 드래프트를 강제로 정리해 (관리자용)")
+    @app_commands.default_permissions(manage_messages=True)
+    async def draft_force_cleanup_slash(self, interaction: discord.Interaction, channel_id: str = None) -> None:
+        """Force cleanup a draft (admin only)"""
+        try:
+            # Determine target channel
+            if channel_id:
+                try:
+                    target_channel_id = int(channel_id)
+                except ValueError:
+                    await interaction.response.send_message("올바른 채널 ID를 입력해줘.", ephemeral=True)
+                    return
+            else:
+                target_channel_id = interaction.channel_id or 0
+            
+            # Force cleanup through draft system
+            success = await self.draft_system.force_cleanup_draft(
+                channel_id=target_channel_id,
+                admin_user_id=interaction.user.id
+            )
+            
+            if success:
+                await interaction.response.send_message(f"채널 {target_channel_id}의 드래프트를 강제로 정리했어.")
+            else:
+                await interaction.response.send_message(f"채널 {target_channel_id}에 정리할 드래프트가 없어.", ephemeral=True)
+                
+        except Exception as e:
+            logger.error(f"Force cleanup failed: {e}")
+            await interaction.response.send_message("드래프트 정리 중 문제가 발생했어", ephemeral=True)
+
     # ===================
     # System Information Commands
-    # ===================
+    # =================== 
     
     @commands.command(name="시스템정보")
     async def system_info(self, ctx: commands.Context) -> None:

@@ -108,3 +108,14 @@ docs/refactoring_complete.md
 DEPLOYMENT_READY.md
 SWITCH_TO_NEW_SYSTEM.md
 validate_new_system.py
+team_draft_part2.py
+team_draft_part1.py
+CURRENT_WORKFLOW_STATUS_ANALYSIS.md
+CRITICAL_LEGACY_FIXES_SUMMARY.md
+COMPLETE_IMPLEMENTATION_STATUS.md
+LEGACY_DRAFT_WORKFLOW_SPECIFICATION.md
+LEGACY_WORKFLOW_ANALYSIS.md
+team_draft_l_part1.py
+team_draft_l_part2.py
+WORKFLOW_DISCREPANCIES_ANALYSIS.md
+src/teamdraft_legacy/

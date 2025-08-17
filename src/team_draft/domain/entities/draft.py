@@ -41,6 +41,8 @@ class Draft:
     # Draft metadata
     started_by_user_id: Optional[int] = None
     thread_id: Optional[int] = None  # Thread where draft takes place
+    thread_name: Optional[str] = None  # Generated thread name
+    thread_ready_for_creation: bool = False  # Whether thread should be created
     match_id: Optional[str] = None
     
     # Test and simulation mode
@@ -57,6 +59,10 @@ class Draft:
     captain_voting_progress_message_id: Optional[int] = None
     captain_voting_start_time: Optional[float] = None
     captain_voting_time_limit: int = 120  # 2 minutes in seconds
+    
+    # Captain ban order (from dice roll)
+    captain_ban_dice_rolls: Dict[int, int] = field(default_factory=dict)  # captain_id -> dice roll
+    captain_ban_order: List[int] = field(default_factory=list)  # Order of captains for banning
     
     # Servant system - tier definitions for ban system
     servant_tiers: Dict[str, List[str]] = field(default_factory=lambda: {
@@ -96,8 +102,8 @@ class Draft:
     cloaking_servants: Set[str] = field(default_factory=lambda: {
         "서문", "징어", "잭더리퍼", "세미", "안데"
     })
-    conflicted_servants: Dict[str, List[int]] = field(default_factory=dict)
-    confirmed_servants: Dict[int, str] = field(default_factory=dict)
+    conflicted_servants: Dict[str, List[int]] = field(default_factory=dict)  # servant_name -> [user_ids who selected it]
+    confirmed_servants: Dict[int, str] = field(default_factory=dict)  # user_id -> confirmed_servant_name
     
     # Team selection with confirmation support
     first_pick_captain: Optional[int] = None
@@ -111,9 +117,11 @@ class Draft:
     banned_servants: Set[str] = field(default_factory=set)
     system_bans: List[str] = field(default_factory=list)  # System's automated bans
     captain_bans: Dict[int, List[str]] = field(default_factory=dict)  # captain_id -> banned_servants
+    reselection_auto_bans: List[str] = field(default_factory=list)  # Auto-banned cloaking servants during reselection
     captain_ban_progress: Dict[int, bool] = field(default_factory=dict)  # captain_id -> completed
     captain_ban_order: List[int] = field(default_factory=list)  # Order of captain bans determined by dice
     current_banning_captain: Optional[int] = None  # Which captain is currently banning
+    ban_progress_message_id: Optional[int] = None  # Message ID for ban progress tracking
     
     # Servant selection progress tracking
     selection_progress: Dict[int, bool] = field(default_factory=dict)  # user_id -> completed

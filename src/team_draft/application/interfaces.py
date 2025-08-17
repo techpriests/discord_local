@@ -44,6 +44,10 @@ class IMatchRecorder(ABC):
     async def record_match(self, draft: Draft, winner: Optional[int], score: Optional[str]) -> None:
         """Record match result"""
         pass
+    
+    async def record_match_outcome(self, match_id_prefix: str, winner: int, score: Optional[str]) -> None:
+        """Record match outcome by match ID prefix (for recently completed drafts)"""
+        pass
 
 
 class IBalanceCalculator(ABC):
@@ -104,8 +108,58 @@ class IUIPresenter(ABC):
         pass
     
     @abstractmethod
+    async def show_servant_ban_phase(self, draft_dto: DraftDTO) -> None:
+        """Display servant ban phase UI (system bans + captain bans)"""
+        pass
+    
+    @abstractmethod
+    async def update_captain_ban_progress(self, draft_dto: DraftDTO) -> None:
+        """Update captain ban progress display"""
+        pass
+    
+    @abstractmethod
+    async def show_servant_selection(self, draft_dto: DraftDTO) -> None:
+        """Display servant selection UI"""
+        pass
+    
+    @abstractmethod
+    async def update_servant_selection_progress(self, draft_dto: DraftDTO) -> None:
+        """Update servant selection progress display"""
+        pass
+    
+    @abstractmethod
+    async def show_servant_reselection(self, draft_dto: DraftDTO) -> None:
+        """Display servant reselection UI for conflict resolution"""
+        pass
+    
+    @abstractmethod
     async def update_draft_status(self, draft_dto: DraftDTO) -> None:
         """Update draft status display"""
+        pass
+    
+    @abstractmethod
+    async def show_captain_voting_progress(self, draft_dto: DraftDTO, progress_details: Dict[str, Any]) -> None:
+        """Show detailed captain voting progress"""
+        pass
+    
+    @abstractmethod
+    async def show_team_selection_progress(self, draft_dto: DraftDTO, round_info: Dict[str, Any]) -> None:
+        """Show detailed team selection progress"""
+        pass
+    
+    @abstractmethod
+    async def show_dice_roll_results(self, draft_dto: DraftDTO, dice_results: Dict[int, int]) -> None:
+        """Show captain ban order dice roll results"""
+        pass
+    
+    @abstractmethod
+    async def show_system_ban_results(self, draft_dto: DraftDTO, banned_servants: List[str]) -> None:
+        """Show system ban results"""
+        pass
+    
+    @abstractmethod
+    async def cleanup_channel(self, channel_id: int) -> None:
+        """Clean up UI elements in a channel"""
         pass
 
 
@@ -184,4 +238,18 @@ class IDraftConfiguration(ABC):
     @abstractmethod
     def get_servant_configuration(self) -> Dict[str, Any]:
         """Get servant configuration (tiers, categories, etc.)"""
+        pass
+
+
+class IThreadService(ABC):
+    """Interface for Discord thread management"""
+    
+    @abstractmethod
+    async def create_draft_thread(self, channel_id: int, thread_name: str, team_format: str, players: List[str]) -> Optional[int]:
+        """Create thread for draft and return thread ID"""
+        pass
+    
+    @abstractmethod 
+    async def send_to_thread_and_main(self, channel_id: int, thread_id: Optional[int], embed, view=None) -> None:
+        """Send message to both thread and main channel"""
         pass

@@ -13,7 +13,8 @@ from ..application.interfaces import (
     INotificationService,
     IRosterService,
     IPermissionChecker,
-    IDraftConfiguration
+    IDraftConfiguration,
+    IThreadService
 )
 from ..application.draft_service import DraftApplicationService
 from .storage_adapter import MemoryDraftRepository
@@ -22,6 +23,7 @@ from .match_recorder_adapter import MatchRecorderAdapter
 from .roster_adapter import RosterServiceAdapter
 from .discord_adapter import DiscordNotificationService, DiscordPermissionChecker
 from .draft_config_adapter import DraftConfigurationAdapter
+from .thread_adapter import DiscordThreadAdapter
 
 
 class DraftContainer:
@@ -56,6 +58,7 @@ class DraftContainer:
         if self.bot:
             self._services['notification_service'] = DiscordNotificationService(self.bot)
             self._services['permission_checker'] = DiscordPermissionChecker(self.bot)
+            self._services['thread_service'] = DiscordThreadAdapter(self.bot)
             # UI presenter will be set by presentation layer
             self._services['ui_presenter'] = None
         else:
@@ -63,11 +66,13 @@ class DraftContainer:
             from .mock_adapters import (
                 MockNotificationService, 
                 MockPermissionChecker, 
-                MockUIPresenter
+                MockUIPresenter,
+                MockThreadService
             )
             self._services['notification_service'] = MockNotificationService()
             self._services['permission_checker'] = MockPermissionChecker()
             self._services['ui_presenter'] = MockUIPresenter()
+            self._services['thread_service'] = MockThreadService()
     
     def get_draft_service(self) -> DraftApplicationService:
         """Get configured draft application service"""
@@ -77,7 +82,8 @@ class DraftContainer:
                 ui_presenter=self.get_ui_presenter(),
                 match_recorder=self.get_match_recorder(),
                 balance_calculator=self.get_balance_calculator(),
-                notification_service=self.get_notification_service()
+                notification_service=self.get_notification_service(),
+                thread_service=self.get_thread_service()
             )
         return self._services['draft_service']
     
@@ -112,6 +118,10 @@ class DraftContainer:
     def get_draft_configuration(self) -> IDraftConfiguration:
         """Get draft configuration"""
         return self._services['draft_configuration']
+    
+    def get_thread_service(self) -> IThreadService:
+        """Get thread service"""
+        return self._services['thread_service']
     
     def set_ui_presenter(self, presenter: IUIPresenter) -> None:
         """Set UI presenter (called by presentation layer)"""
