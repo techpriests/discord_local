@@ -1102,6 +1102,17 @@ class DraftPresenter(IUIPresenter):
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to show team selection progress: {e}")
     
+    async def update_captain_ban_progress(self, draft_dto: DraftDTO) -> None:
+        """Update captain ban progress display"""
+        try:
+            # Show updated captain ban interface
+            await self.show_captain_ban_phase(draft_dto)
+            
+        except Exception as e:
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"Failed to update captain ban progress: {e}")
+    
     async def show_dice_roll_results(self, draft_dto: DraftDTO, dice_results: Dict[int, int]) -> None:
         """Show captain ban order dice roll results"""
         channel = self.bot.get_channel(draft_dto.channel_id)
