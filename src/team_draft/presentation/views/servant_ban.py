@@ -26,7 +26,7 @@ class CaptainBanView(discord.ui.View):
     """
     
     def __init__(self, draft_dto: DraftDTO, bot_commands):
-        super().__init__(timeout=300.0)  # 5 minute timeout
+        super().__init__(timeout=3600.0)  # 1 hour timeout (legacy)
         self.draft_dto = draft_dto
         self.bot_commands = bot_commands
         
@@ -144,7 +144,7 @@ def create_servant_ban_embed(draft_dto: DraftDTO) -> discord.Embed:
     if draft_dto.system_bans:
         system_ban_text = ", ".join(draft_dto.system_bans)
         embed.add_field(
-            name="🤖 시스템 밴",
+            name="문 셀 밴",
             value=system_ban_text,
             inline=False
         )

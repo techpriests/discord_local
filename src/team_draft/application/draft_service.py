@@ -6,6 +6,7 @@ Acts as the facade for all draft-related use cases and coordinates domain servic
 """
 
 import asyncio
+import discord
 from typing import Dict, List, Optional, Set, Any, Tuple
 from ..domain.entities.draft import Draft
 from ..domain.entities.draft_phase import DraftPhase
@@ -80,7 +81,8 @@ class DraftApplicationService:
         guild_id: int,
         team_size: int = 6,
         started_by_user_id: Optional[int] = None,
-        is_test_mode: bool = False
+        is_test_mode: bool = False,
+        is_join_based: bool = False
     ) -> DraftDTO:
         """Create a new draft session"""
         # Validate parameters
@@ -104,14 +106,16 @@ class DraftApplicationService:
             is_test_mode=is_test_mode
         )
         
-        # Prepare thread creation for draft 
-        self._orchestrator.prepare_thread_creation(draft)
+        # For regular drafts, prepare thread creation immediately
+        # For join-based drafts, threads will be created when lobby is full
+        if not is_join_based:
+            self._orchestrator.prepare_thread_creation(draft)
         
         # Save draft
         await self._draft_repository.save_draft(draft)
         
-        # Create thread if ready 
-        if draft.thread_ready_for_creation and draft.thread_name:
+        # Create thread if ready (only for non-join-based drafts)
+        if not is_join_based and draft.thread_ready_for_creation and draft.thread_name:
             team_format = f"{draft.team_size}v{draft.team_size}"
             player_names = [player.display_name for player in draft.players.values()]
             
@@ -246,6 +250,37 @@ class DraftApplicationService:
         
         return draft_dto
     
+    async def start_join_draft(
+        self,
+        channel_id: int,
+        guild_id: int,
+        total_players: int,
+        started_by_user_id: Optional[int] = None
+    ) -> DraftDTO:
+        """Start a join-based draft that shows lobby in main channel"""
+        if total_players % 2 != 0 or total_players <= 0:
+            raise DraftError("Total players must be a positive even number")
+        
+        team_size = total_players // 2
+        
+        # Create join-based draft (no thread initially)
+        draft_dto = await self.create_draft(
+            channel_id=channel_id,
+            guild_id=guild_id,
+            team_size=team_size,
+            started_by_user_id=started_by_user_id,
+            is_test_mode=False,
+            is_join_based=True
+        )
+        
+        # Set join target
+        draft = await self._draft_repository.get_draft(channel_id)
+        if draft:
+            draft.join_target_total_players = total_players
+            await self._draft_repository.save_draft(draft)
+        
+        return draft_dto
+    
     async def join_draft(self, user_id: int, username: str, channel_id: int) -> JoinResult:
         """Add a player to the draft - preserves existing join logic"""
         draft = await self._draft_repository.get_draft(channel_id)
@@ -297,6 +332,46 @@ class DraftApplicationService:
                 message=str(e),
                 error_code="DRAFT_ERROR"
             )
+    
+    async def finalize_join_and_start(self, channel_id: int) -> bool:
+        """Finalize join process and start draft - creates thread and starts captain voting"""
+        draft = await self._draft_repository.get_draft(channel_id)
+        if not draft:
+            return False
+        
+        # Players are already created with correct usernames during join process
+        # Just need to clear the join data since we're starting the actual draft
+        draft.join_user_ids.clear()
+        draft.join_target_total_players = None
+        
+        # Now create the thread (legacy behavior)
+        self._orchestrator.prepare_thread_creation(draft)
+        
+        if draft.thread_ready_for_creation and draft.thread_name:
+            team_format = f"{draft.team_size}v{draft.team_size}"
+            player_names = [player.display_name for player in draft.players.values()]
+            
+            thread_id = await self._thread_service.create_draft_thread(
+                channel_id=draft.channel_id,
+                thread_name=draft.thread_name,
+                team_format=team_format,
+                players=player_names
+            )
+            
+            if thread_id:
+                draft.thread_id = thread_id
+        
+        # Start captain voting
+        self._orchestrator.start_captain_voting(draft)
+        
+        # Save updated draft
+        await self._draft_repository.save_draft(draft)
+        
+        # Update UI to show captain voting
+        draft_dto = DraftDTO.from_domain(draft)
+        await self._ui_presenter.update_draft_status(draft_dto)
+        
+        return True
     
     async def leave_draft(self, user_id: int, channel_id: int) -> JoinResult:
         """Remove a player from the draft"""
@@ -991,6 +1066,9 @@ class DraftApplicationService:
             draft_dto = DraftDTO.from_domain(draft)
             await self._ui_presenter.show_servant_selection(draft_dto)
             
+            # Start background timeout monitoring (legacy behavior)
+            asyncio.create_task(self._monitor_selection_timeout(channel_id))
+            
             return True
             
         except Exception as e:
@@ -1060,6 +1138,9 @@ class DraftApplicationService:
                 draft_dto = DraftDTO.from_domain(draft)
                 await self._ui_presenter.show_servant_reselection(draft_dto)
                 
+                # Start background timeout monitoring for reselection (legacy behavior)
+                asyncio.create_task(self._monitor_selection_timeout(channel_id))
+                
                 # Show auto-cloak ban results if any
                 if draft.reselection_auto_bans:
                     await self.show_enhanced_progress(channel_id, "auto_cloak_bans")
@@ -1103,3 +1184,147 @@ class DraftApplicationService:
             logger = logging.getLogger(__name__)
             logger.error(f"Failed to resolve servant conflicts: {e}")
             return False
+
+    async def _monitor_selection_timeout(self, channel_id: int) -> None:
+        """
+        Monitor 90-second timeout for servant selection/reselection phase.
+        Legacy behavior: automatically assign random servants to incomplete players.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        try:
+            # Wait for 90 seconds (legacy timeout)
+            await asyncio.sleep(90)
+            
+            draft = await self._draft_repository.get_draft(channel_id)
+            if not draft:
+                return
+            
+            # Check if we're still in a selection phase
+            from ..domain.entities.draft_phase import DraftPhase
+            if draft.phase not in [DraftPhase.SERVANT_SELECTION, DraftPhase.SERVANT_RESELECTION]:
+                logger.info(f"Draft {channel_id}: Selection phase completed before timeout")
+                return
+            
+            # Handle timeout based on current phase
+            await self._handle_selection_timeout(channel_id, draft)
+            
+        except asyncio.CancelledError:
+            # Timeout was cancelled (phase completed normally)
+            logger.info(f"Draft {channel_id}: Selection timeout monitoring cancelled")
+        except Exception as e:
+            logger.error(f"Draft {channel_id}: Error in selection timeout monitoring: {e}")
+
+    async def _handle_selection_timeout(self, channel_id: int, draft) -> None:
+        """
+        Handle 90-second timeout by randomly assigning servants to incomplete players.
+        Legacy behavior: excludes banned and already selected servants.
+        """
+        import logging
+        import random
+        logger = logging.getLogger(__name__)
+        
+        try:
+            from ..domain.services.servant_service import ServantService
+            servant_service = ServantService()
+            
+            # Get incomplete players based on phase
+            incomplete_players = []
+            
+            from ..domain.entities.draft_phase import DraftPhase
+            
+            if draft.phase == DraftPhase.SERVANT_SELECTION:
+                # All players who haven't selected or confirmed servants
+                for user_id in draft.players.keys():
+                    if not draft.selection_progress.get(user_id, False):
+                        incomplete_players.append(user_id)
+            elif draft.phase == DraftPhase.SERVANT_RESELECTION:
+                # Players who were conflicted and haven't reselected
+                for servant_conflicts in draft.conflicted_servants.values():
+                    for user_id in servant_conflicts:
+                        if not draft.selection_progress.get(user_id, False):
+                            incomplete_players.append(user_id)
+            
+            if not incomplete_players:
+                logger.info(f"Draft {channel_id}: No incomplete players found during timeout")
+                return
+            
+            logger.info(f"Draft {channel_id}: Timeout reached, assigning random servants to {len(incomplete_players)} players")
+            
+            # Get all available servants (excluding banned and confirmed)
+            all_servants = set()
+            for servants in draft.servant_categories.values():
+                all_servants.update(servants)
+            
+            # Remove banned servants
+            available_servants = all_servants - draft.banned_servants
+            
+            # Remove already confirmed servants
+            if hasattr(draft, 'confirmed_servants'):
+                available_servants = available_servants - set(draft.confirmed_servants.values())
+            
+            # Remove reselection auto-bans if in reselection phase
+            if draft.phase == DraftPhase.SERVANT_RESELECTION and hasattr(draft, 'reselection_auto_bans'):
+                available_servants = available_servants - draft.reselection_auto_bans
+            
+            available_servants_list = list(available_servants)
+            
+            if not available_servants_list:
+                logger.error(f"Draft {channel_id}: No available servants for random assignment")
+                return
+            
+            # Assign random servants to incomplete players
+            assignments = {}
+            for user_id in incomplete_players:
+                if available_servants_list:
+                    random_servant = random.choice(available_servants_list)
+                    available_servants_list.remove(random_servant)  # Prevent duplicates
+                    assignments[user_id] = random_servant
+                    
+                    # Apply the selection
+                    servant_service.apply_servant_selection(draft, user_id, random_servant)
+                    draft.selection_progress[user_id] = True
+                    
+                    # Log the assignment
+                    player_name = draft.players[user_id].username if user_id in draft.players else f"User{user_id}"
+                    logger.info(f"Draft {channel_id}: Randomly assigned {random_servant} to {player_name}")
+            
+            # Save the updated draft
+            await self._draft_repository.save_draft(draft)
+            
+            # Send timeout announcement (legacy format) to the correct thread/channel
+            timeout_embed = discord.Embed(
+                title="⏰ 제한 시간 종료!",
+                description="다음 플레이어들에게 랜덤 서번트가 배정되었어:" if assignments else "모든 플레이어가 선택을 완료했어.",
+                color=0xf39c12  # WARNING_COLOR
+            )
+            
+            if assignments:
+                assignment_text = ""
+                for user_id, servant in assignments.items():
+                    player_name = draft.players[user_id].username if user_id in draft.players else f"User{user_id}"
+                    assignment_text += f"• **{player_name}**: {servant}\n"
+                timeout_embed.add_field(
+                    name="자동 배정된 서번트",
+                    value=assignment_text.strip(),
+                    inline=False
+                )
+            
+            # Send to thread if available, otherwise to main channel (same as other draft messages)
+            await self._thread_service.send_to_thread_with_fallback(
+                channel_id=draft.channel_id,
+                thread_id=draft.thread_id,
+                embed=timeout_embed
+            )
+            
+            # Continue with phase progression
+            if draft.phase == DraftPhase.SERVANT_SELECTION:
+                # Check for conflicts and transition
+                await self.check_conflicts_and_transition(channel_id)
+            elif draft.phase == DraftPhase.SERVANT_RESELECTION:
+                # Move to team selection
+                await self.resolve_servant_conflicts(channel_id)
+            
+        except Exception as e:
+            logger.error(f"Draft {channel_id}: Error handling selection timeout: {e}")

@@ -19,7 +19,7 @@ class DraftLobbyView(discord.ui.View):
     """
     
     def __init__(self, presenter: "DraftPresenter", channel_id: int):
-        super().__init__(timeout=300)  # 5 minute timeout
+        super().__init__(timeout=3600)  # 1 hour timeout (legacy)
         self.presenter = presenter
         self.channel_id = channel_id
         

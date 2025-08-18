@@ -23,7 +23,7 @@ class DraftPresenter(IUIPresenter):
     
     def __init__(
         self,
-        draft_service: DraftApplicationService,
+        draft_service: Optional[DraftApplicationService],
         permission_checker: IPermissionChecker,
         thread_service: IThreadService,
         bot: commands.Bot
@@ -64,8 +64,9 @@ class DraftPresenter(IUIPresenter):
                 message = await channel.fetch_message(draft_dto.join_message_id)
                 await message.edit(embed=embed, view=view)
             else:
-                # Send new message with thread broadcasting
-                if draft_dto.thread_id:
+                # For join-based drafts (no thread yet), send to main channel
+                # For regular drafts with threads, send to thread
+                if draft_dto.thread_id and draft_dto.phase != "waiting":
                     # Send interactive view to thread with fallback to main
                     await self.thread_service.send_to_thread_with_fallback(
                         channel_id=draft_dto.channel_id,
@@ -678,7 +679,7 @@ class DraftPresenter(IUIPresenter):
         if hasattr(draft_dto, 'system_bans') and draft_dto.system_bans:
             system_ban_text = ", ".join(draft_dto.system_bans)
             embed.add_field(
-                name="🤖 시스템 밴",
+                name="문 셀 밴",
                 value=system_ban_text,
                 inline=False
             )
@@ -1168,21 +1169,44 @@ class DraftPresenter(IUIPresenter):
             logger.error(f"Failed to show dice roll results: {e}")
     
     async def show_system_ban_results(self, draft_dto: DraftDTO, banned_servants: List[str]) -> None:
-        """Show system ban results"""
+        """Show system ban results with legacy format"""
         channel = self.bot.get_channel(draft_dto.channel_id)
         if not channel:
             return
         
+        # Legacy format: "문 셀 오토마톤" title and "문 셀이 자동으로 서번트를 밴했어." description
         embed = discord.Embed(
-            title="🤖 시스템 밴 결과",
-            description="시스템이 자동으로 서번트를 밴했어!",
+            title="문 셀 오토마톤",
+            description="문 셀이 자동으로 서번트를 밴했어.",
             color=0xe74c3c
         )
         
         if banned_servants:
+            # Group banned servants by tier for legacy format
+            s_tier_bans = []
+            a_tier_bans = []
+            b_tier_bans = []
+            
+            for servant in banned_servants:
+                if servant in draft_dto.servant_tiers.get("S", []):
+                    s_tier_bans.append(servant)
+                elif servant in draft_dto.servant_tiers.get("A", []):
+                    a_tier_bans.append(servant)
+                elif servant in draft_dto.servant_tiers.get("B", []):
+                    b_tier_bans.append(servant)
+            
+            # Legacy tier names: "갑" (S-tier), "을" (A-tier), "병" (B-tier)
+            ban_text = []
+            if s_tier_bans:
+                ban_text.append(f"갑: {', '.join(s_tier_bans)}")
+            if a_tier_bans:
+                ban_text.append(f"을: {', '.join(a_tier_bans)}")
+            if b_tier_bans:
+                ban_text.append(f"병: {', '.join(b_tier_bans)}")
+            
             embed.add_field(
                 name="밴된 서번트",
-                value=", ".join(banned_servants),
+                value="\n".join(ban_text) if ban_text else ", ".join(banned_servants),
                 inline=False
             )
         else:
@@ -1274,13 +1298,12 @@ class DraftPresenter(IUIPresenter):
     async def _auto_start_captain_voting(self, channel_id: int) -> None:
         """Auto-start captain voting when draft becomes full - preserves legacy behavior"""
         try:
-            # Get draft status
-            draft_dto = await self.draft_service.get_draft_status(channel_id)
-            if not draft_dto or not draft_dto.can_start:
-                return
-            
-            # Transition to captain voting and show UI
-            await self.show_captain_voting(draft_dto)
+            # Finalize join process (creates thread and starts captain voting)
+            success = await self.draft_service.finalize_join_and_start(channel_id)
+            if not success:
+                import logging
+                logger = logging.getLogger(__name__)
+                logger.error(f"Failed to finalize join and start draft for channel {channel_id}")
             
         except Exception as e:
             import logging

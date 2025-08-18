@@ -36,17 +36,22 @@ class ServantSelectionView(discord.ui.View):
     """
     
     def __init__(self, draft_dto: DraftDTO, bot_commands):
-        super().__init__(timeout=600.0)  # 10 minute timeout
+        super().__init__(timeout=3600.0)  # 1 hour timeout (legacy)
         self.draft_dto = draft_dto
         self.bot_commands = bot_commands
         
-        # Create single button for opening private selection interface
-        self._create_private_selection_button()
+        # Create selection interface button and random button
+        self._create_selection_buttons()
     
-    def _create_private_selection_button(self):
-        """Create button for opening private selection interface"""
-        button = GenericSelectionInterfaceButton()
-        self.add_item(button)
+    def _create_selection_buttons(self):
+        """Create buttons for selection interface and random selection"""
+        # Main selection interface button
+        selection_button = GenericSelectionInterfaceButton()
+        self.add_item(selection_button)
+        
+        # Random selection button (legacy feature)
+        random_button = RandomServantSelectionButton(self.draft_dto, self.bot_commands)
+        self.add_item(random_button)
 
 
 class GenericSelectionInterfaceButton(discord.ui.Button):
@@ -123,6 +128,97 @@ class GenericSelectionInterfaceButton(discord.ui.Button):
             logger.error(f"Failed to open private selection interface: {e}")
             await interaction.response.send_message(
                 "선택 인터페이스를 열 수 없어. 다시 시도해줘.",
+                ephemeral=True
+            )
+
+
+class RandomServantSelectionButton(discord.ui.Button):
+    """Button for random servant selection (legacy feature)"""
+    
+    def __init__(self, draft_dto: DraftDTO, bot_commands):
+        super().__init__(
+            label="🎲 랜덤 서번트",
+            style=discord.ButtonStyle.secondary,
+            custom_id="random_servant_selection",
+            emoji="🎯",
+            row=0
+        )
+        self.draft_dto = draft_dto
+        self.bot_commands = bot_commands
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle random servant selection"""
+        try:
+            user_id = interaction.user.id
+            
+            logger.info(f"Random servant selection clicked by user {user_id}")
+            
+            # Check if user is in the draft
+            if user_id not in self.draft_dto.players:
+                await interaction.response.send_message(
+                    "드래프트에 참가하지 않았어.",
+                    ephemeral=True
+                )
+                return
+            
+            # Check if user already confirmed their selection
+            if user_id in self.draft_dto.confirmed_servants:
+                await interaction.response.send_message(
+                    f"이미 **{self.draft_dto.confirmed_servants[user_id]}**을(를) 선택했어.",
+                    ephemeral=True
+                )
+                return
+            
+            # Get all available servants (excluding banned)
+            all_servants = set()
+            for servants in self.draft_dto.servant_categories.values():
+                all_servants.update(servants)
+            
+            available_servants = all_servants - self.draft_dto.banned_servants
+            
+            # Remove already confirmed servants
+            if hasattr(self.draft_dto, 'confirmed_servants'):
+                available_servants = available_servants - set(self.draft_dto.confirmed_servants.values())
+            
+            # Remove reselection auto-bans if in reselection phase
+            if hasattr(self.draft_dto, 'reselection_auto_bans'):
+                available_servants = available_servants - set(self.draft_dto.reselection_auto_bans)
+            
+            available_servants_list = list(available_servants)
+            
+            if not available_servants_list:
+                await interaction.response.send_message(
+                    "랜덤으로 선택할 수 있는 서번트가 없어.",
+                    ephemeral=True
+                )
+                return
+            
+            # Select random servant
+            import random
+            random_servant = random.choice(available_servants_list)
+            
+            # Apply the selection through bot commands
+            success = await self.bot_commands.apply_servant_selection(
+                self.draft_dto.channel_id,
+                user_id,
+                random_servant
+            )
+            
+            if success:
+                await interaction.response.send_message(
+                    f"🎲 **{random_servant}**을(를) 랜덤으로 선택했어!",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"❌ **{random_servant}**을(를) 선택할 수 없어. 다시 시도해줘.",
+                    ephemeral=True
+                )
+        
+        except Exception as e:
+            logger.error(f"Random servant selection failed: {e}")
+            await interaction.response.send_message(
+                "랜덤 선택 중 오류가 발생했어.",
                 ephemeral=True
             )
 
@@ -227,17 +323,22 @@ class ServantReselectionView(discord.ui.View):
     """
     
     def __init__(self, draft_dto: DraftDTO, bot_commands):
-        super().__init__(timeout=300.0)  # 5 minute timeout for reselection
+        super().__init__(timeout=3600.0)  # 1 hour timeout (legacy)
         self.draft_dto = draft_dto
         self.bot_commands = bot_commands
         
-        # Create button for private reselection interface
-        self._create_private_selection_button()
+        # Create reselection interface button and random button
+        self._create_reselection_buttons()
     
-    def _create_private_selection_button(self):
-        """Create button for opening private reselection interface"""
-        button = GenericReselectionInterfaceButton()
-        self.add_item(button)
+    def _create_reselection_buttons(self):
+        """Create buttons for reselection interface and random selection"""
+        # Main reselection interface button
+        reselection_button = GenericReselectionInterfaceButton()
+        self.add_item(reselection_button)
+        
+        # Random reselection button (legacy feature)
+        random_button = RandomServantReselectionButton(self.draft_dto, self.bot_commands)
+        self.add_item(random_button)
 
 
 class GenericReselectionInterfaceButton(discord.ui.Button):
@@ -297,6 +398,92 @@ class GenericReselectionInterfaceButton(discord.ui.Button):
             logger.error(f"Failed to open private reselection interface: {e}")
             await interaction.response.send_message(
                 "재선택 인터페이스를 열 수 없어. 다시 시도해줘.", ephemeral=True
+            )
+
+
+class RandomServantReselectionButton(discord.ui.Button):
+    """Button for random servant reselection during conflicts (legacy feature)"""
+    
+    def __init__(self, draft_dto: DraftDTO, bot_commands):
+        super().__init__(
+            label="🎲 랜덤 재선택",
+            style=discord.ButtonStyle.secondary,
+            custom_id="random_servant_reselection",
+            emoji="🔄",
+            row=0
+        )
+        self.draft_dto = draft_dto
+        self.bot_commands = bot_commands
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        """Handle random servant reselection"""
+        try:
+            user_id = interaction.user.id
+            
+            logger.info(f"Random servant reselection clicked by user {user_id}")
+            
+            # Check if user needs to reselect
+            conflicted_users = []
+            for servant, user_ids in self.draft_dto.conflicted_servants.items():
+                conflicted_users.extend(user_ids)
+            
+            if user_id not in conflicted_users:
+                await interaction.response.send_message(
+                    "재선택할 필요가 없어.", ephemeral=True
+                )
+                return
+            
+            # Get all available servants (excluding banned, confirmed, and auto-banned)
+            all_servants = set()
+            for servants in self.draft_dto.servant_categories.values():
+                all_servants.update(servants)
+            
+            # Remove banned servants
+            available_servants = all_servants - self.draft_dto.banned_servants
+            
+            # Remove already confirmed servants
+            available_servants = available_servants - set(self.draft_dto.confirmed_servants.values())
+            
+            # Remove reselection auto-bans
+            if hasattr(self.draft_dto, 'reselection_auto_bans'):
+                available_servants = available_servants - set(self.draft_dto.reselection_auto_bans)
+            
+            available_servants_list = list(available_servants)
+            
+            if not available_servants_list:
+                await interaction.response.send_message(
+                    "랜덤으로 재선택할 수 있는 서번트가 없어.",
+                    ephemeral=True
+                )
+                return
+            
+            # Select random servant
+            import random
+            random_servant = random.choice(available_servants_list)
+            
+            # Apply the reselection through bot commands (same as selection)
+            success = await self.bot_commands.apply_servant_selection(
+                self.draft_dto.channel_id,
+                user_id,
+                random_servant
+            )
+            
+            if success:
+                await interaction.response.send_message(
+                    f"🎲 **{random_servant}**을(를) 랜덤으로 재선택했어!",
+                    ephemeral=True
+                )
+            else:
+                await interaction.response.send_message(
+                    f"❌ **{random_servant}**을(를) 재선택할 수 없어. 다시 시도해줘.",
+                    ephemeral=True
+                )
+        
+        except Exception as e:
+            logger.error(f"Random servant reselection failed: {e}")
+            await interaction.response.send_message(
+                "랜덤 재선택 중 오류가 발생했어.",
+                ephemeral=True
             )
 
 

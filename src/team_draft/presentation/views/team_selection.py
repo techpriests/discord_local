@@ -24,7 +24,7 @@ class TeamSelectionView(discord.ui.View):
     """
     
     def __init__(self, presenter: "DraftPresenter", draft_dto: "DraftDTO", available_players: List["PlayerDTO"]):
-        super().__init__(timeout=300)  # 5 minute timeout
+        super().__init__(timeout=3600)  # 1 hour timeout (legacy)
         self.presenter = presenter
         self.draft_dto = draft_dto
         self.channel_id = draft_dto.channel_id

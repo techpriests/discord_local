@@ -38,15 +38,19 @@ class DiscordIntegration:
     
     def _setup_presenter(self):
         """Setup the main draft presenter"""
+        # Create presenter first (without draft service to avoid circular dependency)
         self.presenter = DraftPresenter(
-            draft_service=self.container.get_draft_service(),
+            draft_service=None,  # Will be set after container registration
             permission_checker=self.container.get_permission_checker(),
             thread_service=self.container.get_thread_service(),
             bot=self.bot
         )
         
-        # Register presenter with container
+        # Register presenter with container first
         self.container.set_ui_presenter(self.presenter)
+        
+        # Now set the draft service after presenter is registered
+        self.presenter.draft_service = self.container.get_draft_service()
     
     # ===================
     # Draft Lifecycle Methods
@@ -70,7 +74,7 @@ class DiscordIntegration:
         
         try:
             draft_service = self.container.get_draft_service()
-            await draft_service.create_join_based_draft(
+            await draft_service.start_join_draft(
                 channel_id=channel_id,
                 guild_id=guild_id,
                 total_players=total_players,
