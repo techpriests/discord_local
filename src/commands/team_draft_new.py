@@ -152,7 +152,7 @@ class TeamDraftCommands(BaseCommands):
             logger.error(f"Draft cancel failed: {e}")
             await interaction.response.send_message("드래프트 취소 중 오류가 발생했어.", ephemeral=True)
     
-    @commands.command(name="페어취소", aliases=["드래프트취소", "페어정리"])
+    @commands.command(name="페어취소", aliases=["드래프트취소"])
     @command_handler()
     async def draft_cancel_chat(self, ctx: commands.Context) -> None:
         """Cancel draft (prefix command)"""
